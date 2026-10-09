@@ -1,0 +1,14 @@
+{
+  "name": "earshot",
+  "description": "Earshot: spoken updates from Claude Code.",
+  "owner": {
+    "name": "Eric Lee"
+  },
+  "plugins": [
+    {
+      "name": "earshot",
+      "source": "./",
+      "description": "Spoken updates from Claude Code: hear when it starts, gets stuck, needs your OK, and what it got done."
+    }
+  ]
+}

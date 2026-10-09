@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" start" }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" tool" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" stop" }] }],
+    "StopFailure": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" fail" }] }],
+    "Notification": [{ "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" notify" }] }]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "earshot",
+  "version": "0.2.0",
+  "description": "Spoken updates from Claude Code: hear when it starts, gets stuck, needs your OK, and what it got done.",
+  "author": { "name": "Eric Lee" },
+  "license": "MIT",
+  "keywords": ["voice", "tts", "elevenlabs", "notifications", "hooks", "macos"]
+}
