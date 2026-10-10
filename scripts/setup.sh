@@ -111,7 +111,8 @@ say_voices() { say -v '?' | grep -E ' en_[A-Z]{2} ' | sed -E 's/ +en_[A-Z]{2} .*
 # kokoro_support: why Kokoro can't run on this Mac, or nothing when it can.
 # build-tts.sh checks the same things before it builds.
 kokoro_support() {
-  [ "$(uname -m)" = arm64 ] || { echo "no, it needs a Mac with Apple Silicon"; return; }
+  # Not uname -m: a Rosetta terminal says x86_64 on an Apple Silicon Mac.
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || { echo "no, it needs a Mac with Apple Silicon"; return; }
   [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ] || { echo "no, it needs macOS 15 or later"; return; }
   xcode-select -p >/dev/null 2>&1 || echo "not yet, it needs the Command Line Tools (run xcode-select --install)"
 }

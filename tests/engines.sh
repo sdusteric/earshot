@@ -183,13 +183,15 @@ support() { PATH=$T/fake:$PATH bash "$SETUP" --status 2>/dev/null | sed -n 's/^ 
 rm -f "$T"/fake/*
 is "an Apple Silicon Mac on macOS 15+ with the tools: yes" "$(support)" "yes"
 conf; is "status says when nothing is set up yet" "$(bash "$SETUP" --status 2>/dev/null | grep -c 'Engine: kokoro (not set up yet)')" 1
-fake uname 'echo x86_64'
+fake sysctl '[ "$2" = hw.optional.arm64 ] && exit 1; exec /usr/sbin/sysctl "$@"'
 is "an Intel Mac: no" "$(support)" "no, it needs a Mac with Apple Silicon"
+rm -f "$T"/fake/*; fake uname 'echo x86_64'
+is "an Apple Silicon Mac in a Rosetta terminal: yes" "$(support)" "yes"
 rm -f "$T"/fake/*; fake sw_vers 'echo 14.6'
 is "macOS 14: no" "$(support)" "no, it needs macOS 15 or later"
 rm -f "$T"/fake/*; fake xcode-select 'exit 2'
 is "no Command Line Tools: not yet" "$(support)" "not yet, it needs the Command Line Tools (run xcode-select --install)"
-fake uname 'echo x86_64'; out=$(PATH=$T/fake:$PATH setup_run --engine kokoro --voice af_heart); code=$?
+rm -f "$T"/fake/*; fake sysctl '[ "$2" = hw.optional.arm64 ] && exit 1; exec /usr/sbin/sysctl "$@"'; out=$(PATH=$T/fake:$PATH setup_run --engine kokoro --voice af_heart); code=$?
 is "Kokoro setup on an Intel Mac stops before building, and says why" "$code $(grep -c 'Building' <<<"$out") $(grep -c 'Apple Silicon' <<<"$out")" "1 0 1"
 is "that message reads cleanly" "$(grep -c "Kokoro can't run on this Mac: it needs a Mac with Apple Silicon" <<<"$out")" 1
 st=$(PATH=$T/fake:$PATH EARSHOT_KOKORO_DIR=$T/none bash "$SETUP" --status 2>/dev/null)
@@ -198,6 +200,10 @@ rm -f "$T"/fake/*
 mkdir -p "$T/k2"; cp "$EARSHOT_TTS" "$T/k2/earshot-tts"; fake xcode-select 'exit 2'
 out=$(HOME=$T/home PATH=$T/fake:$T/bin:$PATH EARSHOT_KOKORO_DIR=$T/k2 bash "$(dirname "$S")/build-tts.sh" 2>&1)
 is "build-tts.sh notices missing Command Line Tools (the swift shim always exists)" "$(grep -c 'Command Line Tools' <<<"$out")" 1
+rm -f "$T"/fake/*; fake uname 'echo x86_64'; fake xcode-select 'exit 2'
+fake arch 'echo "$1" >> "'"$T"'/arch.log"; shift; exec "$@"'
+out=$(HOME=$T/home PATH=$T/fake:$T/bin:$PATH EARSHOT_KOKORO_DIR=$T/k2 bash "$(dirname "$S")/build-tts.sh" 2>&1)
+is "build-tts.sh in a Rosetta terminal builds for Apple Silicon, once" "$(cat "$T/arch.log" 2>/dev/null | tr '\n' ' ')$(grep -c 'Apple Silicon' <<<"$out")" "-arm64 0"
 rm -f "$T"/fake/*
 
 rm -rf "$T"

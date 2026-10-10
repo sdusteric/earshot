@@ -8,7 +8,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEST=${EARSHOT_KOKORO_DIR:-$HOME/.config/earshot/kokoro}
 BUILD=$HOME/.config/earshot/kokoro-build   # SwiftPM's folder, reused by rebuilds
 fail() { echo "$*"; exit 1; }
-[ "$(uname -m)" = arm64 ] || fail "Kokoro needs a Mac with Apple Silicon."
+# Not uname -m: a Rosetta terminal says x86_64 on an Apple Silicon Mac. From
+# one, build again as arm64, so the helper is not an Intel build.
+[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || fail "Kokoro needs a Mac with Apple Silicon."
+if [ "$(uname -m)" != arm64 ] && [ -z "${EARSHOT_ARM64:-}" ]; then
+  EARSHOT_ARM64=1 exec arch -arm64 /bin/bash "$0" "$@"
+fi
 [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ] || fail "Kokoro needs macOS 15 or later."
 # /usr/bin/swift exists even without the tools (it offers to install them), so
 # ask xcode-select whether they are there.
