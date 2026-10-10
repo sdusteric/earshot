@@ -238,6 +238,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - Earshot cannot tell a call from other apps that use the microphone, such as a voice recorder. It waits for any of them. Siri and Voice Control do not count.
 - A line held for more than 4 hours is dropped.
 - Per-app microphone checks need macOS 14.2 or later. On older versions, Earshot does not wait during calls.
+- After an update, Earshot rebuilds its microphone check in the background. If the build fails, for example because Xcode needs attention, Earshot does not wait during calls until you run `/earshot:setup` again. `setup.sh --status` shows when this happens.
 
 ## FAQ
 

@@ -235,6 +235,14 @@ check "a stale helper does not hold lines" 1 "Stale helper line"
 held_check "a stale helper does not hold lines (queue)" 0 "Stale helper line"
 rm -f "$EARSHOT_MIC.stale"; mic 1; rm -f "$HELD"; : > "$OUT"
 
+echo "A queue with only expired lines"
+rm -f "$HELD"; mic 1
+held_add $(( $(date +%s) - 20000 )) old1 done "Expired."
+errs=$(bash "$S" release </dev/null 2>&1)
+if [ -z "$errs" ]; then pass=$((pass + 1)); echo "  ok    an expired-only queue ends quietly"; else fail=$((fail + 1)); echo "  FAIL  an expired-only queue printed: $errs"; fi
+check "an expired-only queue says nothing" 0 "."
+rm -f "$HELD"; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

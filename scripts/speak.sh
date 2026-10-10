@@ -161,6 +161,7 @@ catch_up() {
       END { for (k in last) { split(last[k], f, FS); print (f[3] == "need" || f[3] == "reply" ? 0 : f[3] == "alert" ? 1 : 2), f[1], last[k] } }' "$batch" \
     | sort -k1,1n -k2,2n | cut -d' ' -f3-)
   rm -f "$batch"
+  [ -n "$lines" ] || return
   # A prompt you answered without a hook firing (Esc) is not read.
   kept=""
   while IFS=$'\037' read -r -u 3 t s kind text; do
@@ -256,12 +257,12 @@ asks_for() {
 }
 
 # Setup built the mic helper once, but updates bring a new mic-in-use.swift.
-# Rebuild it in the background when the source is newer. Until the build
-# works, MIC.stale marks the old helper, so lines are not held. A failed build
-# touches the helper, so the next hook does not try again.
+# Rebuild it in the background when the source is newer. A failed build
+# leaves the old helper, so MIC.stale marks it and lines are not held, and
+# touches it, so the next hook does not try again. Setup clears the marker.
 SRC=${0%/*}/mic-in-use.swift
 if [ -z "$EARSHOT_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
-  ( lockf -t 0 "$STATE/build.lock" sh -c 'touch "$2.stale"; swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2" && rm -f "$2.stale" || touch "$2"' _ "$SRC" "$MIC" ) \
+  ( lockf -t 0 "$STATE/build.lock" sh -c 'if swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2"; then rm -f "$2.stale"; else touch "$2" "$2.stale"; fi' _ "$SRC" "$MIC" ) \
     </dev/null >/dev/null 2>&1 &
 fi
 
