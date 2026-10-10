@@ -9,6 +9,9 @@
 //       after EARSHOT_KOKORO_IDLE_SECS (default 600) without a request, and
 //       when one request takes over EARSHOT_KOKORO_REQUEST_SECS (default 15),
 //       so a hung Core ML call does not block every later line.
+//   earshot-tts prepare
+//       Loads both runtimes once, downloading what is missing. Setup runs it,
+//       so the legacy retry never downloads while you work.
 //   earshot-tts voices
 //       The English voices, one per line.
 //
@@ -43,6 +46,7 @@ func option(_ name: String) -> String? {
 final class Speaker {
     private let v3 = KokoroAneManager(version: .v3)
     private var legacy: KokoroAneManager?
+    private var legacyFailed = false   // try loading it once per process, not per line
 
     func load() async throws {
         try await v3.initialize(preloadVoices: [defaultVoice])
@@ -61,18 +65,34 @@ final class Speaker {
         do {
             wav = try await v3.synthesize(text: text, voice: voice)
         } catch {
+            guard !legacyFailed else { throw error }
             if legacy == nil {
-                let m = KokoroAneManager(version: .legacy)
-                try await m.initialize(preloadVoices: [voice])
-                legacy = m
+                do {
+                    let m = KokoroAneManager(version: .legacy)
+                    try await m.initialize(preloadVoices: [voice])
+                    legacy = m
+                } catch {
+                    legacyFailed = true
+                    throw error
+                }
             }
             wav = try await legacy!.synthesize(text: text, voice: voice)
         }
         try wav.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
+
+    /// Loads the legacy runtime too, for `prepare`.
+    func loadLegacy() async throws {
+        let m = KokoroAneManager(version: .legacy)
+        try await m.initialize(preloadVoices: [defaultVoice])
+        legacy = m
+    }
 }
 
 // MARK: - Socket
+
+/// sun_path holds 104 bytes on macOS, the last one the terminating zero.
+func fitsSocket(_ path: String) -> Bool { path.utf8.count < 104 }
 
 func socketAddress(_ path: String) -> sockaddr_un {
     var addr = sockaddr_un()
@@ -121,7 +141,11 @@ func writeLine<T: Encodable>(_ fd: Int32, _ value: T) -> Bool {
 
 // MARK: - serve
 
-func serve(_ socketPath: String) async -> Never {
+func serve(_ path: String) async -> Never {
+    // Absolute, because the server leaves the folder it was started in: it can
+    // live for hours, and should not keep a project folder in use.
+    let socketPath = URL(fileURLWithPath: path).standardizedFileURL.path
+    chdir("/")
     // One server per socket. The lock lasts as long as this process does.
     let lock = open(socketPath + ".lock", O_CREAT | O_RDWR, 0o600)
     guard lock >= 0, flock(lock, LOCK_EX | LOCK_NB) == 0 else { exit(0) }
@@ -142,7 +166,15 @@ func serve(_ socketPath: String) async -> Never {
     let requestLimit = Double(env["EARSHOT_KOKORO_REQUEST_SECS"] ?? "") ?? 15
     while true {
         var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        if poll(&pfd, 1, idleMs) == 0 { unlink(socketPath); exit(0) }
+        let ready = poll(&pfd, 1, idleMs)
+        if ready < 0 { continue }   // interrupted: wait again, don't block in accept
+        if ready == 0 {
+            // Idle: let the next server take over at once. A client that
+            // connected just now gets EOF and starts one.
+            unlink(socketPath)
+            flock(lock, LOCK_UN)
+            _exit(0)
+        }
         let c = accept(fd, nil, nil)
         if c < 0 { continue }
         var tv = timeval(tv_sec: 5, tv_usec: 0)   // a client that never sends
@@ -212,20 +244,33 @@ func speakCommand() async -> Never {
     guard let socketPath = option("--socket"), let out = option("--out") else {
         fail("Usage: earshot-tts speak --socket PATH --out FILE [--voice NAME] [--timeout SECS]")
     }
+    // The server runs in another folder, so a relative path means ours.
+    let outPath = URL(fileURLWithPath: out).standardizedFileURL.path
     let voice = option("--voice") ?? defaultVoice
     let timeout = Double(option("--timeout") ?? "") ?? 20
-    // One limit for everything below, including a hung Core ML call.
-    DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { fail("Timed out after \(Int(timeout)) s") }
+    // One limit for everything below, including a hung Core ML call. _exit,
+    // because exit() would run cleanup while Core ML may still be working.
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+        FileHandle.standardError.write(Data("Timed out after \(Int(timeout)) s\n".utf8))
+        _exit(1)
+    }
     let text = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
         .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { fail("Nothing to say") }
-    let req = Request(text: text, voice: voice, out: out)
+    let req = Request(text: text, voice: voice, out: outPath)
 
-    var answer = ask(socketPath, req)
-    if case .noServer = answer {
-        startServer(socketPath)
+    // A path too long for a socket cannot have a server: make the line here.
+    var answer = fitsSocket(socketPath) ? ask(socketPath, req) : .noServer
+    if fitsSocket(socketPath), case .noServer = answer {
+        // Start a server, and again each second: one that is just exiting
+        // still holds the lock, so the first new one can give up at once.
         let start = Date()
+        var lastStart = Date.distantPast
         repeat {
+            if Date().timeIntervalSince(lastStart) >= 1 {
+                startServer(socketPath)
+                lastStart = Date()
+            }
             usleep(100_000)
             answer = ask(socketPath, req)
             if case .noServer = answer {} else { break }
@@ -239,7 +284,7 @@ func speakCommand() async -> Never {
         let speaker = Speaker()
         do {
             try await speaker.load()
-            try await speaker.speak(text, voice: voice, to: out)
+            try await speaker.speak(text, voice: voice, to: outPath)
             exit(0)
         } catch { fail("\(error)") }
     }
@@ -253,6 +298,13 @@ case "speak": await speakCommand()
 case "serve":
     guard let socketPath = option("--socket") else { fail("Usage: earshot-tts serve --socket PATH") }
     await serve(socketPath)
+case "prepare":
+    let speaker = Speaker()
+    do {
+        try await speaker.load()
+        try await speaker.loadLegacy()
+        print("ready")
+    } catch { fail("\(error)") }
 case "voices": KokoroAneConstants.englishVoices.forEach { print($0) }
 default: fail("Usage: earshot-tts speak|serve|voices (see the comment at the top of main.swift)")
 }

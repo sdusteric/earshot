@@ -122,7 +122,7 @@ synth() {
     elevenlabs)
       # The key goes in through stdin too.
       body=$(mktemp "$STATE/body.XXXXXX") || return 1
-      jq -n --arg t "$2" --arg m "$MODEL" '{text: $t, model_id: $m}' > "$body"
+      printf '%s' "$2" | jq -Rs --arg m "$MODEL" '{text: ., model_id: $m}' > "$body"
       code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s --connect-timeout 5 --max-time 20 -w '%{http_code}' -o "$3" \
         "https://api.elevenlabs.io/v1/text-to-speech/$VOICE" \
         -H @- -H 'Content-Type: application/json' --data-binary @"$body")
@@ -152,23 +152,25 @@ synth() {
 # speak "<line>" <kind> <session>: holds the line while an app uses the mic,
 # or plays it. It returns when the line has played.
 speak() {
-  local asked out dl
+  local asked out dl tmp fb
   if [ "$2" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
   # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
   [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
   asked=$(date +%s)
   out=$(cache_file "$ENGINE" "$1")
   if [ ! -s "$out" ]; then
-    # A unique download file keeps two sessions from writing the same file.
-    dl="$CACHE/dl.$$.${out##*/}"
+    # A unique download file keeps two lines from writing the same file, even
+    # from one hook. It keeps the extension, because say picks its format by it.
+    tmp=$(mktemp "$CACHE/dl.XXXXXX") || return
+    dl=$tmp.${out##*.}
     if synth "$ENGINE" "$1" "$dl"; then
       mv "$dl" "$out"
     else
       rm -f "$dl"
       # Say it with the Mac's own voice, uncached, so the next line tries the
       # engine again. The error tone is the last resort, and waits its turn too.
-      out="$STATE/fallback.$$.aiff"
-      if [ "$ENGINE" != say ] && synth say "$1" "$out"; then
+      fb=$(mktemp "$STATE/fallback.XXXXXX") && out=$fb.aiff
+      if [ -n "$fb" ] && [ "$ENGINE" != say ] && synth say "$1" "$out"; then
         echo "$(date '+%F %T') $ENGINE failed, said with say: $1" >> "$LOG"
       else
         out=/System/Library/Sounds/Basso.aiff
@@ -178,8 +180,10 @@ speak() {
   # All sessions share one speaker, so lines take turns: a line waits for
   # the one playing to finish, and is dropped after a minute in the queue.
   # -k keeps the lock file, so a new line cannot lock a fresh copy of it.
-  lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked" "$2" "$1" "$3"
-  case "$out" in "$STATE"/fallback.*) rm -f "$out" ;; esac
+  # The line goes in the environment, which other accounts cannot see, not the
+  # command line, which they can.
+  EARSHOT_LINE=$1 lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked" "$2" "$3"
+  rm -f "$tmp" "$fb" "${fb:+$fb.aiff}"
 }
 
 # play <file> <asked> <kind> <line> <session>: plays one line while it holds the speaker.
@@ -200,7 +204,7 @@ play() {
 }
 
 [ "$1" = say ] && { say "$2"; exit 0; }
-[ "$1" = play ] && { play "$2" "$3" "$4" "$5" "$6"; exit 0; }
+[ "$1" = play ] && { play "$2" "$3" "$4" "$EARSHOT_LINE" "$5"; exit 0; }
 
 # --- After the call: the catch-up -------------------------------------------------
 POLL=${EARSHOT_POLL_SECS:-2}            # seconds between mic checks
@@ -446,7 +450,7 @@ if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
     = "$(cat "${TTS%/*}/source.md5" 2>/dev/null)" ]; then
     touch "$TTS"   # same sources: skip the comparison next time
   else
-    ( lockf -t 0 "$STATE/tts-build.lock" sh -c 'bash "$1" || touch "$2.stale"' _ "${EARSHOT_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" ) \
+    ( lockf -k -t 0 "$STATE/tts-build.lock" sh -c 'bash "$1" || touch "$2.stale"' _ "${EARSHOT_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" ) \
       </dev/null >/dev/null 2>&1 &
   fi
 fi

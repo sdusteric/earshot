@@ -324,15 +324,21 @@ kokoro_current() {
 setup_kokoro() {
   KVOICE=${voice_arg:-${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}}
   if [ -z "$voice_arg" ] && [ -t 0 ]; then pick_kokoro_voice; fi
+  ( umask 077; mkdir -p "$STATE_DIR" )
   if ! kokoro_current; then
     echo "Building the Kokoro helper. The first build takes about 2 minutes."
-    bash "${EARSHOT_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 \
+    # The same lock as the rebuild that hooks start after an update, so the
+    # two never write the helper at once. This waits for that one to finish.
+    lockf -k -t 900 "$STATE_DIR/tts-build.lock" bash "${EARSHOT_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 \
       || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
   fi
   kokoro_voices | grep -qx -- "$KVOICE" \
     || die "Kokoro has no voice called $KVOICE. To see the list, run: setup.sh --engine kokoro --list-voices"
-  ( umask 077; mkdir -p "$STATE_DIR" )
-  echo "Making a test line. The first time, this downloads the voice (about 400 MB on disk)."
+  echo "Getting the voice ready. The first time, this downloads it (about 400 MB on disk)."
+  # Both runtimes: Kokoro retries a line on the older one when v3 fails, and
+  # that should never mean a download while you work.
+  "$TTS" prepare 2>"$TMP/err" \
+    || die "Kokoro couldn't load: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
   printf 'Earshot is set up. Talk to you soon.' \
     | "$TTS" speak --socket "$STATE_DIR/kokoro.sock" --voice "$KVOICE" --out "$TMP/test.wav" --timeout 600 2>"$TMP/err" \
     || die "Kokoro couldn't make the test line: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"

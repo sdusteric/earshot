@@ -46,6 +46,17 @@ check "13. a server started by speak stops on TERM, so rebuilds can replace it" 
 stop_servers; t=$(ms)
 printf '%s' "$long" | EARSHOT_KOKORO_REQUEST_SECS=0.01 "$TTS" speak --socket "$SOCK" --out "$D/h.wav"; t=$(( $(ms) - t ))
 check "14. a request over the server's limit: the server quits and the line is still made ($t ms)" 'wav_ok "$D/h.wav" && [ "$t" -lt 20000 ] && grep -q "quitting" "$SOCK.log"'
+check "15. prepare loads both runtimes" '"$TTS" prepare >/dev/null 2>&1'
+stop_servers; lockf -k "$SOCK.lock" sleep 1.5 & sleep 0.2; t=$(ms)
+speak "$D/r.wav" "After the old server let go."; t=$(( $(ms) - t )); wait
+check "16. a server that still holds the lock: the client starts a new one when it lets go ($t ms)" 'wav_ok "$D/r.wav" && [ "$(servers)" = 1 ]'
+stop_servers
+LONG=$D/$(printf 'x%.0s' $(seq 90))/k.sock; mkdir -p "${LONG%/*}"
+printf 'A long socket path.' | "$TTS" speak --socket "$LONG" --out "$D/p.wav" 2>/dev/null
+check "17. a socket path too long for a socket: the line is still made" 'wav_ok "$D/p.wav"'
+mkdir -p "$D/a" "$D/b"; ( cd "$D/a" && "$TTS" serve --socket "$SOCK" ) & sleep 3
+( cd "$D/b" && printf 'Relative.' | "$TTS" speak --socket "$SOCK" --out rel.wav )
+check "18. a relative --out is the client's folder, not the server's" 'wav_ok "$D/b/rel.wav" && [ ! -e "$D/a/rel.wav" ]'
 stop_servers
 rm -rf "$D"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

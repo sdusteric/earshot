@@ -26,6 +26,7 @@ printf 'SAY:%s' "\$(cat "\$f")" > "\$o"
 EOF
 cat > "$EARSHOT_PLAYER" <<EOF
 #!/bin/bash
+ps -o command= -p \$PPID >> "$T/player-parent"
 case "\$1" in *Basso*) echo BASSO ;; *) cat "\$1"; echo ;; esac >> "$PLAYED"
 EOF
 chmod +x "$EARSHOT_TTS" "$EARSHOT_SAY" "$EARSHOT_PLAYER"
@@ -61,6 +62,7 @@ is "EARSHOT_KOKORO_VOICE picks the voice" "$(heard "Hello two.")" "KOKORO(am_mic
 odd=$'It\'s "done" & 50% $HOME \\o/ café'
 is "text arrives exactly" "$(heard "$odd")" "KOKORO(am_michael):$odd"
 is "the text is not on the helper's command line" "$(grep -c 'café' "$CALLS")" 0
+is "the text is not on the player's parent command line" "$(grep -c '50%' "$T/player-parent")" 0
 
 echo "Fallbacks"
 conf 'EARSHOT_ENGINE=kokoro'; touch "$T/tts-fail"
@@ -71,7 +73,7 @@ is "a say fallback is not cached" "$(heard "Fallback one.")" "KOKORO(af_heart):F
 touch "$T/tts-fail" "$T/say-fail"
 is "kokoro and say both fail: the error tone" "$(heard "Fallback two.")" BASSO
 rm "$T/tts-fail" "$T/say-fail"
-is "no fallback files are left" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^fallback')" 0
+sleep 1; is "no fallback files are left" "$(ls "$EARSHOT_STATE_DIR" | grep -c "^fallback")" 0
 conf 'EARSHOT_ENGINE=say'
 is "the say engine" "$(heard "Plain voice.")" "SAY:Plain voice."
 
@@ -152,6 +154,14 @@ is "hooks: changed sources: one rebuild" "$(wc -l < "$T/builds" | tr -d ' ')" 1
 printf '#!/bin/bash\necho FAILED BUILD >> "%s"\nexit 1\n' "$T/builds" > "$T/build-tts"; : > "$T/builds"; touch -t 202001010000 "$K/earshot-tts"
 hook_once; hook_once
 is "hooks: a failed rebuild marks the helper and is not retried" "$(wc -l < "$T/builds" | tr -d ' ') $([ -e "$K/earshot-tts.stale" ] && echo marked)" "1 marked"
+
+echo "Setup and the build lock"
+: > "$CALLS"; echo old > "$K/source.md5"; : > "$T/builds"
+printf '#!/bin/bash\necho STUB BUILD >> "%s"\nrm -f "%s.stale"\n' "$T/builds" "$K/earshot-tts" > "$T/build-tts"
+( lockf -k "$EARSHOT_STATE_DIR/tts-build.lock" sleep 2 ) & sleep 0.2
+t0=$(date +%s); setup_run --engine kokoro --voice af_heart >/dev/null; t1=$(date +%s); wait
+is "setup waits for a background build before building" "$([ $((t1 - t0)) -ge 2 ] && echo waited) $(wc -l < "$T/builds" | tr -d ' ')" "waited 1"
+is "setup prepares both Kokoro runtimes" "$(grep -c '^prepare' "$CALLS")" 1
 
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

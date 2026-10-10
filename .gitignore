@@ -2,3 +2,4 @@
 mic-in-use
 *.mp3
 videos/
+tts/.build/
