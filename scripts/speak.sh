@@ -27,9 +27,13 @@ CACHE=${EARSHOT_CACHE_DIR:-$(getconf DARWIN_USER_CACHE_DIR)earshot}
 mkdir -p "$STATE" "$CACHE" 2>/dev/null
 [ -O "$STATE" ] && [ -O "$CACHE" ] || exit 0
 LOG=$STATE/earshot.log
-MIC=~/.config/earshot/mic-in-use
+MIC=${EARSHOT_MIC:-$HOME/.config/earshot/mic-in-use}   # tests point this at a stub
+HOLD=${EARSHOT_HOLD_ON_MIC:-on}   # on: hold lines while an app uses the mic
 
-mic_on() { [ -x "$MIC" ] && "$MIC"; }
+# mic_state: the helper's answer. 0 an app is capturing (a call, or you
+# dictating), 1 free, 2 the device runs but the app is unknown (macOS before 14.2).
+mic_state() { [ -x "$MIC" ] || return 1; "$MIC"; }
+mic_busy() { mic_state; [ $? != 1 ]; }
 lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
 upper_first() { printf '%s%s' "$(tr '[:lower:]' '[:upper:]' <<<"${1:0:1}")" "${1:1}"; }
 
@@ -82,11 +86,11 @@ play() {
   [ "$(stat -f %m "$STATE/hushed" 2>/dev/null || echo 0)" -ge "$2" ] && return
   # Stop when you start talking. A mic that was already on (e.g. Voice
   # Control listening for a wake word) does not count.
-  mic_on && mic_was_on=1
+  mic_busy && mic_was_on=1
   afplay "$1" & pid=$!
   while kill -0 $pid 2>/dev/null; do
     sleep 0.5
-    [ -z "$mic_was_on" ] && mic_on && { kill $pid; touch "$STATE/hushed"; }
+    [ -z "$mic_was_on" ] && mic_busy && { kill $pid; touch "$STATE/hushed"; }
   done
 }
 
@@ -153,6 +157,16 @@ asks_for() {
     *) echo "to use $tool" ;;
   esac
 }
+
+# Setup built the mic helper once, but updates bring a new mic-in-use.swift.
+# Rebuild it in the background when the source is newer. The old helper keeps
+# working until then. A failed build touches the helper, so the next hook
+# does not try again.
+SRC=${0%/*}/mic-in-use.swift
+if [ -z "$EARSHOT_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
+  ( lockf -t 0 "$STATE/build.lock" sh -c 'swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2" || touch "$2"' _ "$SRC" "$MIC" ) \
+    </dev/null >/dev/null 2>&1 &
+fi
 
 input=$(cat)
 now=$(date +%s)

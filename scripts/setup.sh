@@ -168,7 +168,7 @@ if [ "$mode" = status ]; then
   echo "Config: $CONF"
   [ -n "$KEY" ] && say_ok "Key: saved" || say_ok "Key: missing"
   [ -n "$VOICE" ] && say_ok "Voice: $(voice_name "$VOICE") ($VOICE)" || say_ok "Voice: not chosen"
-  [ -x "$DIR/mic-in-use" ] && say_ok "Microphone check: built" || say_ok "Microphone check: not built (Earshot won't stop when you talk)"
+  [ -x "$DIR/mic-in-use" ] && say_ok "Microphone check: built" || say_ok "Microphone check: not built (Earshot won't stop when you talk or wait while you're on a call)"
   [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] \
     && say_ok "/voice: on" || say_ok "/voice: off (Earshot stays quiet until you turn it on)"
   case "$(jq -r '.extraKnownMarketplaces.earshot | if . == null then "none" elif .source.source == "directory" then "local" else (.autoUpdate // false | tostring) end' "$SETTINGS" 2>/dev/null)" in
@@ -254,7 +254,7 @@ echo "Saved your key and voice to $CONF (only you can read it)."
 
 if command -v swiftc >/dev/null; then
   swiftc -O "$SCRIPTS/mic-in-use.swift" -o "$DIR/mic-in-use" 2>/dev/null \
-    && echo "Built the microphone check, so Earshot stops talking when you start." \
+    && echo "Built the microphone check, so Earshot stops talking when you start and waits while you're on a call." \
     || echo "Couldn't build the microphone check. Earshot still works but won't stop when you talk."
 else
   echo "swiftc not found (xcode-select --install), so Earshot won't stop when you talk. Everything else works."
