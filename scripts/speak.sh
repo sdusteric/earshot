@@ -1,8 +1,10 @@
 #!/bin/bash
-# Earshot: spoken updates for Claude Code via ElevenLabs.
+# Earshot: spoken updates for Claude Code, with Kokoro on this Mac, ElevenLabs
+# or the Mac's own voice.
 # Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end |
 # elicit | answered | inputnotify | pretool (hooks),
-# remind (internal timer), play (internal, one line at a time), say "<text>" (manual test)
+# remind (internal timer), play (internal, one line at a time), engine (prints the engine),
+# say "<text>" (manual test)
 umask 077   # every file Earshot writes is readable only by you
 # Shortcuts and other launchers run scripts with a short PATH: add Homebrew
 # (jq) and the system folders that hold md5 and lockf.
@@ -13,7 +15,15 @@ CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewher
 # does not replace the key you chose for Earshot.
 KEY=${EARSHOT_KEY:-$ELEVENLABS_API_KEY}
 VOICE=${EARSHOT_VOICE:-$ELEVENLABS_VOICE_ID}
-[ -n "$KEY" ] && [ -n "$VOICE" ] || exit 0
+# kokoro (on this Mac), elevenlabs or say. Configs from before 0.9.0 have no
+# engine line: a saved key means they use ElevenLabs.
+if [ -n "$EARSHOT_ENGINE" ]; then ENGINE=$EARSHOT_ENGINE
+elif [ -n "$KEY" ]; then ENGINE=elevenlabs
+else ENGINE=kokoro
+fi
+case "$ENGINE" in kokoro|elevenlabs|say) ;; *) ENGINE=kokoro ;; esac
+[ "$1" = engine ] && { echo "$ENGINE"; exit 0; }
+[ "$ENGINE" != elevenlabs ] || { [ -n "$KEY" ] && [ -n "$VOICE" ]; } || exit 0
 # Talks only while /voice is on. Hooks get no signal that a prompt was
 # dictated, so typed prompts get spoken updates too.
 # A roll call is something you asked for, so it plays even when muted or with
@@ -24,6 +34,8 @@ if [ "$1" != rollcall ] && ! { [ "$1" = play ] && [ "$4" = roll ]; }; then
 fi
 
 MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
+KOKORO_VOICE=${EARSHOT_KOKORO_VOICE:-af_heart}
+SAY_VOICE=${EARSHOT_SAY_VOICE:-}          # empty: the system voice
 BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
 LONG_MAX=${EARSHOT_LONG_MAX_SECS:-7200}   # updates during one command stop after 2 hours
 LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
@@ -38,6 +50,11 @@ mkdir -p "$STATE" "$CACHE" 2>/dev/null
 LOG=$STATE/earshot.log
 MIC=${EARSHOT_MIC:-$HOME/.config/earshot/mic-in-use}   # tests point this at a stub
 HOLD=${EARSHOT_HOLD_ON_MIC:-on}   # on: hold lines while an app uses the mic
+# Tests point these at fakes.
+TTS=${EARSHOT_TTS:-$HOME/.config/earshot/kokoro/earshot-tts}
+SAYCMD=${EARSHOT_SAY:-say}
+PLAYER=${EARSHOT_PLAYER:-afplay}
+SOCK=$STATE/kokoro.sock   # the Kokoro server, while it runs
 
 # mic_state: the helper's answer. 0 an app is capturing (a call, or you
 # dictating), 1 free, 2 the device runs but the app is unknown (macOS before 14.2).
@@ -87,39 +104,82 @@ hold() {
   [ -n "$EARSHOT_DRYRUN" ] || ( lockf -t 5 -k "$STATE/release.lock" bash "$0" release ) </dev/null >/dev/null 2>&1 &
 }
 
+# cache_file <engine> "<line>": where that engine's audio for the line is kept.
+# The ElevenLabs name is the one from before 0.9.0, so old caches stay valid.
+cache_file() {
+  case "$1" in
+    elevenlabs) echo "$CACHE/$(printf '%s' "$MODEL $VOICE $2" | md5 -q).mp3" ;;
+    kokoro) echo "$CACHE/$(printf '%s' "kokoro $KOKORO_VOICE $2" | md5 -q).wav" ;;
+    say) echo "$CACHE/$(printf '%s' "say $SAY_VOICE $2" | md5 -q).aiff" ;;
+  esac
+}
+
+# synth <engine> "<line>" <file>: makes the audio. Returns non-zero and logs why
+# when it fails. The text goes in through stdin or a file, never the command line.
+synth() {
+  local body code ok err txt
+  case "$1" in
+    elevenlabs)
+      # The key goes in through stdin too.
+      body=$(mktemp "$STATE/body.XXXXXX") || return 1
+      jq -n --arg t "$2" --arg m "$MODEL" '{text: $t, model_id: $m}' > "$body"
+      code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s --connect-timeout 5 --max-time 20 -w '%{http_code}' -o "$3" \
+        "https://api.elevenlabs.io/v1/text-to-speech/$VOICE" \
+        -H @- -H 'Content-Type: application/json' --data-binary @"$body")
+      ok=$?
+      rm -f "$body"
+      # A dropped connection can still report 200, so curl must succeed too.
+      if [ "$ok" != 0 ] || [ "$code" != 200 ]; then
+        echo "$(date '+%F %T') HTTP $code curl $ok: $(head -c 300 "$3" 2>/dev/null)" >> "$LOG"
+        return 1
+      fi ;;
+    kokoro)
+      [ -x "$TTS" ] || { echo "$(date '+%F %T') kokoro: the helper is not built (run setup)" >> "$LOG"; return 1; }
+      err=$(printf '%s' "$2" | "$TTS" speak --socket "$SOCK" --voice "$KOKORO_VOICE" --out "$3" 2>&1 >/dev/null)
+      if [ $? != 0 ] || [ ! -s "$3" ]; then
+        echo "$(date '+%F %T') kokoro: $(tail -1 <<<"$err")" >> "$LOG"
+        return 1
+      fi ;;
+    say)
+      txt=$(mktemp "$STATE/line.XXXXXX") || return 1
+      printf '%s' "$2" > "$txt"
+      "$SAYCMD" ${SAY_VOICE:+-v "$SAY_VOICE"} -f "$txt" -o "$3" 2>/dev/null; ok=$?
+      rm -f "$txt"
+      [ "$ok" = 0 ] && [ -s "$3" ] || { echo "$(date '+%F %T') say: failed" >> "$LOG"; return 1; } ;;
+  esac
+}
+
 # speak "<line>" <kind> <session>: holds the line while an app uses the mic,
 # or plays it. It returns when the line has played.
 speak() {
-  local asked out dl body code ok
+  local asked out dl
   if [ "$2" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
   # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
   [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
   asked=$(date +%s)
-  out="$CACHE/$(printf '%s' "$MODEL $VOICE $1" | md5 -q).mp3"
+  out=$(cache_file "$ENGINE" "$1")
   if [ ! -s "$out" ]; then
-    # The key goes in through stdin and the text through a file, so neither
-    # shows up in the process list. A unique download file keeps two
-    # sessions from writing the same file.
-    dl=$(mktemp "$CACHE/dl.XXXXXX") && body=$(mktemp "$STATE/body.XXXXXX") || return
-    jq -n --arg t "$1" --arg m "$MODEL" '{text: $t, model_id: $m}' > "$body"
-    code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s --connect-timeout 5 --max-time 20 -w '%{http_code}' -o "$dl" \
-      "https://api.elevenlabs.io/v1/text-to-speech/$VOICE" \
-      -H @- -H 'Content-Type: application/json' --data-binary @"$body")
-    ok=$?
-    rm -f "$body"
-    # A dropped connection can still report 200, so curl must succeed too.
-    if [ "$ok" != 0 ] || [ "$code" != 200 ]; then
-      echo "$(date '+%F %T') HTTP $code curl $ok: $(head -c 300 "$dl" 2>/dev/null)" >> "$LOG"
-      rm -f "$dl"
-      out=/System/Library/Sounds/Basso.aiff   # the error tone waits its turn too
-    else
+    # A unique download file keeps two sessions from writing the same file.
+    dl="$CACHE/dl.$$.${out##*/}"
+    if synth "$ENGINE" "$1" "$dl"; then
       mv "$dl" "$out"
+    else
+      rm -f "$dl"
+      # Say it with the Mac's own voice, uncached, so the next line tries the
+      # engine again. The error tone is the last resort, and waits its turn too.
+      out="$STATE/fallback.$$.aiff"
+      if [ "$ENGINE" != say ] && synth say "$1" "$out"; then
+        echo "$(date '+%F %T') $ENGINE failed, said with say: $1" >> "$LOG"
+      else
+        out=/System/Library/Sounds/Basso.aiff
+      fi
     fi
   fi
   # All sessions share one speaker, so lines take turns: a line waits for
   # the one playing to finish, and is dropped after a minute in the queue.
   # -k keeps the lock file, so a new line cannot lock a fresh copy of it.
   lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked" "$2" "$1" "$3"
+  case "$out" in "$STATE"/fallback.*) rm -f "$out" ;; esac
 }
 
 # play <file> <asked> <kind> <line> <session>: plays one line while it holds the speaker.
@@ -132,7 +192,7 @@ play() {
   # Stop when you start talking. A mic that was already on (an app the helper
   # cannot name, or holding is off) does not count.
   mic_busy && mic_was_on=1
-  afplay "$1" & pid=$!
+  "$PLAYER" "$1" & pid=$!
   while kill -0 $pid 2>/dev/null; do
     sleep 0.5
     [ -z "$mic_was_on" ] && mic_busy && { kill $pid; touch "$STATE/hushed"; }
@@ -374,6 +434,15 @@ if [ -z "$EARSHOT_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
   ( lockf -t 0 "$STATE/build.lock" sh -c 'if swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2"; then rm -f "$2.stale"; else touch "$2" "$2.stale"; fi' _ "$SRC" "$MIC" ) \
     </dev/null >/dev/null 2>&1 &
 fi
+# The same for the Kokoro helper when an update brings a new tts/ package.
+# build-tts.sh stops the old server after a good build. A failed build touches
+# the old helper, so the next hook does not try again.
+TTS_SRC=${0%/*}/../tts
+if [ -z "$EARSHOT_TTS" ] && [ -x "$TTS" ] \
+  && { [ "$TTS_SRC/Sources/earshot-tts/main.swift" -nt "$TTS" ] || [ "$TTS_SRC/Package.swift" -nt "$TTS" ]; }; then
+  ( lockf -t 0 "$STATE/tts-build.lock" sh -c 'bash "$1" || touch "$2"' _ "${0%/*}/build-tts.sh" "$TTS" ) \
+    </dev/null >/dev/null 2>&1 &
+fi
 
 input=$(cat)
 now=$(date +%s)
@@ -553,6 +622,11 @@ begin)
   # SessionStart: registered above, nothing to say. It also fires after a
   # compact or resume, so a status that is already there stays.
   [ -f "$status" ] || set_status open
+  # Load Kokoro now, so the session's first line does not wait for it. A
+  # server that is already running makes the new one exit at once.
+  if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ]; then
+    ( "$TTS" serve --socket "$SOCK" ) </dev/null >/dev/null 2>>"$SOCK.log" &
+  fi
   ;;
 end)
   # SessionEnd: this session no longer counts as open.
@@ -684,7 +758,9 @@ stop)
   clear_wait
   # Your own cache is not cleared at restart like /tmp. Drop lines unused for a
   # month and downloads that never finished.
-  find "$CACHE" -type f \( -name '*.mp3' -mtime +30 -o -name 'dl.*' -mmin +10 \) -delete 2>/dev/null
+  find "$CACHE" -type f \( \( -name '*.mp3' -o -name '*.wav' -o -name '*.aiff' \) -mtime +30 -o -name 'dl.*' -mmin +10 \) -delete 2>/dev/null
+  # Lines said with the Mac's voice after an engine failed, left by a crash.
+  find "$STATE" -maxdepth 1 -type f -name 'fallback.*' -mmin +10 -delete 2>/dev/null
   # Sessions that quit without SessionEnd leave files; 6 hours quiet means gone.
   find "$STATE" -maxdepth 1 -type f \( -name 'status-*' -o -name 'running-*' -o -name 'wait-*' \) -mmin +360 -delete 2>/dev/null
   rm -f "$state" "$hist" "$errs" "$warned"

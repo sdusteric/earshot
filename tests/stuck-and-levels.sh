@@ -5,7 +5,7 @@
 # with a dummy key keeps your own settings out of the results.
 S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
 OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_STATE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
-printf 'EARSHOT_KEY=sk_test\nEARSHOT_VOICE=test\n' > "$EARSHOT_CONF"
+printf 'EARSHOT_ENGINE=elevenlabs\nEARSHOT_KEY=sk_test\nEARSHOT_VOICE=test\n' > "$EARSHOT_CONF"
 # A fake mic helper, so a real call on this Mac cannot change the results.
 # mic 0 = an app is capturing, mic 1 = free, mic 2 = busy but the app is unknown.
 MICST=$(mktemp); echo 1 > "$MICST"
