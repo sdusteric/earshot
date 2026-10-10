@@ -304,9 +304,16 @@ if [ -n "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = au
   task=$(tr '_/-' '   ' <<<"$title" | sed 's/ [Ss]ession$//')
   who="the $task session in $proj"; on="$task in $proj"
 fi
+# drop_held: you answered, so this session's held "needs you" lines are stale.
+drop_held() {
+  lockf -k "$HELD.lock" sh -c 'awk -F "$3" -v s="$2" "!(\$2 == s && \$3 == \"need\")" "$1" > "$1.t" && mv "$1.t" "$1"' \
+    _ "$HELD" "$sid" $'\037' 2>/dev/null
+}
+
 # clear_wait: you answered, so stop the reminder timer and forget the prompt.
 clear_wait() {
   local wf pid; wf=$(wait_file "$sid")
+  [ -s "$HELD" ] && drop_held
   [ -f "$wf" ] || return 0
   pid=$(sed -n 6p "$wf")
   # A timer that already finished may have its PID reused by another program.

@@ -196,6 +196,20 @@ if [ ! -s "$HELD" ]; then pass=$((pass + 1)); echo "  ok    a mic that never fre
 check "a mic that never frees up: nothing is spoken" 0 "Never free"
 mic 1; rm -f "$HELD"; : > "$OUT"
 
+echo "Answered during the call"
+rm -f "$HELD"; mic 0
+hook notify a1 '{"notification_type":"permission_prompt"}'
+hook notify a2 '{"notification_type":"permission_prompt"}'
+done_line a3 "Finished a3."
+bash_ok a1 "ls" "x"
+held_check "a tool call drops that session's need line" 0 $'^[0-9]*\037a1\037need'
+held_check "another session's need line stays" 1 $'^[0-9]*\037a2\037need'
+bash_ok a3 "ls" "x"
+held_check "a session's finished line stays" 1 "Finished a3"
+hook start a2 '{}'
+held_check "a new prompt drops that session's need line" 0 $'^[0-9]*\037a2\037need'
+mic 1; rm -f "$HELD"; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
