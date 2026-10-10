@@ -17,6 +17,8 @@ swift build -c release --package-path "$ROOT/tts" --scratch-path "$BUILD" > "$BU
 bin=$(swift build -c release --package-path "$ROOT/tts" --scratch-path "$BUILD" --show-bin-path)
 rm -rf "$DEST.new"; mkdir -p "$DEST.new"
 cp "$bin/earshot-tts" "$DEST.new/"
+# What it was built from, so an update that only rewrites files is not a change.
+cat "$ROOT/tts/Package.swift" "$ROOT/tts/Package.resolved" "$ROOT/tts/Sources/earshot-tts/main.swift" | md5 -q > "$DEST.new/source.md5"
 # FluidAudio's resource bundle sits next to the binary.
 for b in "$bin"/*.bundle; do [ -e "$b" ] && cp -R "$b" "$DEST.new/"; done
 rm -rf "$DEST.old"; [ -d "$DEST" ] && mv "$DEST" "$DEST.old"; mv "$DEST.new" "$DEST"; rm -rf "$DEST.old"

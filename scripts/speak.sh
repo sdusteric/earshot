@@ -52,7 +52,7 @@ MIC=${EARSHOT_MIC:-$HOME/.config/earshot/mic-in-use}   # tests point this at a s
 HOLD=${EARSHOT_HOLD_ON_MIC:-on}   # on: hold lines while an app uses the mic
 # Tests point these at fakes.
 TTS=${EARSHOT_TTS:-$HOME/.config/earshot/kokoro/earshot-tts}
-SAYCMD=${EARSHOT_SAY:-say}
+SAYCMD=${EARSHOT_SAY:-/usr/bin/say}   # the program: a bare "say" is the function below
 PLAYER=${EARSHOT_PLAYER:-afplay}
 SOCK=$STATE/kokoro.sock   # the Kokoro server, while it runs
 
@@ -434,14 +434,21 @@ if [ -z "$EARSHOT_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
   ( lockf -t 0 "$STATE/build.lock" sh -c 'if swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2"; then rm -f "$2.stale"; else touch "$2" "$2.stale"; fi' _ "$SRC" "$MIC" ) \
     </dev/null >/dev/null 2>&1 &
 fi
-# The same for the Kokoro helper when an update brings a new tts/ package.
-# build-tts.sh stops the old server after a good build. A failed build touches
-# the old helper, so the next hook does not try again.
+# The same for the Kokoro helper, for Kokoro users. An update gives every file
+# a new time, so newer files only mean "compare": the helper is rebuilt when its
+# sources really changed (source.md5, written by build-tts.sh). build-tts.sh
+# stops the old server after a good build. A failed build leaves TTS.stale, so
+# hooks do not try again; setup rebuilds it and --status shows it.
 TTS_SRC=${0%/*}/../tts
-if [ -z "$EARSHOT_TTS" ] && [ -x "$TTS" ] \
+if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
   && { [ "$TTS_SRC/Sources/earshot-tts/main.swift" -nt "$TTS" ] || [ "$TTS_SRC/Package.swift" -nt "$TTS" ]; }; then
-  ( lockf -t 0 "$STATE/tts-build.lock" sh -c 'bash "$1" || touch "$2"' _ "${0%/*}/build-tts.sh" "$TTS" ) \
-    </dev/null >/dev/null 2>&1 &
+  if [ "$(cat "$TTS_SRC/Package.swift" "$TTS_SRC/Package.resolved" "$TTS_SRC/Sources/earshot-tts/main.swift" 2>/dev/null | md5 -q)" \
+    = "$(cat "${TTS%/*}/source.md5" 2>/dev/null)" ]; then
+    touch "$TTS"   # same sources: skip the comparison next time
+  else
+    ( lockf -t 0 "$STATE/tts-build.lock" sh -c 'bash "$1" || touch "$2.stale"' _ "${EARSHOT_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" ) \
+      </dev/null >/dev/null 2>&1 &
+  fi
 fi
 
 input=$(cat)

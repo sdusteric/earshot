@@ -88,6 +88,17 @@ conf 'EARSHOT_KEY=sk_x' 'EARSHOT_VOICE=v1'; : > "$CALLS"
 jq -nc --arg cwd "$T" '{session_id: "e2", cwd: $cwd}' | bash "$S" begin >/dev/null; sleep 0.5
 is "an ElevenLabs session does not" "$(grep -c serve "$CALLS")" 0
 
+echo "The real say command"
+# With EARSHOT_SAY unset, the fallback must run the say program, not speak.sh's
+# own say function. A copy of speak.sh keeps a runaway easy to stop.
+cp "$S" "$T/speak-copy.sh"
+conf 'EARSHOT_ENGINE=say'; : > "$PLAYED"
+( unset EARSHOT_SAY; bash "$T/speak-copy.sh" say "Real say." )
+for _ in $(seq 50); do [ -s "$PLAYED" ] && break; sleep 0.1; done; sleep 0.5
+got=$(head -c 4 "$PLAYED"); runaway=$(pgrep -f "$T/speak-copy.sh" | wc -l | tr -d ' ')
+pkill -9 -f "$T/speak-copy.sh"
+is "the say fallback runs the say program (an AIFF file), once" "$got $runaway" "FORM 0"
+
 echo "Setup"
 SETUP="$(dirname "$S")/setup.sh"
 conf 'EARSHOT_KEY=sk_x' 'EARSHOT_VOICE=v1' 'EARSHOT_LEVEL=quiet'
@@ -99,7 +110,13 @@ is "kokoro voices are listed without a key" "$(bash "$SETUP" --engine kokoro --l
 # A full setup run against a fake home and a fake, current Kokoro helper.
 K=$T/kokoro; mkdir -p "$K" "$T/bin" "$T/home"; cp "$EARSHOT_TTS" "$K/earshot-tts"
 printf '#!/bin/bash\nexit 0\n' > "$T/bin/afplay"; chmod +x "$T/bin/afplay"
-setup_run() { HOME=$T/home PATH=$T/bin:$PATH EARSHOT_KOKORO_DIR=$K bash "$SETUP" "$@" </dev/null 2>&1; }
+SRC=$(dirname "$S")/../tts
+src_hash() { cat "$SRC/Package.swift" "$SRC/Package.resolved" "$SRC/Sources/earshot-tts/main.swift" | md5 -q; }
+src_hash > "$K/source.md5"
+# A fake build: records the call and leaves a current helper.
+printf '#!/bin/bash\necho STUB BUILD >> "%s"\nrm -f "%s.stale"\n' "$T/builds" "$K/earshot-tts" > "$T/build-tts"
+chmod +x "$T/build-tts"
+setup_run() { HOME=$T/home PATH=$T/bin:$PATH EARSHOT_KOKORO_DIR=$K EARSHOT_BUILD_TTS=$T/build-tts bash "$SETUP" "$@" </dev/null 2>&1; }
 conf
 out=$(setup_run --engine kokoro --voice af_bella)
 is "a current helper is not rebuilt" "$(grep -c 'Building' <<<"$out")" 0
@@ -110,6 +127,31 @@ is "an unknown voice fails without a build" "$code $(grep -c 'Building' <<<"$out
 printf '#!/bin/bash\necho "Error: AudioQueueStart failed (-66681)" >&2; exit 1\n' > "$T/bin/afplay"
 out=$(setup_run --engine kokoro --voice af_heart); code=$?
 is "no sound output: setup still says it saved, and why it was silent" "$code $(grep -c "couldn't play the test line" <<<"$out")" "0 1"
+
+echo "Helper rebuilds"
+touch -t 202001010000 "$K/earshot-tts"
+setup_run --engine kokoro --voice af_heart >/dev/null
+is "setup: a helper older than its sources but built from them is not rebuilt" "$(cat "$T/builds" 2>/dev/null | wc -l | tr -d ' ')" 0
+echo old > "$K/source.md5"; out=$(setup_run --engine kokoro --voice af_heart)
+is "setup: a helper built from other sources is rebuilt" "$(cat "$T/builds" | wc -l | tr -d ' ')" 1
+src_hash > "$K/source.md5"; touch "$K/earshot-tts.stale"; : > "$T/builds"
+st=$(HOME=$T/home EARSHOT_KOKORO_DIR=$K bash "$SETUP" --engine kokoro --status 2>&1)
+is "status says when the helper is out of date" "$(grep -c 'Kokoro helper: out of date' <<<"$st")" 1
+setup_run --engine kokoro --voice af_heart >/dev/null
+is "setup rebuilds a helper whose last rebuild failed" "$(wc -l < "$T/builds" | tr -d ' ')" 1
+# speak.sh rebuilds in the background after an update, for Kokoro only.
+hook_once() { jq -nc --arg cwd "$T" '{session_id: "rb", cwd: $cwd}' | EARSHOT_TTS=$K/earshot-tts EARSHOT_BUILD_TTS=$T/build-tts bash "$S" stop >/dev/null; sleep 0.5; }
+rm -f "$K/earshot-tts.stale"; : > "$T/builds"; touch -t 202001010000 "$K/earshot-tts"
+conf 'EARSHOT_ENGINE=kokoro'; hook_once
+is "hooks: same sources, only newer times: no rebuild" "$(wc -l < "$T/builds" | tr -d ' ')" 0
+echo old > "$K/source.md5"; touch -t 202001010000 "$K/earshot-tts"
+conf 'EARSHOT_KEY=sk_x' 'EARSHOT_VOICE=v1'; hook_once
+is "hooks: an ElevenLabs user is never rebuilt" "$(wc -l < "$T/builds" | tr -d ' ')" 0
+conf 'EARSHOT_ENGINE=kokoro'; hook_once
+is "hooks: changed sources: one rebuild" "$(wc -l < "$T/builds" | tr -d ' ')" 1
+printf '#!/bin/bash\necho FAILED BUILD >> "%s"\nexit 1\n' "$T/builds" > "$T/build-tts"; : > "$T/builds"; touch -t 202001010000 "$K/earshot-tts"
+hook_once; hook_once
+is "hooks: a failed rebuild marks the helper and is not retried" "$(wc -l < "$T/builds" | tr -d ' ') $([ -e "$K/earshot-tts.stale" ] && echo marked)" "1 marked"
 
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

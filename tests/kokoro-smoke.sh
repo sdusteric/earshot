@@ -41,6 +41,11 @@ EARSHOT_KOKORO_IDLE_SECS=3 "$TTS" serve --socket "$SOCK" & sleep 8
 check "10. an idle server exits and removes its socket" '[ "$(servers)" = 0 ] && [ ! -e "$SOCK" ]'
 check "11. empty text fails" '! printf "" | "$TTS" speak --socket "$SOCK" --out "$D/e.wav" 2>/dev/null'
 check "12. an unknown voice fails with a message" '! speak "$D/x.wav" "Hello." no_such_voice 2>"$D/err" && [ -s "$D/err" ]'
+speak "$D/t.wav" "Started by speak."; pkill -TERM -f "$TTS serve --socket $SOCK"; sleep 1
+check "13. a server started by speak stops on TERM, so rebuilds can replace it" '[ "$(servers)" = 0 ]'
+stop_servers; t=$(ms)
+printf '%s' "$long" | EARSHOT_KOKORO_REQUEST_SECS=0.01 "$TTS" speak --socket "$SOCK" --out "$D/h.wav"; t=$(( $(ms) - t ))
+check "14. a request over the server's limit: the server quits and the line is still made ($t ms)" 'wav_ok "$D/h.wav" && [ "$t" -lt 20000 ] && grep -q "quitting" "$SOCK.log"'
 stop_servers
 rm -rf "$D"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

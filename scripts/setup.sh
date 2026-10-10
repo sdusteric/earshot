@@ -197,7 +197,8 @@ if [ "$mode" = status ]; then
   case "$ENGINE" in
     kokoro)
       say_ok "Voice: ${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}"
-      if [ -x "$TTS" ]; then say_ok "Kokoro helper: built"
+      if [ -e "$TTS.stale" ]; then say_ok "Kokoro helper: out of date, its rebuild after an update failed (run setup.sh --engine kokoro)"
+      elif [ -x "$TTS" ]; then say_ok "Kokoro helper: built"
       else say_ok "Kokoro helper: not built (run setup.sh --engine kokoro). Until then Earshot uses the Mac's own voice."; fi
       pgrep -f "$TTS serve" >/dev/null && say_ok "Kokoro: loaded" || say_ok "Kokoro: not loaded (it loads with the next session or line)"
       [ -n "$KEY" ] && say_ok "ElevenLabs key: saved (setup.sh --engine elevenlabs switches back)" ;;
@@ -311,10 +312,13 @@ pick_kokoro_voice() {
   fi
 }
 
-# The helper is current when it is newer than its sources.
+# The helper is current when it was built from these sources (build-tts.sh
+# writes source.md5) and its last rebuild did not fail (TTS.stale).
 kokoro_current() {
   local src=$SCRIPTS/../tts
-  [ -x "$TTS" ] && [ "$TTS" -nt "$src/Sources/earshot-tts/main.swift" ] && [ "$TTS" -nt "$src/Package.swift" ]
+  [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
+    && [ "$(cat "$src/Package.swift" "$src/Package.resolved" "$src/Sources/earshot-tts/main.swift" | md5 -q)" \
+      = "$(cat "${TTS%/*}/source.md5" 2>/dev/null)" ]
 }
 
 setup_kokoro() {
@@ -322,13 +326,13 @@ setup_kokoro() {
   if [ -z "$voice_arg" ] && [ -t 0 ]; then pick_kokoro_voice; fi
   if ! kokoro_current; then
     echo "Building the Kokoro helper. The first build takes about 2 minutes."
-    bash "$SCRIPTS/build-tts.sh" >&2 \
+    bash "${EARSHOT_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 \
       || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
   fi
   kokoro_voices | grep -qx -- "$KVOICE" \
     || die "Kokoro has no voice called $KVOICE. To see the list, run: setup.sh --engine kokoro --list-voices"
   ( umask 077; mkdir -p "$STATE_DIR" )
-  echo "Making a test line. The first time, this downloads the voice (about 120 MB)."
+  echo "Making a test line. The first time, this downloads the voice (about 400 MB on disk)."
   printf 'Earshot is set up. Talk to you soon.' \
     | "$TTS" speak --socket "$STATE_DIR/kokoro.sock" --voice "$KVOICE" --out "$TMP/test.wav" --timeout 600 2>"$TMP/err" \
     || die "Kokoro couldn't make the test line: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"

@@ -6,7 +6,9 @@
 //       when that fails too, it makes the line itself. Exit 0: FILE is ready.
 //   earshot-tts serve --socket PATH
 //       Keeps Kokoro loaded and answers on PATH, one request at a time. Exits
-//       after EARSHOT_KOKORO_IDLE_SECS (default 600) without a request.
+//       after EARSHOT_KOKORO_IDLE_SECS (default 600) without a request, and
+//       when one request takes over EARSHOT_KOKORO_REQUEST_SECS (default 15),
+//       so a hung Core ML call does not block every later line.
 //   earshot-tts voices
 //       The English voices, one per line.
 //
@@ -137,6 +139,7 @@ func serve(_ socketPath: String) async -> Never {
     }
     await speaker.warmUp()
     let idleMs = Int32(min(Int(env["EARSHOT_KOKORO_IDLE_SECS"] ?? "") ?? 600, 86_400) * 1000)
+    let requestLimit = Double(env["EARSHOT_KOKORO_REQUEST_SECS"] ?? "") ?? 15
     while true {
         var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         if poll(&pfd, 1, idleMs) == 0 { unlink(socketPath); exit(0) }
@@ -146,10 +149,19 @@ func serve(_ socketPath: String) async -> Never {
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         var reply = Reply(ok: false, error: "bad request")
         if let line = readLine(c), let req = try? JSONDecoder().decode(Request.self, from: line) {
+            // Quit when this takes too long. The socket goes first, so the
+            // next line starts a fresh server; the lock goes with the process.
+            let watchdog = DispatchWorkItem {
+                FileHandle.standardError.write(Data("A line took over \(requestLimit) s, quitting\n".utf8))
+                unlink(socketPath)
+                _exit(1)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + requestLimit, execute: watchdog)
             do {
                 try await speaker.speak(req.text, voice: req.voice, to: req.out)
                 reply = Reply(ok: true)
             } catch { reply = Reply(ok: false, error: "\(error)") }
+            watchdog.cancel()
         }
         _ = writeLine(c, reply)
         close(c)
@@ -176,7 +188,14 @@ func startServer(_ socketPath: String) {
     let exe = Bundle.main.executablePath ?? CommandLine.arguments[0]
     var attr: posix_spawnattr_t?
     posix_spawnattr_init(&attr)
-    posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
+    // This runs on a worker thread that blocks signals. Without a clean mask
+    // and default handlers, the server would ignore the TERM that a rebuild sends.
+    var none = sigset_t(), all = sigset_t()
+    sigemptyset(&none)
+    sigfillset(&all)
+    posix_spawnattr_setsigmask(&attr, &none)
+    posix_spawnattr_setsigdefault(&attr, &all)
+    posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
     var files: posix_spawn_file_actions_t?
     posix_spawn_file_actions_init(&files)
     posix_spawn_file_actions_addopen(&files, 0, "/dev/null", O_RDONLY, 0)
