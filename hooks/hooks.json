@@ -9,9 +9,12 @@
     "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" toolfail" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" stop" }] }],
     "StopFailure": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" fail" }] }],
+    "Elicitation": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" elicit" }] }],
+    "ElicitationResult": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" answered" }] }],
     "Notification": [
       { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" notify" }] },
-      { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" idle" }] }
+      { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" idle" }] },
+      { "matcher": "elicitation_dialog|elicitation_url_dialog", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" inputnotify" }] }
     ]
   }
 }

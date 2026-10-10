@@ -1,6 +1,7 @@
 #!/bin/bash
 # Earshot: spoken updates for Claude Code via ElevenLabs.
-# Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end (hooks),
+# Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end |
+# elicit | answered | inputnotify | pretool (hooks),
 # remind (internal timer), play (internal, one line at a time), say "<text>" (manual test)
 umask 077   # every file Earshot writes is readable only by you
 CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewhere
@@ -345,7 +346,7 @@ clear_wait() {
   [ -f "$wf" ] || return 0
   pid=$(sed -n 6p "$wf")
   # A timer that already finished may have its PID reused by another program.
-  [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -Eq '/speak\.sh (ask|question)$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
+  [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -Eq '/speak\.sh (ask|question|elicit)$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
   rm -f "$wf"
 }
 new_wait() {
@@ -489,6 +490,22 @@ ask)
 question)
   # PreToolUse for AskUserQuestion: the same grace period, then reminders.
   new_wait question ""; start_timer "$sid" "$token" first
+  ;;
+elicit)
+  # Elicitation: an MCP server asks you for input. Record it and start the
+  # reminders; inputnotify speaks first, after about 6 seconds. Printing
+  # nothing lets the dialog open as usual.
+  server=$(jq -r '.mcp_server_name // empty' <<<"$input" | sed 's/^claude_ai_//' | tr '_-' '  ')
+  new_wait input "${server:+for $server}"; start_timer "$sid" "$token"
+  ;;
+answered)
+  # ElicitationResult: you answered the MCP server.
+  clear_wait
+  ;;
+inputnotify)
+  # Notification elicitation_dialog: the input dialog has waited about 6 seconds.
+  { read -r _; read -r _; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
+  tell need "Hey, $who needs your input${what:+ $what}."
   ;;
 notify)
   # Notification permission_prompt: the prompt has waited about 6 seconds.

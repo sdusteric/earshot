@@ -243,6 +243,21 @@ if [ -z "$errs" ]; then pass=$((pass + 1)); echo "  ok    an expired-only queue 
 check "an expired-only queue says nothing" 0 "."
 rm -f "$HELD"; : > "$OUT"
 
+echo "MCP input dialogs"
+hook elicit m1 '{"mcp_server_name":"claude_ai_Linear","message":"Pick a project"}'
+hook inputnotify m1 '{"notification_type":"elicitation_dialog"}'
+check "an MCP input dialog names the server" 1 "needs your input for Linear\.$"
+hook inputnotify m0 '{"notification_type":"elicitation_dialog"}'
+check "an input dialog with no server name" 1 "needs your input\.$"
+EARSHOT_REMIND_UNIT=100 hook elicit m2 '{"mcp_server_name":"github"}'
+timer=$(sed -n 6p "$EARSHOT_STATE_DIR/wait-m2")
+kill -0 "$timer" 2>/dev/null && running=1 || running=0
+hook answered m2 '{"mcp_server_name":"github","action":"accept"}'; sleep 0.2
+if [ "$running" = 1 ] && ! kill -0 "$timer" 2>/dev/null && [ ! -e "$EARSHOT_STATE_DIR/wait-m2" ]; then pass=$((pass + 1)); echo "  ok    answering an input dialog stops its reminders"; else fail=$((fail + 1)); echo "  FAIL  the input dialog timer kept running (started: $running)"; fi
+printed=$(jq -nc --arg cwd "$P" '{session_id: "m3", cwd: $cwd, mcp_server_name: "github"}' | EARSHOT_REMIND_UNIT=100 bash "$S" elicit)
+if [ -z "$printed" ]; then pass=$((pass + 1)); echo "  ok    the Elicitation hook prints nothing, so the dialog opens"; else fail=$((fail + 1)); echo "  FAIL  the Elicitation hook printed: $printed"; fi
+hook end m1 '{}'; hook end m0 '{}'; hook end m2 '{}'; hook end m3 '{}'; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
