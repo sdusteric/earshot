@@ -70,7 +70,7 @@ start)
   # Plain stdout from UserPromptSubmit is added to Claude's context.
   cat <<'EOF'
 Earshot voice is on. End your final reply with one line that starts with "🗣 " (the speaking-head emoji and a space). A hook reads that line aloud when you finish.
-Write it the way a coworker talks out loud: casual, with contractions. Say only what the user needs without the screen, in this order: a question or blocker, then the result, then any risk. One or two short sentences; for a small task a few words are enough. No code, file paths, markdown, emotion tags or stage directions.
+Write it the way a coworker talks out loud: casual, with contractions. Say the result. If there is a question or blocker for the user, say it first; if there is a real risk, say it last. When there is none, leave it out: never say that there is no blocker or no risk. One or two short sentences, 25 words at most; for a small task a few words are enough. No code, file paths, markdown, emotion tags or stage directions.
 The prompt was probably dictated: read misheard code terms as the closest name in this repo, and ask if unsure.
 EOF
   ;;

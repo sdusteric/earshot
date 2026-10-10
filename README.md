@@ -26,92 +26,122 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 
 ## Requirements
 
-- macOS
-- Claude Code signed in with a Claude.ai account (`/voice` doesn't work with an API key, Bedrock, Vertex or Foundry)
-- An ElevenLabs API key with Text to Speech access. A free account works with premade voices.
-- `jq` (`brew install jq`)
-- Optional: `swiftc` (`xcode-select --install`), so Earshot stops talking when you start
+- A Mac.
+- Claude Code, signed in with a Claude.ai account. `/voice` does not work with an API key, Bedrock, Vertex, or Foundry.
+- An ElevenLabs API key with the Text to Speech permission. A free ElevenLabs account works with premade voices.
+- `jq`. To install it, run `brew install jq`.
+- Optional: `swiftc`. To install it, run `xcode-select --install`. Without `swiftc`, Earshot does not stop talking when you start to talk.
 
 ## Install
 
-In Claude Code:
+1. In Claude Code, run these two commands:
 
-```
-/plugin marketplace add sdusteric/earshot
-/plugin install earshot@earshot
-/earshot:setup
-```
+   ```
+   /plugin marketplace add sdusteric/earshot
+   /plugin install earshot@earshot
+   ```
 
-`/earshot:setup` walks you through choosing a voice and saving your key. You copy
-the key to your clipboard and the setup script reads it from there, so the key
-never appears in the chat. You hear a test line when it works.
+2. Run `/earshot:setup`. Claude asks you to choose a voice.
+3. Copy your ElevenLabs API key to the clipboard. Tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
+4. Listen for the test line. When you hear it, the setup is complete.
+5. Run `/voice`. Hold Space to talk.
 
-Then run `/voice` and hold Space to talk.
+### Install with a terminal
 
-### Without Claude Code's help
+You can also do the setup in a terminal. The script asks for the key and shows a numbered list of voices.
 
-Run the setup script in a terminal. It asks for the key and shows a numbered list
-of voices:
+1. Do step 1 of [Install](#install).
+2. In a terminal, run:
 
-```
-bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh
-```
+   ```
+   bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh
+   ```
 
-If that path doesn't exist on your machine, clone this repo and run
-`bash scripts/setup.sh` from it. Run `setup.sh --help` for other options.
+To see all options, run the same command with `--help`.
+
+## Change the voice
+
+Use one of these methods:
+
+- In Claude Code, run `/earshot:setup`. Choose a different voice.
+- In a terminal, run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh`. Type the number of a voice, or paste a voice ID.
+- Run the same script with a voice ID: `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --voice VOICE_ID`.
+
+Each method plays a test line in the new voice. If the voice does not work, the script shows the reason and keeps your old voice.
+
+To find a voice ID:
+
+1. Open [elevenlabs.io](https://elevenlabs.io) and go to **Voices**.
+2. Select a voice.
+3. Copy its voice ID.
+
+Premade voices work on all ElevenLabs plans. A voice from the Voice Library can need a paid plan. The setup script tells you when your plan cannot use a voice.
 
 ## Use
 
 | Action | How |
 |---|---|
-| Turn voice on or off | `/voice` |
-| Talk | Hold Space, talk, release |
-| Send automatically on release | Set `"voice": { "autoSubmit": true }` in `~/.claude/settings.json` (setup can do this) |
-| Mute for a while | `touch ~/.config/earshot/mute` |
-| Unmute | `rm ~/.config/earshot/mute` |
-| Change the voice or key | `/earshot:setup` again |
-| See what's set up | `bash scripts/setup.sh --status` |
+| Turn voice on or off | Run `/voice`. |
+| Talk | Hold Space. Talk. Release Space. |
+| Send the prompt when you release Space | Set `"voice": { "autoSubmit": true }` in `~/.claude/settings.json`. `/earshot:setup` can set it for you. |
+| Mute Earshot | Run `touch ~/.config/earshot/mute`. |
+| Unmute Earshot | Run `rm ~/.config/earshot/mute`. |
+| Change the voice or the key | Run `/earshot:setup`. See [Change the voice](#change-the-voice). |
+| Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
+
+## Update
+
+1. In Claude Code, run `/plugin marketplace update earshot`.
+2. Run `/reload-plugins`, or start a new Claude Code session.
+
+Your key and voice stay the same.
+
+## Uninstall
+
+1. In Claude Code, run `/plugin uninstall earshot@earshot`.
+2. To remove your key and voice, run `rm -rf ~/.config/earshot` in a terminal.
 
 ## How it works
 
 The plugin adds five hooks: `UserPromptSubmit`, `PostToolUse`, `Stop`,
-`StopFailure` and `Notification` (permission prompts). They all call
+`StopFailure`, and `Notification` (for permission prompts). Each hook runs
 `scripts/speak.sh`.
 
-While `/voice` is on, the prompt hook tells Claude to end each reply with one line
-that starts with 🗣. When Claude finishes, the `Stop` hook reads that line aloud.
-Nothing in your `CLAUDE.md` or `settings.json` is changed.
+When `/voice` is on, the prompt hook tells Claude to end each reply with one line
+that starts with 🗣. When Claude stops, the `Stop` hook reads that line aloud.
+Earshot does not change your `CLAUDE.md` or your `settings.json`.
 
-Your key and voice live in `~/.config/earshot/config`, readable only by you. A
-saved config wins over any `ELEVENLABS_API_KEY` in your environment, so a key you
-use for other tools doesn't get picked up by accident.
+Earshot keeps your key and voice in `~/.config/earshot/config`. Only your user
+account can read this file. If you also set `ELEVENLABS_API_KEY` for other tools,
+Earshot uses the key in its config file, not the environment variable.
 
 ## Settings
 
-Add any of these to `~/.config/earshot/config`:
+To change a setting, add a line to `~/.config/earshot/config`, for example
+`EARSHOT_BEAT_SECS=300`.
 
-| Setting | Default | Meaning |
+| Setting | Default | What it controls |
 |---|---|---|
-| `EARSHOT_MODEL` | `eleven_v4_turbo` | ElevenLabs model |
-| `EARSHOT_BEAT_SECS` | `180` | Seconds between "still on it" updates |
-| `EARSHOT_LOOP_REPEATS` | `3` | Same step this many times in a row gives a warning |
+| `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech |
+| `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |
+| `EARSHOT_LOOP_REPEATS` | `3` | The number of identical steps in a row that causes a "might be stuck" warning |
 
 ## Troubleshooting
 
-| Problem | Fix |
+| Problem | What to do |
 |---|---|
-| No sound, no beep | Run `setup.sh --status`. Check that `/voice` is on and Earshot isn't muted. |
-| A beep, no voice | Read `/tmp/earshot.log`. 401 means a bad key, 404 a bad voice ID. |
-| "Your plan can't use this voice" | Voice Library voices can need a paid ElevenLabs plan. ElevenLabs sells separate plans for ElevenCreative, ElevenAgents and ElevenAPI, so check which one covers the API. Premade voices work on every plan. |
-| `Unknown command: /voice` | Sign in with a Claude.ai account (`/login`) and remove `ANTHROPIC_API_KEY` from your environment. |
-| No microphone | System Settings > Privacy & Security > Microphone, then turn on your terminal app. |
+| You hear no voice and no beep | Run `setup.sh --status`. Make sure that `/voice` is on. Make sure that the file `~/.config/earshot/mute` does not exist. |
+| You hear a beep but no voice | Read `/tmp/earshot.log`. Error 401 means that the key is not correct. Error 404 means that the voice ID is not correct. |
+| The script says that your plan cannot use the voice | Choose a premade voice, or upgrade your ElevenLabs plan. ElevenLabs sells separate plans for ElevenCreative, ElevenAgents, and ElevenAPI. Make sure that your plan includes API access to Text to Speech. |
+| Claude Code shows `Unknown command: /voice` | Run `/login` and sign in with a Claude.ai account. Remove `ANTHROPIC_API_KEY` from your environment. |
+| `/voice` does not record | Open System Settings > Privacy & Security > Microphone. Turn on access for your terminal app. |
 
 ## Limits
 
-- Hooks can't tell whether you typed or talked, so while `/voice` is on, typed prompts get spoken updates too.
-- "Still on it" updates come only after a tool call finishes, so one long command stays silent.
-- Several sessions share one speaker. A new line cuts off the one playing.
-- If you use a community voice and its owner removes it, the voice stops working. Premade voices don't have this risk.
+- Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
+- Earshot gives "still on it" updates only after a tool call ends. During one long command, Earshot is silent.
+- All Claude Code sessions use the same speaker. A new line stops the line that plays.
+- If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
 
 ## License
 
