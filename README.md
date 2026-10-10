@@ -14,13 +14,14 @@ talks back with an ElevenLabs voice.
 
 | When | Example |
 |---|---|
-| Every 3 minutes of work | "Still on billing service, about 6 minutes in. Latest step: run the invoice tests." |
+| Every 3 minutes of work, also during one long command | "Still on billing service, about 6 minutes in. Latest step: run the invoice tests." |
 | The same error comes back 3 times, even after edits | "Heads up, billing service keeps hitting the same error. It might be stuck." |
 | The same step gives the same result 3 times in a row | "Heads up, billing service keeps running the same thing over and over. It might be stuck." |
 | Two steps alternate 3 times | "Heads up, billing service keeps going back and forth between the same two steps. It might be stuck." |
 | A permission prompt waits more than a few seconds | "Hey, billing service needs your OK to run the database migration." |
 | You still haven't answered it | "It's been 5 minutes. Billing service is still waiting on you." (at 2, 5 and 10 minutes) |
 | Claude asks you a question | "Hey, billing service has a question for you." |
+| An MCP server asks for input | "Hey, billing service needs your input for Linear." |
 | Claude ended on a question and you didn't reply | "Hey, billing service is still waiting on your answer." |
 | The turn fails | "Billing service hit an error. Take a look when you can." |
 | Claude finishes | One short line Claude writes for you, e.g. "Fixed the rounding bug, though the refund test is still flaky." |
@@ -137,6 +138,22 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 | Change the style | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --style cheeky`. Use `plain`, `upbeat`, or `cheeky`. |
 | Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
 
+## Roll call
+
+Ask what every open session is doing, and hear the ones that need you first:
+
+> Three sessions. Billing service needs your OK to run the database migration.
+> Invoice api is working, 12 minutes in. Docs site finished: fixed the broken links.
+
+The roll call plays even when Earshot is muted, `/voice` is off, or you are on a call, because you asked for it.
+
+- **In a session:** run `/earshot:rollcall`.
+- **With a hotkey (no Claude turn, instant):**
+  1. Open the Shortcuts app and make a new shortcut.
+  2. Add the action **Run Shell Script** with this script:
+     `bash ~/.claude/plugins/marketplaces/earshot/scripts/speak.sh rollcall`
+  3. In the shortcut's details, click **Add Keyboard Shortcut** and press the keys you want.
+
 ## Update
 
 If you turned on auto-update during setup, you do not need to do anything. Claude Code installs new versions a few minutes after a session starts, then shows `Plugin updated: earshot`.
@@ -164,10 +181,13 @@ Your key and voice stay the same.
 ## How it works
 
 The plugin adds hooks for these events: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse` (for
-`AskUserQuestion` only), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
-`Stop`, `StopFailure`, and `Notification` (for `permission_prompt` and
-`idle_prompt`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
+`AskUserQuestion`, and for `Bash` in the background), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
+`Stop`, `StopFailure`, `Elicitation`, `ElicitationResult`, and `Notification` (for `permission_prompt`,
+`idle_prompt`, `elicitation_dialog` and `elicitation_url_dialog`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
 speech runs in the background, so Earshot does not slow down Claude.
+
+Each session keeps a short status (needs you, stuck, working, finished) in Earshot's
+private folder. The roll call reads it.
 
 Earshot looks for three signs that Claude is stuck. It uses the same patterns as
 the stuck detector in OpenHands:
@@ -231,7 +251,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 ## Limits
 
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
-- Earshot gives "still on it" updates only after a tool call ends. During one long command, Earshot is silent.
+- During one long command, Earshot gives "still on it" updates for shell commands only. A long MCP call or web fetch is silent until it ends.
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
@@ -266,6 +286,9 @@ voices need a paid plan.
 **How is it different from a notification sound?**
 A sound tells you something happened. Earshot tells you what: which project,
 what it wants to run, whether it looks stuck, and what it got done.
+
+**Can I ask what all my sessions are doing?**
+Yes. Press your roll call hotkey or run `/earshot:rollcall`. See [Roll call](#roll-call).
 
 **Does it talk during my calls?**
 No. While another app uses the microphone, Earshot waits. When the call ends,

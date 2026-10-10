@@ -340,7 +340,13 @@ order_check "no sessions" "No Claude sessions are open.|"
 for i in 1 2 3 4 5 6 7; do printf '%s\n%s\n' "project $i" "" > "$EARSHOT_LIVE_DIR/c$i"; printf '%s\n%s\n%s\n%s\n' done "$i" "project $i" "" > "$EARSHOT_STATE_DIR/status-c$i"; done
 : > "$OUT"; roll
 order_check "seven sessions: six, then how many more" "Seven sessions. Project 1 finished. Project 2 finished. Project 3 finished. Project 4 finished. Project 5 finished. Project 6 finished. And 1 more.|"
-rm -f "$EARSHOT_LIVE_DIR"/* "$EARSHOT_STATE_DIR"/status-c*; unset EARSHOT_LIVE_DIR; : > "$OUT"
+rm -f "$EARSHOT_LIVE_DIR"/* "$EARSHOT_STATE_DIR"/status-c*
+printf '%s\n%s\n' "billing service" "Tax export" > "$EARSHOT_LIVE_DIR/n1"
+printf '%s\n%s\n' "billing service" "Refund rounding" > "$EARSHOT_LIVE_DIR/n2"
+printf '%s\n%s\n' "docs site" "Broken links" > "$EARSHOT_LIVE_DIR/n3"
+: > "$OUT"; roll
+order_check "two sessions in one project are told apart by title" "Three sessions. Docs site is open. The refund rounding session in billing service is open. The tax export session in billing service is open.|"
+rm -f "$EARSHOT_LIVE_DIR"/*; unset EARSHOT_LIVE_DIR; : > "$OUT"
 
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"

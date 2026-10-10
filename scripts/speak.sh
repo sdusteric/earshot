@@ -4,8 +4,9 @@
 # elicit | answered | inputnotify | pretool (hooks),
 # remind (internal timer), play (internal, one line at a time), say "<text>" (manual test)
 umask 077   # every file Earshot writes is readable only by you
-# Shortcuts and other launchers run scripts with a short PATH; jq is usually here.
-PATH=$PATH:/opt/homebrew/bin:/usr/local/bin
+# Shortcuts and other launchers run scripts with a short PATH: add Homebrew
+# (jq) and the system folders that hold md5 and lockf.
+PATH=$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/sbin
 CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewhere
 [ -f "$CONF" ] && . "$CONF"
 # The saved config wins, so a generic ELEVENLABS_API_KEY set for other tools
@@ -263,8 +264,12 @@ if [ "$1" = rollcall ]; then
     [ -f "$f" ] || continue
     s=${f##*/}
     st=open; since=0; name=""; detail=""
-    { read -r st; read -r since; read -r name; read -r detail; } 2>/dev/null < "$STATE/status-$s"
-    [ -n "$name" ] || name=$(head -1 "$f")
+    { read -r st; read -r since; read -r _; read -r detail; } 2>/dev/null < "$STATE/status-$s"
+    # The name as the alerts say it, worked out now, so a second session in
+    # the same project is told apart by its title.
+    { read -r name; read -r title; } < "$f"
+    twins=0; for g in "$LIVE"/*; do [ "$(head -1 "$g")" = "$name" ] && twins=$((twins + 1)); done
+    [ -n "$title" ] && [ "$twins" -gt 1 ] && name="the $(lower_first "$(tr '_/-' '   ' <<<"$title" | sed 's/ [Ss]ession$//')") session in $name"
     Name=$(upper_first "$name")
     case "$st" in
       needs) r=0; text="$Name $detail." ;;
