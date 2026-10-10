@@ -107,5 +107,9 @@ is "the Kokoro voice is saved" "$(grep -c '^EARSHOT_KOKORO_VOICE=af_bella$' "$EA
 out=$(setup_run --engine kokoro --voice af_nobody); code=$?
 is "an unknown voice fails without a build" "$code $(grep -c 'Building' <<<"$out") $(grep -c 'no voice called af_nobody' <<<"$out")" "1 0 1"
 
+printf '#!/bin/bash\necho "Error: AudioQueueStart failed (-66681)" >&2; exit 1\n' > "$T/bin/afplay"
+out=$(setup_run --engine kokoro --voice af_heart); code=$?
+is "no sound output: setup still says it saved, and why it was silent" "$code $(grep -c "couldn't play the test line" <<<"$out")" "0 1"
+
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

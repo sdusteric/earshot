@@ -373,5 +373,8 @@ else
   echo "swiftc not found (xcode-select --install), so Earshot won't stop when you talk. Everything else works."
 fi
 
-afplay "$TEST"
+# Everything is saved by now, so a Mac that can't play sound is not a failed setup.
+if ! afplay "$TEST" 2>"$TMP/play-err"; then
+  echo "Saved, but this Mac couldn't play the test line ($(tail -1 "$TMP/play-err")). Check the sound output in System Settings > Sound, then run setup again to hear it."
+fi
 echo "$DONE_MSG In Claude Code, run /voice to turn it on."
