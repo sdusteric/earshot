@@ -3,7 +3,7 @@
 Spoken updates from Claude Code. Start a task, walk away, and hear when it
 gets stuck, needs your OK, or finishes.
 
-<!-- TODO: add a 20-30 second demo video or GIF here. -->
+https://github.com/user-attachments/assets/f2c1f624-1941-436b-b3d9-a9229687f50c
 
 You talk with Claude Code's built-in `/voice`. Earshot adds the other half: Claude
 talks back with an ElevenLabs voice.
