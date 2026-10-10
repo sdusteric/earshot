@@ -24,6 +24,7 @@ talks back with an ElevenLabs voice.
 | Claude ended on a question and you didn't reply | "Hey, billing service is still waiting on your answer." |
 | The turn fails | "Billing service hit an error. Take a look when you can." |
 | Claude finishes | One short line Claude writes for you, e.g. "Fixed the rounding bug, though the refund test is still flaky." |
+| You were on a call, or another app used the mic | Nothing until the mic is free. Then the lines you missed, most urgent first: "While you were on the mic: Hey, billing service needs your OK to run the database migration." |
 | Your prompt arrives (level `all` only) | "On it." |
 
 With several sessions open, you hear which one is talking. The finished line
@@ -36,6 +37,13 @@ needs your OK." Folder names are said as words, so `billing_service` and
 Earshot only speaks while `/voice` is on. It stops talking when you start, plays
 repeated lines from a cache, and beeps if the voice fails. Reminders stop as soon
 as you answer, including when you press Esc.
+
+Earshot also waits while another app uses the microphone, for example during a
+Zoom, Meet, or FaceTime call, or while you dictate with `/voice`. When the mic
+is free, you hear what you missed: lines that need you first, then stuck
+warnings and failures, then finished lines. Progress updates are skipped, and a
+prompt that you answered during the call is not read. After a short wait, such
+as while you dictate, the line plays as usual.
 
 You choose how much Earshot says. `normal` is the default:
 
@@ -65,7 +73,7 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 - Claude Code in a terminal, or the Code tab of the Claude Mac app. Claude Code must be signed in with a Claude.ai account. `/voice` does not work with an API key, Bedrock, Vertex, or Foundry.
 - An ElevenLabs API key with the Text to Speech permission. A free ElevenLabs account works with premade voices.
 - `jq`. To install it, run `brew install jq`.
-- Optional: `swiftc`. To install it, run `xcode-select --install`. Without `swiftc`, Earshot does not stop talking when you start to talk.
+- Optional: `swiftc`. To install it, run `xcode-select --install`. Without `swiftc`, Earshot does not stop talking when you start to talk, and it does not wait while you are on a call.
 
 ## Install
 
@@ -207,6 +215,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |
 | `EARSHOT_LOOP_REPEATS` | `3` | The number of repeats that causes a "might be stuck" warning |
 | `EARSHOT_REMIND_MINS` | `"2 5 10"` | The minutes after a prompt when Earshot reminds you that it still waits. Use quotes. |
+| `EARSHOT_HOLD_ON_MIC` | `on` | `on` waits while another app uses the microphone and catches you up after. `off` speaks right away. |
 
 ## Troubleshooting
 
@@ -217,6 +226,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | The script says that your plan cannot use the voice | Choose a premade voice, or upgrade your ElevenLabs plan. ElevenLabs sells separate plans for ElevenCreative, ElevenAgents, and ElevenAPI. Make sure that your plan includes API access to Text to Speech. |
 | Claude Code shows `Unknown command: /voice` | Run `/login` and sign in with a Claude.ai account. Remove `ANTHROPIC_API_KEY` from your environment. |
 | `/voice` does not record | Open System Settings > Privacy & Security > Microphone. Turn on access for your terminal app. |
+| Earshot is silent, and lines come much later | Another app may be using the microphone. Run `~/.config/earshot/mic-in-use --list` to see which app. An app marked `counts` makes Earshot wait. |
 
 ## Limits
 
@@ -225,6 +235,9 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
+- Earshot cannot tell a call from other apps that use the microphone, such as a voice recorder. It waits for any of them. Siri and Voice Control do not count.
+- A line held for more than 4 hours is dropped.
+- Per-app microphone checks need macOS 14.2 or later. On older versions, Earshot does not wait during calls.
 
 ## FAQ
 
@@ -252,6 +265,10 @@ voices need a paid plan.
 **How is it different from a notification sound?**
 A sound tells you something happened. Earshot tells you what: which project,
 what it wants to run, whether it looks stuck, and what it got done.
+
+**Does it talk during my calls?**
+No. While another app uses the microphone, Earshot waits. When the call ends,
+you hear what you missed, with the lines that need you first.
 
 ## License
 
