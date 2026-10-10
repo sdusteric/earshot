@@ -91,15 +91,21 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 
 ## Update
 
-1. In Claude Code, run `/plugin marketplace update earshot`.
-2. Run `/reload-plugins`, or start a new Claude Code session.
+1. In a terminal, run these two commands:
+
+   ```
+   claude plugin marketplace update earshot
+   claude plugin update earshot@earshot
+   ```
+
+2. Start a new Claude Code session.
 
 Your key and voice stay the same.
 
 ## Uninstall
 
-1. In Claude Code, run `/plugin uninstall earshot@earshot`.
-2. To remove your key and voice, run `rm -rf ~/.config/earshot` in a terminal.
+1. In a terminal, run `claude plugin uninstall earshot@earshot`.
+2. To remove your key and voice, run `rm -rf ~/.config/earshot`.
 
 ## How it works
 

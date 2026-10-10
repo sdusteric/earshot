@@ -108,7 +108,7 @@ if [ "$mode" = status ]; then
   [ -n "$KEY" ] && say_ok "Key: saved" || say_ok "Key: missing"
   [ -n "$VOICE" ] && say_ok "Voice: $(voice_name "$VOICE") ($VOICE)" || say_ok "Voice: not chosen"
   [ -x "$DIR/mic-in-use" ] && say_ok "Microphone check: built" || say_ok "Microphone check: not built (Earshot won't stop when you talk)"
-  [ "$(jq -r '.voice.enabled // .voiceEnabled // false' ~/.claude/settings.json 2>/dev/null)" = true ] \
+  [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] \
     && say_ok "/voice: on" || say_ok "/voice: off (Earshot stays quiet until you turn it on)"
   [ -e "$DIR/mute" ] && say_ok "Muted: yes (rm $DIR/mute to unmute)"
   exit 0

@@ -10,7 +10,7 @@ VOICE=${EARSHOT_VOICE:-$ELEVENLABS_VOICE_ID}
 [ -n "$KEY" ] && [ -n "$VOICE" ] || exit 0
 # Talks only while /voice is on. Hooks get no signal that a prompt was
 # dictated, so typed prompts get spoken updates too.
-[ "$(jq -r '.voice.enabled // .voiceEnabled // false' ~/.claude/settings.json 2>/dev/null)" = true ] || exit 0
+[ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] || exit 0
 [ -e ~/.config/earshot/mute ] && exit 0
 
 MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
