@@ -30,6 +30,8 @@ LOG=$STATE/earshot.log
 MIC=~/.config/earshot/mic-in-use
 
 mic_on() { [ -x "$MIC" ] && "$MIC"; }
+lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
+upper_first() { printf '%s%s' "$(tr '[:lower:]' '[:upper:]' <<<"${1:0:1}")" "${1:1}"; }
 
 # tell <tier> "<line>": speak only if EARSHOT_LEVEL includes the tier.
 #   alert  needs you, might be stuck, failures, the final summary   every level
@@ -114,7 +116,7 @@ if [ "$1" = remind ]; then
   if [ "$4" = first ]; then
     tell alert "Hey, $proj has a question for you."
   else
-    tell alert "Still waiting on you in $proj, $4 minute$([ "$4" = 1 ] || echo s) now."
+    tell alert "It's been $4 minute$([ "$4" = 1 ] || echo s). $(upper_first "$proj") is still waiting on you."
   fi
   exit 0
 fi
@@ -134,8 +136,6 @@ start_timer() {
   ) </dev/null >/dev/null 2>&1 &
   echo $! >> "$(wait_file "$sid")"   # line 6, so an answer can stop the timer early
 }
-
-lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
 
 # Plain words for what a permission prompt asks for, e.g. "to run the invoice tests".
 asks_for() {
@@ -161,7 +161,11 @@ now=$(date +%s)
 IFS=$'\x1f' read -r sid cwd transcript tool < <(jq -r '[.session_id, .cwd, .transcript_path, .tool_name] | map(. // "" | tostring) | join("\u001f")' <<<"$input")
 # The session ID becomes part of file names: allow only safe characters.
 [[ $sid =~ ^[A-Za-z0-9_-]+$ ]] || exit 0
-proj=$(basename "$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")" | tr '_-' '  ')
+# The project as it is said out loud: "billing_service" and "billingService"
+# both become "billing service".
+root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")
+if [ "$root" = "$HOME" ]; then proj="your home folder"
+else proj=$(basename "$root" | tr '_.-' '   ' | sed 's/\([a-z]\)\([A-Z]\)/\1 \2/g'); fi
 state="$STATE/turn-$sid"
 
 # --- Which session is talking ---------------------------------------------------
@@ -207,9 +211,13 @@ if [ -z "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = au
     ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid" ;;
   esac
 fi
-who=$proj
+# who names the session as a speaker ("the tax export session in billing
+# service needs your OK"), on names the work ("still on tax export in billing
+# service"). Without a title, both are the project.
+who=$proj; on=$proj
 if [ -n "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
-  who="$proj, $title"
+  task=$(tr '_/-' '   ' <<<"$title" | sed 's/ [Ss]ession$//')
+  who="the $task session in $proj"; on="$task in $proj"
 fi
 # clear_wait: you answered, so stop the reminder timer and forget the prompt.
 clear_wait() {
@@ -283,7 +291,7 @@ progress() {
   [ -f "$state" ] || echo "$now $now" > "$state"
   read -r start beat _ < "$state"
   if [ $((now - beat)) -ge "$BEAT_SECS" ]; then
-    line="Still on $who, about $(( (now - start) / 60 )) minutes in."
+    line="Still on $on, about $(( (now - start) / 60 )) minutes in."
     desc=$(jq -r '.tool_input.description // empty' <<<"$input")
     [ -n "$desc" ] && line="$line Latest step: $(lower_first "$desc")."
     tell beat "$line"
@@ -396,13 +404,13 @@ stop)
     | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
     | awk '{for (i = 1; i <= NF && i <= 40; i++) printf "%s%s", $i, (i < NF && i < 40 ? " " : "")}')
   # With other sessions open, say whose summary it is.
-  [ -n "$line" ] && [ "$SESSION_NAME" != never ] && { [ "$others" -gt 0 ] || [ "$SESSION_NAME" = always ]; } && line="$who: $line"
+  [ -n "$line" ] && [ "$SESSION_NAME" != never ] && { [ "$others" -gt 0 ] || [ "$SESSION_NAME" = always ]; } && line="From $who: $line"
   [ -n "$line" ] && tell alert "$line"
   ;;
 fail)
   clear_wait
   rm -f "$state" "$hist" "$errs" "$warned"
-  tell alert "Something broke in $who. Take a look when you can."
+  tell alert "$(upper_first "$who") hit an error. Take a look when you can."
   ;;
 esac
 exit 0

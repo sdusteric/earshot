@@ -19,17 +19,19 @@ talks back with an ElevenLabs voice.
 | The same step gives the same result 3 times in a row | "Heads up, billing service keeps running the same thing over and over. It might be stuck." |
 | Two steps alternate 3 times | "Heads up, billing service keeps going back and forth between the same two steps. It might be stuck." |
 | A permission prompt waits more than a few seconds | "Hey, billing service needs your OK to run the database migration." |
-| You still haven't answered it | "Still waiting on you in billing service, 5 minutes now." (at 2, 5 and 10 minutes) |
+| You still haven't answered it | "It's been 5 minutes. Billing service is still waiting on you." (at 2, 5 and 10 minutes) |
 | Claude asks you a question | "Hey, billing service has a question for you." |
 | Claude ended on a question and you didn't reply | "Hey, billing service is still waiting on your answer." |
-| The turn fails | "Something broke in billing service. Take a look when you can." |
+| The turn fails | "Billing service hit an error. Take a look when you can." |
 | Claude finishes | One short line Claude writes for you, e.g. "Fixed the rounding bug, though the refund test is still flaky." |
 | Your prompt arrives (level `all` only) | "On it." |
 
 With several sessions open, you hear which one is talking. The finished line
-starts with the project, like "billing service: Fixed the rounding bug." When two
-sessions are open in the same project, Earshot adds the session's name, the one
-you see in `/resume`: "Hey, billing service, refund rounding, needs your OK."
+starts with the project, like "From billing service: fixed the rounding bug." When
+two sessions are open in the same project, Earshot also says the session's name,
+the one you see in `/resume`: "Hey, the refund rounding session in billing service
+needs your OK." Folder names are said as words, so `billing_service` and
+`billingService` both sound like "billing service".
 
 Earshot only speaks while `/voice` is on. It stops talking when you start, plays
 repeated lines from a cache, and beeps if the voice fails. Reminders stop as soon

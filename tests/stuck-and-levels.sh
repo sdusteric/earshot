@@ -68,21 +68,26 @@ ping() { hook notify "$1" "$(jq -nc --arg t "$T/$1.jsonl" '{transcript_path: $t,
 open_session w1; finish w1; ping w1
 check "one session: the summary has no name" 1 "^Fixed it.$"
 open_session w9 "$Q"; finish w1; ping w1
-check "two projects: the summary says the project" 1 "^billing service: Fixed it.$"
+check "two projects: the summary says the project" 1 "^From billing service: Fixed it.$"
 check "two projects: no title needed" 0 "Refund"
 open_session w2; ping w1
-check "same project: the title, 6 words at most" 1 "^Hey, billing service, Refund rounding fix for EU invoices needs your OK"
+check "same project: the title, 6 words at most" 1 "^Hey, the Refund rounding fix for EU invoices session in billing service needs your OK"
 ping w2; finish w2
-check "same project: a /rename title wins" 2 "billing service, Tax export"
+check "same project: a /rename title wins" 2 "the Tax export session in billing service"
 EARSHOT_SESSION_NAME=never finish w2; EARSHOT_SESSION_NAME=never ping w2
-check "EARSHOT_SESSION_NAME=never: no names" 0 "Tax export\|billing service:"
+check "EARSHOT_SESSION_NAME=never: no names" 0 "Tax export\|From billing"
 hook end w2 '{}'; hook end w9 '{}'; finish w1
 check "closed sessions stop counting" 1 "^Fixed it.$"
+R=$(dirname "$P")/invoiceApi_v2; mkdir -p "$R"
+hook fail w9 "$(jq -nc --arg c "$R" '{cwd: $c}')"; hook end w9 '{}'
+check "folder names are said as words" 1 "^Invoice Api v2 hit an error."
 
 echo "Question reminder"
 printf '%s\n' tok question "billing service" "" "" > "$EARSHOT_STATE_DIR/wait-q1"
 bash "$S" remind q1 tok first </dev/null
 check "the first reminder names the project" 1 "^Hey, billing service has a question for you.$"
+bash "$S" remind q1 tok 5 </dev/null
+check "later reminders say how long" 1 "^It's been 5 minutes. Billing service is still waiting on you.$"
 rm -f "$EARSHOT_STATE_DIR/wait-q1"
 
 echo "Safety"
