@@ -159,6 +159,8 @@ mic 1; rm -f "$HELD"; : > "$OUT"
 echo "Catch-up after the call"
 held_add() { printf '%s\037%s\037%s\037%s\n' "$1" "$2" "$3" "$4" >> "$HELD"; }
 held_now() { held_add "$(date +%s)" "$@"; }   # held just now: no intro
+# waiting <session> [transcript]: a permission prompt that still waits for you.
+waiting() { printf '%s\n' tok permission "billing service" "" "${2:-}" > "$EARSHOT_STATE_DIR/wait-$1"; }
 release() { bash "$S" release </dev/null; }
 order_check() { # order_check <name> <expected lines joined by |>
   local got; got=$(tr '\n' '|' < "$OUT")
@@ -166,10 +168,10 @@ order_check() { # order_check <name> <expected lines joined by |>
   : > "$OUT"
 }
 rm -f "$HELD"; mic 1
-held_now a done "Done A."; held_now b alert "Stuck B."; held_now c need "Need C."
+waiting c; held_now a done "Done A."; held_now b alert "Stuck B."; held_now c need "Need C."
 release
 order_check "needs you first, then alerts, then finished lines" "Need C.|Stuck B.|Done A.|"
-held_now d need "Waiting 2."; held_now d need "Waiting 5."; held_now d need "Waiting 10."
+waiting d; held_now d need "Waiting 2."; held_now d need "Waiting 5."; held_now d need "Waiting 10."
 release
 order_check "three reminders for one prompt become the newest one" "Waiting 10.|"
 held_add $(( $(date +%s) - 60 )) e done "Old enough."
@@ -209,6 +211,29 @@ held_check "a session's finished line stays" 1 "Finished a3"
 hook start a2 '{}'
 held_check "a new prompt drops that session's need line" 0 $'^[0-9]*\037a2\037need'
 mic 1; rm -f "$HELD"; : > "$OUT"
+
+echo "Prompts answered without a hook"
+rm -f "$HELD"; mic 1
+held_now e1 need "Esc answered."
+waiting e2; held_now e2 need "Still asking."
+release
+order_check "a need line whose prompt is gone is not read" "Still asking.|"
+TR=$(mktemp); waiting e3 "$TR"; touch -t 202601010000 "$EARSHOT_STATE_DIR/wait-e3"; held_now e3 need "Answered by Esc."
+release
+order_check "a need line whose transcript moved on is not read" ""
+TQ=$(mktemp); echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Should I ship it?"}]}}' > "$TQ"
+mic 0; hook idle e4 "$(jq -nc --arg t "$TQ" '{transcript_path: $t, notification_type: "idle_prompt"}')"
+held_check "a question at the end of a turn is held as reply" 1 $'\037reply\037'
+mic 1; release
+check "a question at the end of a turn is read after the call" 1 "still waiting on your answer"
+rm -f "$EARSHOT_STATE_DIR"/wait-e* "$TR" "$TQ"
+
+echo "A helper that could not be rebuilt"
+mic 0; touch "$EARSHOT_MIC.stale"
+done_line st1 "Stale helper line."
+check "a stale helper does not hold lines" 1 "Stale helper line"
+held_check "a stale helper does not hold lines (queue)" 0 "Stale helper line"
+rm -f "$EARSHOT_MIC.stale"; mic 1; rm -f "$HELD"; : > "$OUT"
 
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"

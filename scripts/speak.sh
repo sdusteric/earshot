@@ -32,20 +32,28 @@ HOLD=${EARSHOT_HOLD_ON_MIC:-on}   # on: hold lines while an app uses the mic
 
 # mic_state: the helper's answer. 0 an app is capturing (a call, or you
 # dictating), 1 free, 2 the device runs but the app is unknown (macOS before 14.2).
-mic_state() { [ -x "$MIC" ] || return 1; "$MIC"; }
+# A helper that is not rebuilt yet (MIC.stale) still has the old meaning, where
+# 0 includes Siri and Voice Control, so its 0 counts as 2.
+mic_state() {
+  [ -x "$MIC" ] || return 1
+  "$MIC"; local r=$?
+  [ "$r" = 0 ] && [ -e "$MIC.stale" ] && return 2
+  return "$r"
+}
 mic_busy() { mic_state; [ $? != 1 ]; }
 lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
 upper_first() { printf '%s%s' "$(tr '[:lower:]' '[:upper:]' <<<"${1:0:1}")" "${1:1}"; }
 
 # tell <kind> "<line>": speak only if EARSHOT_LEVEL includes the kind.
 #   need   waiting on you: a permission prompt, a question, reminders   every level
+#   reply  the last reply asked you something and you did not answer   every level
 #   alert  might be stuck, something broke                              every level
 #   done   the finished line                                            every level
 #   beat   "still on it" progress updates                               normal, all
 #   ack    "On it" when your prompt arrives                             all
 tell() {
   case "$1:$LEVEL" in
-    need:*|alert:*|done:*|beat:normal|beat:all|ack:all) say "$2" "$1" "$sid" ;;
+    need:*|reply:*|alert:*|done:*|beat:normal|beat:all|ack:all) say "$2" "$1" "$sid" ;;
   esac
 }
 
@@ -62,7 +70,7 @@ HELD=$STATE/held   # lines held while an app uses the mic: time, session, kind, 
 # hold <kind> "<line>" <session>: keeps a line for the catch-up after the call
 # and starts the watcher. Progress updates and "On it" are stale by then.
 hold() {
-  case "$1" in need|alert|done) ;; *) return ;; esac
+  case "$1" in need|reply|alert|done) ;; *) return ;; esac
   printf '%s\037%s\037%s\037%s\n' "$(date +%s)" "$3" "$1" "$(printf '%s' "$2" | tr -d '\037\n')" \
     | lockf -k "$HELD.lock" sh -c 'cat >> "$1"' _ "$HELD"
   # One watcher at a time: a second one gives up at once.
@@ -128,19 +136,38 @@ play() {
 POLL=${EARSHOT_POLL_SECS:-2}            # seconds between mic checks
 HOLD_MAX=${EARSHOT_HOLD_MAX_SECS:-14400}   # held lines older than 4 hours are dropped
 
+wait_file() { echo "$STATE/wait-$1"; }
+
+# still_waiting <session>: its permission prompt or question still waits. While
+# it waits, the transcript does not change, so a newer transcript means you
+# answered, for example with Esc, which fires no hook.
+still_waiting() {
+  local wf tr; wf=$(wait_file "$1")
+  [ -f "$wf" ] || return 1
+  tr=$(sed -n 5p "$wf")
+  ! { [ -f "$tr" ] && [ "$(stat -f %m "$tr")" -gt $(( $(stat -f %m "$wf") + 2 )) ]; }
+}
+
 # catch_up: says the held lines. The newest line per session and kind;
 # lines that need you first, then alerts, then finished lines, oldest first.
 catch_up() {
-  local batch now lines total n=0 t s kind text
+  local batch now lines kept total n=0 t s kind text
   batch=$(mktemp "$STATE/batch.XXXXXX") || return
   # Taking the whole queue under the lock means a line is spoken once, even
   # when two catch-ups run at the same time.
   lockf -k "$HELD.lock" mv "$HELD" "$batch" 2>/dev/null || { rm -f "$batch"; return; }
   now=$(date +%s)
   lines=$(awk -F'\037' -v min=$((now - HOLD_MAX)) '$1 >= min { last[$2 FS $3] = $0 }
-      END { for (k in last) { split(last[k], f, FS); print (f[3] == "need" ? 0 : f[3] == "alert" ? 1 : 2), f[1], last[k] } }' "$batch" \
+      END { for (k in last) { split(last[k], f, FS); print (f[3] == "need" || f[3] == "reply" ? 0 : f[3] == "alert" ? 1 : 2), f[1], last[k] } }' "$batch" \
     | sort -k1,1n -k2,2n | cut -d' ' -f3-)
   rm -f "$batch"
+  # A prompt you answered without a hook firing (Esc) is not read.
+  kept=""
+  while IFS=$'\037' read -r -u 3 t s kind text; do
+    [ "$kind" = need ] && ! still_waiting "$s" && continue
+    kept="$kept$t"$'\037'"$s"$'\037'"$kind"$'\037'"$text"$'\n'
+  done 3<<<"$lines"
+  lines=${kept%$'\n'}
   [ -n "$lines" ] || return
   total=$(printf '%s\n' "$lines" | wc -l | tr -d ' ')
   [ $((now - $(printf '%s\n' "$lines" | cut -d$'\037' -f1 | sort -n | head -1))) -ge 30 ] && speak "While you were on the mic:" intro
@@ -173,7 +200,6 @@ fi
 # it, which cancels reminders.
 REMIND_MINS=${EARSHOT_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
 UNIT=${EARSHOT_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
-wait_file() { echo "$STATE/wait-$1"; }
 
 # remind <session> <token> <step>: a timer step. It runs this script again, so
 # the /voice and mute checks above apply at the moment it speaks.
@@ -230,12 +256,12 @@ asks_for() {
 }
 
 # Setup built the mic helper once, but updates bring a new mic-in-use.swift.
-# Rebuild it in the background when the source is newer. The old helper keeps
-# working until then. A failed build touches the helper, so the next hook
-# does not try again.
+# Rebuild it in the background when the source is newer. Until the build
+# works, MIC.stale marks the old helper, so lines are not held. A failed build
+# touches the helper, so the next hook does not try again.
 SRC=${0%/*}/mic-in-use.swift
 if [ -z "$EARSHOT_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
-  ( lockf -t 0 "$STATE/build.lock" sh -c 'swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2" || touch "$2"' _ "$SRC" "$MIC" ) \
+  ( lockf -t 0 "$STATE/build.lock" sh -c 'touch "$2.stale"; swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2" && rm -f "$2.stale" || touch "$2"' _ "$SRC" "$MIC" ) \
     </dev/null >/dev/null 2>&1 &
 fi
 
@@ -304,9 +330,10 @@ if [ -n "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = au
   task=$(tr '_/-' '   ' <<<"$title" | sed 's/ [Ss]ession$//')
   who="the $task session in $proj"; on="$task in $proj"
 fi
-# drop_held: you answered, so this session's held "needs you" lines are stale.
+# drop_held: you answered, so this session's held "needs you" and "waiting on
+# your answer" lines are stale.
 drop_held() {
-  lockf -k "$HELD.lock" sh -c 'awk -F "$3" -v s="$2" "!(\$2 == s && \$3 == \"need\")" "$1" > "$1.t" && mv "$1.t" "$1"' \
+  lockf -k "$HELD.lock" sh -c 'awk -F "$3" -v s="$2" "!(\$2 == s && (\$3 == \"need\" || \$3 == \"reply\"))" "$1" > "$1.t" && mv "$1.t" "$1"' \
     _ "$HELD" "$sid" $'\037' 2>/dev/null
 }
 
@@ -476,7 +503,7 @@ idle)
   [ -f "$transcript" ] || exit 0
   last=$(last_text \
     | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
-  case "$last" in *'?') tell need "Hey, $who is still waiting on your answer." ;; esac
+  case "$last" in *'?') tell reply "Hey, $who is still waiting on your answer." ;; esac
   ;;
 stop)
   clear_wait
