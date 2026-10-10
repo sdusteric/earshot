@@ -10,6 +10,7 @@
 #   setup.sh --status               print what is set up, then stop
 #   setup.sh --auto-update          let Claude Code update Earshot by itself
 #   setup.sh --no-auto-update       turn that off again
+#   setup.sh --level LEVEL          how much Earshot says: quiet, normal or all
 set -euo pipefail
 
 DIR=~/.config/earshot
@@ -38,9 +39,10 @@ while [ $# -gt 0 ]; do
     --voice) voice_arg=${2:?--voice needs a voice ID}; shift ;;
     --list-voices) mode=list ;;
     --status) mode=status ;;
+    --level) mode=level; level=${2:?--level needs quiet, normal or all}; shift ;;
     --auto-update) mode=autoupdate; au=true ;;
     --no-auto-update) mode=autoupdate; au=false ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
   shift
@@ -126,6 +128,19 @@ if [ "$mode" = autoupdate ]; then
   exit 0
 fi
 
+# Level is a line in the config file; other lines stay as they are.
+if [ "$mode" = level ]; then
+  case "$level" in quiet|normal|all) ;; *) die "Level must be quiet, normal or all." ;; esac
+  mkdir -p "$DIR"
+  ( umask 077; touch "$CONF"; { grep -v '^EARSHOT_LEVEL=' "$CONF" || true; } > "$CONF.tmp"; echo "EARSHOT_LEVEL=$level" >> "$CONF.tmp"; mv "$CONF.tmp" "$CONF" )
+  case "$level" in
+    quiet) echo "Level: quiet. Earshot speaks only when it needs you, when it might be stuck, when something fails, and when Claude finishes." ;;
+    normal) echo "Level: normal. Quiet, plus a short progress update every few minutes." ;;
+    all) echo "Level: all. Normal, plus \"On it\" when your prompt arrives." ;;
+  esac
+  exit 0
+fi
+
 if [ "$mode" = list ]; then
   voices
   exit 0
@@ -143,6 +158,7 @@ if [ "$mode" = status ]; then
     local) say_ok "Auto-update: not needed (Earshot loads from a local folder)" ;;
     *) say_ok "Auto-update: off (turn it on: setup.sh --auto-update)" ;;
   esac
+  say_ok "Level: $(sed -n 's/^EARSHOT_LEVEL=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo normal)"
   [ -e "$DIR/mute" ] && say_ok "Muted: yes (rm $DIR/mute to unmute)"
   exit 0
 fi
@@ -211,6 +227,7 @@ mkdir -p "$DIR"
   { printf 'EARSHOT_KEY=%q\n' "$KEY"
     printf 'EARSHOT_VOICE=%q\n' "$VOICE"
     if [ -n "$EARSHOT_MODEL" ]; then printf 'EARSHOT_MODEL=%q\n' "$EARSHOT_MODEL"; fi
+    grep -E '^EARSHOT_(LEVEL|BEAT_SECS|LOOP_REPEATS|REMIND_MINS)=' "$CONF" 2>/dev/null || true
   } > "$CONF.tmp"
   mv "$CONF.tmp" "$CONF" )
 echo "Saved your key and voice to $CONF (only you can read it)."

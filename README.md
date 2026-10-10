@@ -12,19 +12,29 @@ talks back with an ElevenLabs voice.
 
 | When | Example |
 |---|---|
-| Your prompt arrives | "On it." |
 | Every 3 minutes of work | "Still on billing service, about 6 minutes in. Latest step: run the invoice tests." |
-| The same step runs 3 times in a row | "Heads up, billing service keeps running the same thing over and over. It might be stuck." |
+| The same error comes back 3 times, even after edits | "Heads up, billing service keeps hitting the same error. It might be stuck." |
+| The same step gives the same result 3 times in a row | "Heads up, billing service keeps running the same thing over and over. It might be stuck." |
+| Two steps alternate 3 times | "Heads up, billing service keeps going back and forth between the same two steps. It might be stuck." |
 | A permission prompt waits more than a few seconds | "Hey, billing service needs your OK to run the database migration." |
 | You still haven't answered it | "Still waiting on you in billing service, 5 minutes now." (at 2, 5 and 10 minutes) |
 | Claude asks you a question | "Hey, billing service has a question for you." |
 | Claude ended on a question and you didn't reply | "Hey, billing service is still waiting on your answer." |
 | The turn fails | "Something broke in billing service. Take a look when you can." |
 | Claude finishes | One short line Claude writes for you, e.g. "Fixed the rounding bug, though the refund test is still flaky." |
+| Your prompt arrives (level `all` only) | "On it." |
 
 Earshot only speaks while `/voice` is on. It stops talking when you start, plays
 repeated lines from a cache, and beeps if the voice fails. Reminders stop as soon
 as you answer, including when you press Esc.
+
+You choose how much Earshot says. `normal` is the default:
+
+| Level | What you hear |
+|---|---|
+| `quiet` | Only when it needs you, might be stuck, something fails, or Claude finishes |
+| `normal` | Quiet, plus a progress update every 3 minutes |
+| `all` | Normal, plus "On it." when your prompt arrives |
 
 Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a day.
 
@@ -49,7 +59,8 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 3. Copy your ElevenLabs API key to the clipboard. Tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
 4. Listen for the test line. When you hear it, the setup is complete.
 5. Claude asks if Earshot can update itself. Answer yes to get new versions automatically.
-6. Run `/voice`. Hold Space to talk.
+6. Claude asks how much Earshot should say. Choose `quiet`, `normal`, or `all`.
+7. Run `/voice`. Hold Space to talk.
 
 ### Install with a terminal
 
@@ -92,6 +103,7 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 | Mute Earshot | Run `touch ~/.config/earshot/mute`. |
 | Unmute Earshot | Run `rm ~/.config/earshot/mute`. |
 | Change the voice or the key | Run `/earshot:setup`. See [Change the voice](#change-the-voice). |
+| Change how much Earshot says | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --level quiet`. Use `quiet`, `normal`, or `all`. |
 | Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
 
 ## Update
@@ -126,6 +138,15 @@ The plugin adds hooks for these events: `UserPromptSubmit`, `PreToolUse` (for
 `idle_prompt`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
 speech runs in the background, so Earshot does not slow down Claude.
 
+Earshot looks for three signs that Claude is stuck. It uses the same patterns as
+the stuck detector in OpenHands:
+
+- The same error comes back 3 times in one task, even if Claude edits code between the attempts. Earshot removes noise from the error before it compares, such as times, durations, process IDs, and line numbers. It keeps counts such as "3 failed", because a changed count means progress.
+- The same step gives the same result 3 times in a row.
+- Two steps alternate 3 times.
+
+One slow command is never "stuck", because nothing repeats. Earshot ignores commands that wait on purpose, such as `sleep`, `watch`, and `gh run watch`. You hear at most one stuck warning for each task.
+
 When a permission prompt or a question shows, Earshot starts a timer. The timer
 speaks the reminders. Each reminder first checks that the prompt still waits. If
 you answered, the timer stops.
@@ -145,9 +166,10 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 
 | Setting | Default | What it controls |
 |---|---|---|
+| `EARSHOT_LEVEL` | `normal` | How much Earshot says: `quiet`, `normal`, or `all` |
 | `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech |
 | `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |
-| `EARSHOT_LOOP_REPEATS` | `3` | The number of identical steps in a row that causes a "might be stuck" warning |
+| `EARSHOT_LOOP_REPEATS` | `3` | The number of repeats that causes a "might be stuck" warning |
 | `EARSHOT_REMIND_MINS` | `"2 5 10"` | The minutes after a prompt when Earshot reminds you that it still waits. Use quotes. |
 
 ## Troubleshooting
@@ -164,6 +186,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
 - Earshot gives "still on it" updates only after a tool call ends. During one long command, Earshot is silent.
+- If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker. A new line stops the line that plays.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
 

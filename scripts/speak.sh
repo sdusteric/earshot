@@ -1,6 +1,6 @@
 #!/bin/bash
 # Earshot: spoken updates for Claude Code via ElevenLabs.
-# Modes: start | tool | clear | ask | question | notify | idle | stop | fail (hooks),
+# Modes: start | tool | toolfail | ask | question | notify | idle | stop | fail (hooks),
 # remind (internal timer), say "<text>" (manual test)
 CONF=~/.config/earshot/config
 [ -f "$CONF" ] && . "$CONF"
@@ -16,14 +16,27 @@ VOICE=${EARSHOT_VOICE:-$ELEVENLABS_VOICE_ID}
 
 MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
 BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
-LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # same tool call this many times in a row = probably stuck
+LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
+LEVEL=${EARSHOT_LEVEL:-normal}            # quiet | normal | all (see tell)
 CACHE=/tmp/earshot-cache
 LOG=/tmp/earshot.log
 MIC=~/.config/earshot/mic-in-use
 
 mic_on() { [ -x "$MIC" ] && "$MIC"; }
 
+# tell <tier> "<line>": speak only if EARSHOT_LEVEL includes the tier.
+#   alert  needs you, might be stuck, failures, the final summary   every level
+#   beat   "still on it" progress updates                           normal, all
+#   ack    "On it" when your prompt arrives                         all
+tell() {
+  case "$1:$LEVEL" in
+    alert:*|beat:normal|beat:all|ack:all) say "$2" ;;
+  esac
+}
+
 say() {
+  # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
+  [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
   # A new line stops the line that is still playing, in every session.
   pkill -f "afplay $CACHE" 2>/dev/null
   (
@@ -77,9 +90,9 @@ if [ "$1" = remind ]; then
     rm -f "$wf"; exit 0
   fi
   if [ "$4" = first ]; then
-    say "Hey, $proj has a question for you."
+    tell alert "Hey, $proj has a question for you."
   else
-    say "Still waiting on you in $proj, $4 minute$([ "$4" = 1 ] || echo s) now."
+    tell alert "Still waiting on you in $proj, $4 minute$([ "$4" = 1 ] || echo s) now."
   fi
   exit 0
 fi
@@ -131,13 +144,73 @@ new_wait() {
   printf '%s\n%s\n%s\n%s\n%s\n' "$token" "$1" "$proj" "$2" "$(jq -r '.transcript_path // empty' <<<"$input")" > "$(wait_file "$sid")"
 }
 
+# --- Stuck detection ------------------------------------------------------------
+# Modeled on OpenHands' stuck detector. Three signals; at most one warning per
+# turn, so a loop that trips two signals is announced once:
+#   1. the same error 3 times this turn, even with edits in between
+#   2. the same call with the same result 3 times in a row
+#   3. two steps alternating for 3 rounds (A B A B A B)
+# A slow command repeats nothing, and a changed error means progress, so
+# neither counts. Polling a long job repeats on purpose and is skipped.
+hist="/tmp/earshot-hist-$sid"; errs="/tmp/earshot-errs-$sid"; warned="/tmp/earshot-warned-$sid"
+
+warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; tell alert "$2"; }
+
+polling() {
+  case "$(jq -r '.tool_name // empty' <<<"$input")" in BashOutput|TaskOutput|Monitor) return 0 ;; esac
+  jq -r '.tool_input.command // empty' <<<"$input" \
+    | grep -Eq '(^|[^[:alnum:]_])(sleep|watch|wait|until)([^[:alnum:]_]|$)|gh run (view|watch)|gh pr checks|rollout status'
+}
+
+# The error with run-to-run noise removed: colors, dates, times, hex ids,
+# durations, pids, temp paths and line:col numbers. Counts like "3 failed"
+# stay, because a changed count is progress. Keeps the last 400 characters.
+norm_error() {
+  sed -E -e $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' \
+    -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T?//g' -e 's/[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?([.,][0-9]+)?//g' \
+    -e 's/0x[0-9a-fA-F]+//g' -e 's/[0-9a-f]{8,}//g' \
+    -e 's/[0-9]+([.][0-9]+)? ?(ms|s|sec)([^[:alpha:]]|$)/\3/g' \
+    -e 's/(pid|PID)[ =:]*[0-9]+//g' -e 's#(/private)?/tmp/[^ ]*##g' -e 's#/var/folders/[^ ]*##g' \
+    -e 's/:[0-9]+(:[0-9]+)?//g' | tail -c 400
+}
+
+# step <signature>: keep the last 6 steps and check signals 2 and 3.
+step() {
+  echo "$1" >> "$hist"; tail -6 "$hist" > "$hist.t" && mv "$hist.t" "$hist"
+  local h n i same=1
+  h=($(cat "$hist")); n=${#h[@]}
+  if [ "$n" -ge "$LOOP_REPEATS" ]; then
+    for ((i = n - LOOP_REPEATS; i < n; i++)); do [ "${h[i]}" = "${h[n-1]}" ] || same=0; done
+    [ "$same" = 1 ] && ! polling && warn_once loop "Heads up, $proj keeps running the same thing over and over. It might be stuck."
+  fi
+  if [ "$n" -eq 6 ] && [ "${h[0]}" != "${h[1]}" ] && [ "${h[0]}" = "${h[2]}" ] && [ "${h[2]}" = "${h[4]}" ] \
+     && [ "${h[1]}" = "${h[3]}" ] && [ "${h[3]}" = "${h[5]}" ]; then
+    warn_once pingpong "Heads up, $proj keeps going back and forth between the same two steps. It might be stuck."
+  fi
+}
+
+# progress: the "still on it" heartbeat.
+progress() {
+  [ -f "$state" ] || echo "$now $now" > "$state"
+  read -r start beat _ < "$state"
+  if [ $((now - beat)) -ge "$BEAT_SECS" ]; then
+    line="Still on $proj, about $(( (now - start) / 60 )) minutes in."
+    desc=$(jq -r '.tool_input.description // empty' <<<"$input")
+    [ -n "$desc" ] && line="$line Latest step: $(lower_first "$desc")."
+    tell beat "$line"
+    beat=$now
+  fi
+  echo "$start $beat" > "$state"
+}
+
 case "$1" in
 start)
   clear_wait
   # Few fixed phrases, so all of them come from the cache after the first use.
   acks=("Got it." "On it." "Okay, on it.")
-  say "${acks[RANDOM % 3]}"
-  echo "$now $now - 0" > "$state"
+  tell ack "${acks[RANDOM % 3]}"
+  echo "$now $now" > "$state"
+  rm -f "$hist" "$errs" "$warned"
   # Plain stdout from UserPromptSubmit is added to Claude's context.
   cat <<'EOF'
 Earshot voice is on. End your final reply with one line that starts with "🗣 " (the speaking-head emoji and a space). A hook reads that line aloud when you finish.
@@ -147,24 +220,26 @@ EOF
   ;;
 tool)
   clear_wait
-  [ -f "$state" ] || echo "$now $now - 0" > "$state"
-  read -r start beat sig count < "$state"
-  new_sig=$(jq -c '[.tool_name, .tool_input]' <<<"$input" | md5 -q)
-  if [ "$new_sig" = "$sig" ]; then count=$((count + 1)); else count=1; fi
-  if [ "$count" -eq "$LOOP_REPEATS" ]; then
-    say "Heads up, $proj keeps running the same thing over and over. It might be stuck."
-    beat=$now
-  elif [ $((now - beat)) -ge "$BEAT_SECS" ]; then
-    line="Still on $proj, about $(( (now - start) / 60 )) minutes in."
-    desc=$(jq -r '.tool_input.description // empty' <<<"$input")
-    [ -n "$desc" ] && line="$line Latest step: $(lower_first "$desc")."
-    say "$line"
-    beat=$now
-  fi
-  echo "$start $beat $new_sig $count" > "$state"
+  progress
+  step "$(jq -c '[.tool_name, .tool_input, .tool_response]' <<<"$input" | md5 -q)"
   ;;
-clear)
+toolfail)
+  # PostToolUseFailure: a Bash command that exits non-zero lands here, not in tool.
   clear_wait
+  [ "$(jq -r '.is_interrupt // false' <<<"$input")" = true ] && exit 0
+  progress
+  call=$(jq -c '[.tool_name, .tool_input]' <<<"$input")
+  err=$(jq -r '.error // empty' <<<"$input" | norm_error)
+  # Signal 1 first: "the same error" says more than "the same thing".
+  # A bare "Exit code 1" says little, so it only matches the same call.
+  if ! polling; then
+    body=$(printf '%s\n' "$err" | sed '1{/^Exit code [0-9]*$/d;}' | tr -d '[:space:]')
+    if [ ${#body} -ge 8 ]; then fp=$(printf '%s' "$err" | md5 -q); else fp=$(printf '%s %s' "$call" "$err" | md5 -q); fi
+    echo "$fp" >> "$errs"
+    [ "$(grep -cx "$fp" "$errs")" -ge "$LOOP_REPEATS" ] \
+      && warn_once error "Heads up, $proj keeps hitting the same error. It might be stuck."
+  fi
+  step "$(printf '%s %s' "$call" "$err" | md5 -q)"
   ;;
 ask)
   # PermissionRequest: fires as soon as the prompt shows. Record what it asks
@@ -184,8 +259,8 @@ notify)
   # Notification permission_prompt: the prompt has waited about 6 seconds.
   { read -r _; read -r kind; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
   [ "$kind" = question ] && exit 0
-  if [ -n "$what" ]; then say "Hey, $proj needs your OK $what."
-  else say "Hey, $proj needs your OK before it keeps going."
+  if [ -n "$what" ]; then tell alert "Hey, $proj needs your OK $what."
+  else tell alert "Hey, $proj needs your OK before it keeps going."
   fi
   ;;
 idle)
@@ -195,11 +270,11 @@ idle)
   [ -f "$transcript" ] || exit 0
   last=$(jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last // empty' "$transcript" \
     | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
-  case "$last" in *'?') say "Hey, $proj is still waiting on your answer." ;; esac
+  case "$last" in *'?') tell alert "Hey, $proj is still waiting on your answer." ;; esac
   ;;
 stop)
   clear_wait
-  rm -f "$state"
+  rm -f "$state" "$hist" "$errs" "$warned"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then
     transcript=$(jq -r '.transcript_path // empty' <<<"$input")
@@ -209,12 +284,12 @@ stop)
   # selector), and drop markdown marks so they are not read aloud.
   line=$(printf '%s\n' "$msg" | LC_ALL=C grep '🗣' | tail -1 \
     | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-  [ -n "$line" ] && say "$line"
+  [ -n "$line" ] && tell alert "$line"
   ;;
 fail)
   clear_wait
-  rm -f "$state"
-  say "Something broke in $proj. Take a look when you can."
+  rm -f "$state" "$hist" "$errs" "$warned"
+  tell alert "Something broke in $proj. Take a look when you can."
   ;;
 esac
 exit 0
