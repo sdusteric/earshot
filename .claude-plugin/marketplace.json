@@ -1,6 +1,6 @@
 {
   "name": "earshot",
-  "description": "Earshot: spoken updates from Claude Code.",
+  "description": "Earshot: voice notifications for Claude Code.",
   "owner": {
     "name": "Eric Lee"
   },
@@ -8,7 +8,7 @@
     {
       "name": "earshot",
       "source": "./",
-      "description": "Spoken updates from Claude Code: hear when it starts, gets stuck, needs your OK, and what it got done."
+      "description": "Voice notifications for Claude Code: hear when it needs your OK, gets stuck, or finishes, and what it got done. ElevenLabs text-to-speech, macOS."
     }
   ]
 }

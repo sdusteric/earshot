@@ -1,17 +1,23 @@
 {
   "name": "earshot",
   "version": "0.5.0",
-  "description": "Spoken updates from Claude Code: hear when it starts, gets stuck, needs your OK, and what it got done.",
+  "description": "Voice notifications for Claude Code: hear when it needs your OK, gets stuck, or finishes, and what it got done. ElevenLabs text-to-speech, macOS.",
   "author": {
     "name": "Eric Lee"
   },
   "license": "MIT",
   "keywords": [
     "voice",
+    "voice-notifications",
+    "text-to-speech",
     "tts",
     "elevenlabs",
     "notifications",
+    "permission-prompt",
     "hooks",
-    "macos"
-  ]
+    "macos",
+    "claude-desktop"
+  ],
+  "homepage": "https://github.com/sdusteric/earshot",
+  "repository": "https://github.com/sdusteric/earshot"
 }

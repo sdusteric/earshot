@@ -1,7 +1,9 @@
-# Earshot
+# Earshot: voice notifications for Claude Code
 
-Spoken updates from Claude Code. Start a task, walk away, and hear when it
-gets stuck, needs your OK, or finishes.
+Earshot is a Claude Code plugin that reads updates aloud with ElevenLabs
+text-to-speech. Start a task, walk away, and hear when Claude needs your OK on a
+permission prompt, gets stuck in a loop, or finishes, with a one-line summary of
+what it did. It works in the terminal and in the Code tab of the Claude Mac app.
 
 https://github.com/user-attachments/assets/f2c1f624-1941-436b-b3d9-a9229687f50c
 
@@ -46,7 +48,7 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 ## Requirements
 
 - A Mac.
-- Claude Code, signed in with a Claude.ai account. `/voice` does not work with an API key, Bedrock, Vertex, or Foundry.
+- Claude Code in a terminal, or the Code tab of the Claude Mac app. Claude Code must be signed in with a Claude.ai account. `/voice` does not work with an API key, Bedrock, Vertex, or Foundry.
 - An ElevenLabs API key with the Text to Speech permission. A free ElevenLabs account works with premade voices.
 - `jq`. To install it, run `brew install jq`.
 - Optional: `swiftc`. To install it, run `xcode-select --install`. Without `swiftc`, Earshot does not stop talking when you start to talk.
@@ -202,6 +204,33 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker. A new line stops the line that plays.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
+
+## FAQ
+
+**How do I get notified when Claude Code needs permission?**
+Install Earshot and turn on `/voice`. When a permission prompt waits, you hear
+what Claude wants to do, like "billing service needs your OK to run the database
+migration," and a reminder at 2, 5 and 10 minutes if you don't answer.
+
+**Does it work in the Claude Mac app?**
+Yes, in the Code tab. The Mac app shares your Claude Code settings and plugins.
+Turn on `/voice` once in a terminal, and Earshot talks in both places. Sessions
+that were open before you installed or updated Earshot need a restart.
+
+**Can I tell which session is talking when I run several?**
+Yes. With several sessions open, the summary starts with the project name. Two
+sessions in the same project also get the session's name.
+
+**Does it work on Linux or Windows?**
+Not yet. Earshot plays audio with `afplay`, which only macOS has.
+
+**Does it need an ElevenLabs subscription?**
+No. A free ElevenLabs account works with premade voices. Some Voice Library
+voices need a paid plan.
+
+**How is it different from a notification sound?**
+A sound tells you something happened. Earshot tells you what: which project,
+what it wants to run, whether it looks stuck, and what it got done.
 
 ## License
 
