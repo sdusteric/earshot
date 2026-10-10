@@ -1,14 +1,15 @@
 # Earshot: voice notifications for Claude Code
 
-Earshot is a Claude Code plugin that reads updates aloud with ElevenLabs
-text-to-speech. Start a task, walk away, and hear when Claude needs your OK on a
+Earshot is a Claude Code plugin that reads updates aloud. By default it uses
+Kokoro, a voice model that runs on your Mac, so it is free and your lines never
+leave the Mac. ElevenLabs is an option for a more expressive voice. Start a task, walk away, and hear when Claude needs your OK on a
 permission prompt, gets stuck in a loop, or finishes, with a one-line summary of
 what it did. It works in the terminal and in the Code tab of the Claude Mac app.
 
 https://github.com/user-attachments/assets/f2c1f624-1941-436b-b3d9-a9229687f50c
 
 You talk with Claude Code's built-in `/voice`. Earshot adds the other half: Claude
-talks back with an ElevenLabs voice.
+talks back.
 
 ## What you hear
 
@@ -66,15 +67,16 @@ Claude writes the line fresh each time, so the jokes don't repeat. The style
 only changes the finished line. Alerts, reminders and stuck warnings stay plain.
 When a task fails or Claude needs an answer from you, the finished line is plain too.
 
-Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a day.
+Cost: nothing with Kokoro. With ElevenLabs v4 Turbo, about $8 a month at roughly 100 spoken lines a day.
 
 ## Requirements
 
 - A Mac.
 - Claude Code in a terminal, or the Code tab of the Claude Mac app. Claude Code must be signed in with a Claude.ai account. `/voice` does not work with an API key, Bedrock, Vertex, or Foundry.
-- An ElevenLabs API key with the Text to Speech permission. A free ElevenLabs account works with premade voices.
+- For Kokoro (the default): a Mac with Apple Silicon, macOS 15 or later, and the Command Line Tools. To install them, run `xcode-select --install`. The first setup builds a helper (about 2 minutes) and downloads the voice (about 120 MB).
+- For ElevenLabs instead: an ElevenLabs API key with the Text to Speech permission. A free ElevenLabs account works with premade voices.
 - `jq`. To install it, run `brew install jq`.
-- Optional: `swiftc`. To install it, run `xcode-select --install`. Without `swiftc`, Earshot does not stop talking when you start to talk, and it does not wait while you are on a call.
+- Optional: `swiftc`, which comes with the Command Line Tools. Without it, Earshot does not stop talking when you start to talk, and it does not wait while you are on a call.
 
 ## Install
 
@@ -85,8 +87,8 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
    /plugin install earshot@earshot
    ```
 
-2. Run `/earshot:setup`. Claude asks you to choose a voice.
-3. Copy your ElevenLabs API key to the clipboard. Tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
+2. Run `/earshot:setup`. Claude asks you to choose Kokoro or ElevenLabs, then a voice.
+3. Kokoro: wait about 2 minutes while setup builds the helper and downloads the voice. ElevenLabs: copy your API key to the clipboard and tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
 4. Listen for the test line. When you hear it, the setup is complete.
 5. Claude asks if Earshot can update itself. Answer yes to get new versions automatically.
 6. Claude asks how much Earshot should say. Choose `quiet`, `normal`, or `all`.
@@ -95,7 +97,7 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 
 ### Install with a terminal
 
-You can also do the setup in a terminal. The script asks for the key and shows a numbered list of voices.
+You can also do the setup in a terminal. The script shows a numbered list of voices. For ElevenLabs, it also asks for the key.
 
 1. Do step 1 of [Install](#install).
 2. In a terminal, run:
@@ -108,15 +110,25 @@ To see all options, run the same command with `--help`.
 
 ## Change the voice
 
-Use one of these methods:
+The easiest way: in Claude Code, run `/earshot:setup` and choose a different engine or voice.
 
-- In Claude Code, run `/earshot:setup`. Choose a different voice.
-- In a terminal, run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh`. Type the number of a voice, or paste a voice ID.
-- Run the same script with a voice ID: `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --voice VOICE_ID`.
+In a terminal, run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh` with one of these options:
+
+| To | Options |
+|---|---|
+| Choose a Kokoro voice from a list | `--engine kokoro` |
+| Use a specific Kokoro voice | `--engine kokoro --voice af_bella` |
+| See all Kokoro voices | `--engine kokoro --list-voices` |
+| Choose an ElevenLabs voice from a list | `--engine elevenlabs` |
+| Use a specific ElevenLabs voice | `--engine elevenlabs --voice VOICE_ID` |
+
+Kokoro voice names that start with `af` and `am` are American English, female and male. Names that start with `bf` and `bm` are British English.
+
+Switching engines keeps your ElevenLabs key, so you can switch back without entering it again.
 
 Each method plays a test line in the new voice. If the voice does not work, the script shows the reason and keeps your old voice.
 
-To find a voice ID:
+To find an ElevenLabs voice ID:
 
 1. Open [elevenlabs.io](https://elevenlabs.io) and go to **Voices**.
 2. Select a voice.
@@ -133,7 +145,7 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 | Send the prompt when you release Space | Set `"voice": { "autoSubmit": true }` in `~/.claude/settings.json`. `/earshot:setup` can set it for you. |
 | Mute Earshot | Run `touch ~/.config/earshot/mute`. |
 | Unmute Earshot | Run `rm ~/.config/earshot/mute`. |
-| Change the voice or the key | Run `/earshot:setup`. See [Change the voice](#change-the-voice). |
+| Change the voice, the engine, or the key | Run `/earshot:setup`. See [Change the voice](#change-the-voice). |
 | Change how much Earshot says | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --level quiet`. Use `quiet`, `normal`, or `all`. |
 | Change the style | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --style cheeky`. Use `plain`, `upbeat`, or `cheeky`. |
 | Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
@@ -176,7 +188,7 @@ Your key and voice stay the same.
 ## Uninstall
 
 1. In a terminal, run `claude plugin uninstall earshot@earshot`.
-2. To remove your key and voice, run `rm -rf ~/.config/earshot`.
+2. To remove your settings and the Kokoro helper, run `rm -rf ~/.config/earshot`. To remove the Kokoro voice files too, run `rm -rf ~/.cache/fluidaudio`.
 
 ## How it works
 
@@ -185,6 +197,13 @@ The plugin adds hooks for these events: `SessionStart`, `SessionEnd`, `UserPromp
 `Stop`, `StopFailure`, `Elicitation`, `ElicitationResult`, and `Notification` (for `permission_prompt`,
 `idle_prompt`, `elicitation_dialog` and `elicitation_url_dialog`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
 speech runs in the background, so Earshot does not slow down Claude.
+
+With Kokoro, a small helper keeps the voice model loaded while you work, so a
+line is ready in about a quarter of a second. It starts with a session, or
+with the first line, and quits after 10 minutes without a line to give its
+memory (about 1 GB) back. If Kokoro or ElevenLabs fails, Earshot says the line
+with the Mac's own voice and notes why in its log. If that fails too, you hear
+a beep.
 
 Each session keeps a short status (needs you, stuck, working, finished) in Earshot's
 private folder. The roll call reads it.
@@ -213,7 +232,7 @@ When `/voice` is on, the prompt hook tells Claude to end each reply with one lin
 that starts with 🗣. When Claude stops, the `Stop` hook reads that line aloud.
 Earshot does not change your `CLAUDE.md` or your `settings.json`.
 
-Earshot keeps your key and voice in `~/.config/earshot/config`. Only your user
+Earshot keeps your engine, voice and ElevenLabs key in `~/.config/earshot/config`. Only your user
 account can read this file. If you also set `ELEVENLABS_API_KEY` for other tools,
 Earshot uses the key in its config file, not the environment variable.
 
@@ -231,7 +250,10 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | `EARSHOT_LEVEL` | `normal` | How much Earshot says: `quiet`, `normal`, or `all` |
 | `EARSHOT_STYLE` | `plain` | The tone of the finished line: `plain`, `upbeat`, or `cheeky` |
 | `EARSHOT_SESSION_NAME` | `auto` | When to say the session's name: `auto` (only when two sessions share a project), `always`, or `never`. `never` also removes the project name from the finished line. |
-| `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech |
+| `EARSHOT_ENGINE` | `kokoro` | `kokoro` (on your Mac), `elevenlabs`, or `say` (the Mac's own voice). A config from before 0.9.0 with an ElevenLabs key keeps `elevenlabs`. |
+| `EARSHOT_KOKORO_VOICE` | `af_heart` | The Kokoro voice |
+| `EARSHOT_KOKORO_IDLE_SECS` | `600` | Seconds without a line before Kokoro quits and frees its memory |
+| `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech (ElevenLabs only) |
 | `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |
 | `EARSHOT_LOOP_REPEATS` | `3` | The number of repeats that causes a "might be stuck" warning |
 | `EARSHOT_REMIND_MINS` | `"2 5 10"` | The minutes after a prompt when Earshot reminds you that it still waits. Use quotes. |
@@ -242,7 +264,8 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | Problem | What to do |
 |---|---|
 | You hear no voice and no beep | Run `setup.sh --status`. Make sure that `/voice` is on. Make sure that the file `~/.config/earshot/mute` does not exist. |
-| You hear a beep but no voice | Run `tail "$(getconf DARWIN_USER_TEMP_DIR)earshot/earshot.log"`. Error 401 means that the key is not correct. Error 404 means that the voice ID is not correct. |
+| You hear the Mac's own voice or a beep | Run `tail "$(getconf DARWIN_USER_TEMP_DIR)earshot/earshot.log"`. A `kokoro:` line says why Kokoro failed. To rebuild it, run `setup.sh --engine kokoro`. For ElevenLabs, error 401 means that the key is not correct, and error 404 means that the voice ID is not correct. |
+| Setup can't build the Kokoro helper | Run `xcode-select --install`, then setup again. The details are in `~/.config/earshot/kokoro-build.log`. Or use ElevenLabs: `setup.sh --engine elevenlabs`. |
 | The script says that your plan cannot use the voice | Choose a premade voice, or upgrade your ElevenLabs plan. ElevenLabs sells separate plans for ElevenCreative, ElevenAgents, and ElevenAPI. Make sure that your plan includes API access to Text to Speech. |
 | Claude Code shows `Unknown command: /voice` | Run `/login` and sign in with a Claude.ai account. Remove `ANTHROPIC_API_KEY` from your environment. |
 | `/voice` does not record | Open System Settings > Privacy & Security > Microphone. Turn on access for your terminal app. |
@@ -250,6 +273,8 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 
 ## Limits
 
+- Kokoro speaks English only, with fewer voices than ElevenLabs and less expression.
+- After an update, Earshot rebuilds the Kokoro helper in the background. Until it is done, the old helper keeps working.
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
 - During one long command, Earshot gives "still on it" updates for shell commands only. A long MCP call or web fetch is silent until it ends.
 - No hook fires when you approve a permission prompt. Until that command ends, Earshot still treats the session as waiting on you: the roll call says it needs your OK, and the command gets no "still on it" updates.
@@ -281,8 +306,14 @@ sessions in the same project also get the session's name.
 Not yet. Earshot plays audio with `afplay`, which only macOS has.
 
 **Does it need an ElevenLabs subscription?**
-No. A free ElevenLabs account works with premade voices. Some Voice Library
-voices need a paid plan.
+No. Kokoro, the default, is free and runs on your Mac. If you choose ElevenLabs,
+a free ElevenLabs account works with premade voices. Some Voice Library voices
+need a paid plan.
+
+**Does my code leave my Mac?**
+With Kokoro, no: Earshot makes the speech on your Mac. With ElevenLabs, each
+spoken line (for example, a one-line summary of what Claude did) goes to
+ElevenLabs to be turned into speech.
 
 **How is it different from a notification sound?**
 A sound tells you something happened. Earshot tells you what: which project,
