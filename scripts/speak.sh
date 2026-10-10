@@ -284,23 +284,28 @@ fi
 REMIND_MINS=${EARSHOT_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
 UNIT=${EARSHOT_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
 
-# approved <session>: the session's Bash command is running, so you approved
-# its permission prompt. No hook fires on approval, but Claude Code runs the
-# command in a child shell whose arguments hold the command text. cmd-<session>
-# has Claude Code's PID and a piece of the command (pretool writes it).
+# claude_kids <pid>: Claude Code's child processes: pid, ppid, command. One ps
+# over all processes, because pgrep skips its own ancestors.
+claude_kids() { ps -ww -A -o pid=,ppid=,command= | awk -v p="$1" '$2 == p'; }
+
+# approved <session>: the Bash command of the session's permission prompt is
+# running, so you approved it. No hook fires on approval, but Claude Code runs
+# the command in a child shell whose arguments hold the command text.
+# cmd-<session> (written with the prompt) has Claude Code's PID, a piece of the
+# command, and the matching processes that already ran then, which do not count.
 approved() {
-  local cpid needle
-  { read -r cpid; read -r needle; } 2>/dev/null < "$STATE/cmd-$1" || return 1
-  [ -n "$cpid" ] && [ ${#needle} -ge 6 ] || return 1
-  # One ps over all processes: pgrep would skip its own ancestors.
-  ps -ww -A -o ppid=,command= | awk -v p="$cpid" '$1 == p' | grep -qF -- "$needle"
+  local cpid needle pre
+  { read -r cpid; read -r needle; read -r pre; } 2>/dev/null < "$STATE/cmd-$1" || return 1
+  [ -n "$cpid" ] && [ ${#needle} -ge 10 ] || return 1
+  claude_kids "$cpid" | grep -F -- "$needle" | awk -v pre=" $pre " 'index(pre, " " $1 " ") == 0 { found = 1 } END { exit !found }'
 }
 
 # mark_working <session>: an approved prompt no longer needs you.
 mark_working() {
   local f="$STATE/status-$1"
   [ "$(head -1 "$f" 2>/dev/null)" = needs ] || return 0
-  { echo working; date +%s; sed -n 3p "$f"; echo; } > "$f.t" && mv "$f.t" "$f"
+  local t; t=$(mktemp "$f.XXXXXX") || return 0
+  { echo working; date +%s; sed -n 3p "$f"; echo; } > "$t" && mv "$t" "$f"
 }
 
 # remind <session> <token> <step>: a timer step. It runs this script again, so
@@ -559,6 +564,7 @@ drop_held() {
 clear_wait() {
   local wf pid; wf=$(wait_file "$sid")
   [ -s "$HELD" ] && drop_held
+  [ -e "$STATE/cmd-$sid" ] && rm -f "$STATE/cmd-$sid"
   [ -f "$wf" ] || return 0
   pid=$(sed -n 6p "$wf")
   # A timer that already finished may have its PID reused by another program.
@@ -597,18 +603,40 @@ stop_watch() {
   [ -f "$running" ] || return 0
   pid=$(sed -n 4p "$running")
   [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -q '/speak\.sh pretool$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
-  rm -f "$running" "$STATE/cmd-$sid"
+  rm -f "$running"
 }
 
-# claude_pid: Claude Code's process, the parent of the shells it runs commands in.
+# claude_pid: Claude Code's process, the parent of the shells it runs commands
+# in: a binary named claude, or node running the npm package.
 claude_pid() {
   local p=$PPID c
   [ -n "$EARSHOT_CLAUDE_PID" ] && { echo "$EARSHOT_CLAUDE_PID"; return; }
   while [ "${p:-1}" -gt 1 ]; do
     c=$(ps -o comm= -p "$p" 2>/dev/null)
-    [ "${c##*/}" = claude ] && { echo "$p"; return; }
+    case "${c##*/}" in
+      claude) echo "$p"; return ;;
+      node) ps -ww -o command= -p "$p" | grep -q 'claude-code/cli' && { echo "$p"; return; } ;;
+    esac
     p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
   done
+}
+
+# record_cmd: for a Bash permission prompt, what its approval will look like.
+# The needle is the longest piece of the command's first line between quotes,
+# tabs and non-ASCII characters (ps escapes those), after any leading
+# "cd <dir> &&", which Claude Code may remove. At least 10 characters.
+record_cmd() {
+  local cpid needle pre
+  cpid=$(claude_pid); [ -n "$cpid" ] || return 0
+  needle=$(jq -r '.tool_input.command // empty' <<<"$input" | LC_ALL=C awk -v q="'" 'NR == 1 {
+      sub(/^[ \t]+/, "")
+      while (match($0, "^cd[ \t]+(\"[^\"]*\"|" q "[^" q "]*" q "|[^ \t]+)[ \t]*&&[ \t]*")) $0 = substr($0, RLENGTH + 1)
+      n = split($0, c, "[^ -~]|[" q "\"\\\\]"); best = ""
+      for (i = 1; i <= n; i++) { s = c[i]; gsub(/^ +| +$/, "", s); if (length(s) > length(best)) best = s }
+      print substr(best, 1, 60) }')
+  [ ${#needle} -ge 10 ] || return 0
+  pre=$(claude_kids "$cpid" | grep -F -- "$needle" | awk '{print $1}' | paste -sd' ' -)
+  printf '%s\n%s\n%s\n' "$cpid" "$needle" "$pre" > "$STATE/cmd-$sid"
 }
 
 warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; set_status stuck; tell alert "$2"; }
@@ -753,6 +781,7 @@ ask)
     new_wait question ""; start_timer "$sid" "$token" first
   else
     new_wait permission "$(asks_for)"; start_timer "$sid" "$token"
+    [ "$tool" = Bash ] && record_cmd
   fi
   ;;
 question)
@@ -779,19 +808,14 @@ pretool)
   # PreToolUse (async) for Bash, MCP tools and web calls: one long call fires
   # no other hook until it ends, so a timer gives the "still on it" updates.
   [ "$(jq -r '.tool_input.run_in_background // false' <<<"$input")" = true ] && exit 0
+  # Updates are progress lines, so quiet level needs no timer.
+  case "$LEVEL" in normal|all) ;; *) exit 0 ;; esac
   stop_watch
   # No turn file: this async hook landed after the turn already ended.
   [ -f "$state" ] || exit 0
-  if [ "$tool" = Bash ]; then
-    desc=$(jq -r '.tool_input.description // empty | gsub("[\r\n]+"; " ")' <<<"$input")
-    # For approvals: Claude Code's PID, and the command's first line up to a
-    # quote (the child shell's arguments escape quotes), at most 40 characters.
-    printf '%s\n%s\n' "$(claude_pid)" "$(jq -r '.tool_input.command // empty' <<<"$input" | head -1 | cut -c1-40 | sed "s/[\"'\\\\].*//")" > "$STATE/cmd-$sid"
-  else
-    desc=$(asks_for); desc=${desc#to }
+  if [ "$tool" = Bash ]; then desc=$(jq -r '.tool_input.description // empty | gsub("[\r\n]+"; " ")' <<<"$input")
+  else desc=$(asks_for); desc=${desc#to }
   fi
-  # Updates are progress lines, so quiet level needs no timer.
-  case "$LEVEL" in normal|all) ;; *) exit 0 ;; esac
   token=$(jq -r '.tool_use_id // empty' <<<"$input"); [ -n "$token" ] || token="$now-$$"
   printf '%s\n%s\n%s\n' "$token" "$on" "$desc" > "$running"
   watch_command "$sid" "$token" "$transcript"
@@ -821,7 +845,7 @@ stop)
   # Lines said with the Mac's voice after an engine failed, left by a crash.
   find "$STATE" -maxdepth 1 -type f -name 'fallback.*' -mmin +10 -delete 2>/dev/null
   # Sessions that quit without SessionEnd leave files; 6 hours quiet means gone.
-  find "$STATE" -maxdepth 1 -type f \( -name 'status-*' -o -name 'running-*' -o -name 'wait-*' \) -mmin +360 -delete 2>/dev/null
+  find "$STATE" -maxdepth 1 -type f \( -name 'status-*' -o -name 'running-*' -o -name 'wait-*' -o -name 'cmd-*' \) -mmin +360 -delete 2>/dev/null
   rm -f "$state" "$hist" "$errs" "$warned"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then

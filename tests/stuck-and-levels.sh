@@ -386,6 +386,14 @@ rule=$(sed -n 's/^allowed-tools: Bash(\(.*\))$/\1/p' "$SK"); body=$(sed -n 's/^!
 rm -f "$EARSHOT_LIVE_DIR"/*; unset EARSHOT_LIVE_DIR; : > "$OUT"
 
 echo "Approved commands and other long calls"
+approves() { # approves <name> <expected: working|waiting> <session>: asks the session's reminder
+  local got; : > "$OUT"
+  bash "$S" remind "$3" "$(head -1 "$EARSHOT_STATE_DIR/wait-$3")" 5 </dev/null
+  if grep -q "still waiting on you" "$OUT"; then got=waiting; else got=working; fi
+  if [ "$got" = "$2" ]; then pass=$((pass + 1)); echo "  ok    $1"; else fail=$((fail + 1)); echo "  FAIL  $1 (roll call: $(cat "$OUT"))"; fi
+  at end "$3" "$P" '{}'; : > "$OUT"
+}
+fakerun() { bash -c "true; eval \"$1\"" >/dev/null 2>&1 & fakecmd=$!; disown "$fakecmd"; sleep 0.3; }   # a child of this shell
 # The test shell plays Claude Code: an approved command is a child process
 # whose arguments hold the command text.
 export EARSHOT_CLAUDE_PID=$$ EARSHOT_BEAT_SECS=1 EARSHOT_LIVE_DIR=$EARSHOT_STATE_DIR/live-ap; mkdir -p "$EARSHOT_LIVE_DIR"
@@ -404,17 +412,35 @@ at_least "after you approve: the roll call says it is working" 1 "is working"
 bash "$S" remind ap1 "$tok" 5 </dev/null
 check "after you approve: no reminder" 0 "still waiting on you"
 [ -e "$EARSHOT_STATE_DIR/wait-ap1" ] && { fail=$((fail + 1)); echo "  FAIL  the wait file is still there after approval"; } || { pass=$((pass + 1)); echo "  ok    after you approve: the prompt is forgotten"; }
-EARSHOT_REMIND_UNIT=100 at ask ap1 "$P" "$apcmd"; : > "$OUT"; sleep 2.5
-at_least "after you approve: updates come during the command" 1 "Latest step: deploy the database"
 kill "$fakecmd" 2>/dev/null; wait "$fakecmd" 2>/dev/null
+EARSHOT_REMIND_UNIT=100 at ask ap1 "$P" "$apcmd"
+fakerun "sleep 30 # deploy-the-database-now"; : > "$OUT"; sleep 2.5
+at_least "after you approve: updates come during the command" 1 "Latest step: deploy the database"
+kill "$fakecmd" 2>/dev/null
 at tool ap1 "$P" "$apcmd"
 at start ap2 "$P" '{}'; at pretool ap2 "$P" '{"tool_name":"Bash","tool_use_id":"ap-t2","tool_input":{"command":"ls"}}'
 EARSHOT_REMIND_UNIT=100 at ask ap2 "$P" '{"tool_name":"Bash","tool_input":{"command":"ls"}}'
 bash -c 'true; eval "ls; sleep 30"' >/dev/null & fakecmd=$!; sleep 0.3; : > "$OUT"; roll
 at_least "a command too short to recognize still reads as waiting" 1 "needs your OK"
 kill "$fakecmd" 2>/dev/null; wait "$fakecmd" 2>/dev/null
-at start ap3 "$P" '{}'; EARSHOT_LEVEL=quiet at pretool ap3 "$P" '{"tool_name":"Bash","tool_use_id":"ap-t3","tool_input":{"command":"sleep 30 # quiet-level-command"}}'
-[ -s "$EARSHOT_STATE_DIR/cmd-ap3" ] && { pass=$((pass + 1)); echo "  ok    quiet level still records the command, for approvals"; } || { fail=$((fail + 1)); echo "  FAIL  quiet level recorded no command"; }
+at start ap3 "$P" '{}'; EARSHOT_LEVEL=quiet EARSHOT_REMIND_UNIT=100 at ask ap3 "$P" '{"tool_name":"Bash","tool_input":{"command":"sleep 30 # quiet-level-command"}}'
+fakerun "sleep 30 # quiet-level-command"; approves "quiet level: approval is still noticed" working ap3; kill "$fakecmd" 2>/dev/null
+at start ap6 "$P" '{}'; EARSHOT_REMIND_UNIT=100 at ask ap6 "$P" '{"tool_name":"Bash","tool_input":{"command":"cd /tmp/proj && sleep 30 # migrate-the-tables"}}'
+fakerun "sleep 30 # migrate-the-tables"; approves "a leading cd that Claude Code strips still matches" working ap6; kill "$fakecmd" 2>/dev/null
+fakerun "python3 -c 'print(1)'; sleep 30 # poll-loop"
+at start ap7 "$P" '{}'; EARSHOT_REMIND_UNIT=100 at ask ap7 "$P" '{"tool_name":"Bash","tool_input":{"command":"python3 -c '"'"'import shutil; shutil.rmtree(\"build-dir\")'"'"'"}}'
+approves "a background job that shares only the start does not count" waiting ap7; kill "$fakecmd" 2>/dev/null
+fakerun "sleep 30 # same-command-already-running"
+at start ap8 "$P" '{}'; EARSHOT_REMIND_UNIT=100 at ask ap8 "$P" '{"tool_name":"Bash","tool_input":{"command":"sleep 30 # same-command-already-running"}}'
+approves "the same command already running before the prompt does not count" waiting ap8; kill "$fakecmd" 2>/dev/null
+at start ap9 "$P" '{}'; EARSHOT_REMIND_UNIT=100 at ask ap9 "$P" '{"tool_name":"Bash","tool_input":{"command":"sleep 30 # an-earlier-bash-step"}}'
+at tool ap9 "$P" '{"tool_name":"Bash","tool_input":{"command":"x"},"tool_response":{}}'
+fakerun "sleep 30 # an-earlier-bash-step"
+EARSHOT_REMIND_UNIT=100 at ask ap9 "$P" '{"tool_name":"Edit","tool_input":{"file_path":"/x/a.py"}}'
+approves "an Edit prompt is never approved by an earlier command" waiting ap9; kill "$fakecmd" 2>/dev/null
+at start ap10 "$P" '{}'; EARSHOT_REMIND_UNIT=100 at ask ap10 "$P" '{"tool_name":"Bash","tool_input":{"command":"sleep 30 # café-deploy-step"}}'
+fakerun "sleep 30 # café-deploy-step"; approves "accented text in the command still matches" working ap10; kill "$fakecmd" 2>/dev/null
+wait 2>/dev/null
 : > "$OUT"
 at start ap4 "$P" '{}'; at pretool ap4 "$P" '{"tool_name":"mcp__claude_ai_Linear__create_issue","tool_use_id":"ap-t4","tool_input":{}}'; sleep 2.5
 at_least "a long MCP call gets updates" 1 "Latest step: use Linear"

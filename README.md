@@ -292,7 +292,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - Kokoro speaks English only, with fewer voices than ElevenLabs and less expression.
 - After an update, Earshot rebuilds the Kokoro helper in the background. Until it is done, the old helper keeps working.
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
-- No hook fires when you approve a permission prompt, so Earshot notices the approval when it sees the command running. For a very short command (under 6 characters, like `ls`), it cannot tell, and the session counts as waiting on you until the command ends.
+- No hook fires when you approve a permission prompt. For a shell command, Earshot notices the approval when the command starts. It cannot tell for a command without 10 plain characters in a row (like `ls`), or for an MCP tool or web fetch, so those count as waiting on you until they end.
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
