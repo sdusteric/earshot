@@ -15,7 +15,7 @@ talks back.
 
 | When | Example |
 |---|---|
-| Every 3 minutes of work, also during one long command | "Still on billing service, about 6 minutes in. Latest step: run the invoice tests." |
+| Every 3 minutes of work, also during one long command, MCP call or web fetch | "Still on billing service, about 6 minutes in. Latest step: run the invoice tests." |
 | The same error comes back 3 times, even after edits | "Heads up, billing service keeps hitting the same error. It might be stuck." |
 | The same step gives the same result 3 times in a row | "Heads up, billing service keeps running the same thing over and over. It might be stuck." |
 | Two steps alternate 3 times | "Heads up, billing service keeps going back and forth between the same two steps. It might be stuck." |
@@ -203,7 +203,7 @@ Your key and voice stay the same.
 ## How it works
 
 The plugin adds hooks for these events: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse` (for
-`AskUserQuestion`, and for `Bash` in the background), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
+`AskUserQuestion`, and in the background for `Bash`, MCP tools, `WebFetch` and `WebSearch`), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
 `Stop`, `StopFailure`, `Elicitation`, `ElicitationResult`, and `Notification` (for `permission_prompt`,
 `idle_prompt`, `elicitation_dialog` and `elicitation_url_dialog`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
 speech runs in the background, so Earshot does not slow down Claude.
@@ -217,6 +217,11 @@ a beep.
 
 Each session keeps a short status (needs you, stuck, working, finished) in Earshot's
 private folder. The roll call reads it.
+
+No hook fires when you approve a permission prompt. Claude Code runs an approved
+command in a shell under its own process, with the command in the shell's
+arguments, so Earshot looks for it there: once the command runs, the reminders
+stop, the roll call says the session is working, and "still on it" updates start.
 
 Earshot looks for three signs that Claude is stuck. It uses the same patterns as
 the stuck detector in OpenHands:
@@ -287,8 +292,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - Kokoro speaks English only, with fewer voices than ElevenLabs and less expression.
 - After an update, Earshot rebuilds the Kokoro helper in the background. Until it is done, the old helper keeps working.
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
-- During one long command, Earshot gives "still on it" updates for shell commands only. A long MCP call or web fetch is silent until it ends.
-- No hook fires when you approve a permission prompt. Until that command ends, Earshot still treats the session as waiting on you: the roll call says it needs your OK, and the command gets no "still on it" updates.
+- No hook fires when you approve a permission prompt, so Earshot notices the approval when it sees the command running. For a very short command (under 6 characters, like `ls`), it cannot tell, and the session counts as waiting on you until the command ends.
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.

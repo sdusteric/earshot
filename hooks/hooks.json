@@ -5,7 +5,7 @@
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" start" }] }],
     "PreToolUse": [
       { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" question" }] },
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" pretool", "async": true }] }
+      { "matcher": "Bash|WebFetch|WebSearch|mcp__.*", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" pretool", "async": true }] }
     ],
     "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" ask" }] }],
     "PostToolUse": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" tool" }] }],

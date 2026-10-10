@@ -385,6 +385,45 @@ rule=$(sed -n 's/^allowed-tools: Bash(\(.*\))$/\1/p' "$SK"); body=$(sed -n 's/^!
 [ -n "$rule" ] && [ "$rule" = "$body" ] && { pass=$((pass + 1)); echo "  ok    the rollcall command is pre-approved by its own allowed-tools rule"; } || { fail=$((fail + 1)); echo "  FAIL  allowed-tools ($rule) does not match the command ($body)"; }
 rm -f "$EARSHOT_LIVE_DIR"/*; unset EARSHOT_LIVE_DIR; : > "$OUT"
 
+echo "Approved commands and other long calls"
+# The test shell plays Claude Code: an approved command is a child process
+# whose arguments hold the command text.
+export EARSHOT_CLAUDE_PID=$$ EARSHOT_BEAT_SECS=1 EARSHOT_LIVE_DIR=$EARSHOT_STATE_DIR/live-ap; mkdir -p "$EARSHOT_LIVE_DIR"
+apcmd='{"tool_name":"Bash","tool_use_id":"ap-t1","tool_input":{"command":"sleep 30 # deploy-the-database-now","description":"Deploy the database"}}'
+at start ap1 "$P" '{}'; at pretool ap1 "$P" "$apcmd"
+EARSHOT_REMIND_UNIT=100 at ask ap1 "$P" "$apcmd"; : > "$OUT"; sleep 2.5
+check "before you approve: no updates" 0 "Latest step"
+: > "$OUT"; roll
+at_least "before you approve: the roll call says it needs your OK" 1 "needs your OK to deploy the database"
+tok=$(head -1 "$EARSHOT_STATE_DIR/wait-ap1")
+bash "$S" remind ap1 "$tok" 2 </dev/null
+at_least "before you approve: the reminder plays" 1 "still waiting on you"
+bash -c 'true; eval "sleep 30 # deploy-the-database-now"' & fakecmd=$!   # like Claude Code's shell: source, then eval
+sleep 0.3; : > "$OUT"; roll
+at_least "after you approve: the roll call says it is working" 1 "is working"
+bash "$S" remind ap1 "$tok" 5 </dev/null
+check "after you approve: no reminder" 0 "still waiting on you"
+[ -e "$EARSHOT_STATE_DIR/wait-ap1" ] && { fail=$((fail + 1)); echo "  FAIL  the wait file is still there after approval"; } || { pass=$((pass + 1)); echo "  ok    after you approve: the prompt is forgotten"; }
+EARSHOT_REMIND_UNIT=100 at ask ap1 "$P" "$apcmd"; : > "$OUT"; sleep 2.5
+at_least "after you approve: updates come during the command" 1 "Latest step: deploy the database"
+kill "$fakecmd" 2>/dev/null; wait "$fakecmd" 2>/dev/null
+at tool ap1 "$P" "$apcmd"
+at start ap2 "$P" '{}'; at pretool ap2 "$P" '{"tool_name":"Bash","tool_use_id":"ap-t2","tool_input":{"command":"ls"}}'
+EARSHOT_REMIND_UNIT=100 at ask ap2 "$P" '{"tool_name":"Bash","tool_input":{"command":"ls"}}'
+bash -c 'true; eval "ls; sleep 30"' >/dev/null & fakecmd=$!; sleep 0.3; : > "$OUT"; roll
+at_least "a command too short to recognize still reads as waiting" 1 "needs your OK"
+kill "$fakecmd" 2>/dev/null; wait "$fakecmd" 2>/dev/null
+at start ap3 "$P" '{}'; EARSHOT_LEVEL=quiet at pretool ap3 "$P" '{"tool_name":"Bash","tool_use_id":"ap-t3","tool_input":{"command":"sleep 30 # quiet-level-command"}}'
+[ -s "$EARSHOT_STATE_DIR/cmd-ap3" ] && { pass=$((pass + 1)); echo "  ok    quiet level still records the command, for approvals"; } || { fail=$((fail + 1)); echo "  FAIL  quiet level recorded no command"; }
+: > "$OUT"
+at start ap4 "$P" '{}'; at pretool ap4 "$P" '{"tool_name":"mcp__claude_ai_Linear__create_issue","tool_use_id":"ap-t4","tool_input":{}}'; sleep 2.5
+at_least "a long MCP call gets updates" 1 "Latest step: use Linear"
+at tool ap4 "$P" '{"tool_name":"mcp__claude_ai_Linear__create_issue","tool_input":{},"tool_response":{}}'; : > "$OUT"
+at start ap5 "$P" '{}'; at pretool ap5 "$P" '{"tool_name":"WebFetch","tool_use_id":"ap-t5","tool_input":{"url":"https://example.com/docs"}}'; sleep 2.5
+at_least "a long web fetch gets updates" 1 "Latest step: open example.com"
+for s in ap1 ap2 ap3 ap4 ap5; do at end "$s" "$P" '{}'; done
+unset EARSHOT_CLAUDE_PID EARSHOT_LIVE_DIR; export EARSHOT_BEAT_SECS=0; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

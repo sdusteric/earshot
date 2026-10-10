@@ -284,6 +284,25 @@ fi
 REMIND_MINS=${EARSHOT_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
 UNIT=${EARSHOT_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
 
+# approved <session>: the session's Bash command is running, so you approved
+# its permission prompt. No hook fires on approval, but Claude Code runs the
+# command in a child shell whose arguments hold the command text. cmd-<session>
+# has Claude Code's PID and a piece of the command (pretool writes it).
+approved() {
+  local cpid needle
+  { read -r cpid; read -r needle; } 2>/dev/null < "$STATE/cmd-$1" || return 1
+  [ -n "$cpid" ] && [ ${#needle} -ge 6 ] || return 1
+  # One ps over all processes: pgrep would skip its own ancestors.
+  ps -ww -A -o ppid=,command= | awk -v p="$cpid" '$1 == p' | grep -qF -- "$needle"
+}
+
+# mark_working <session>: an approved prompt no longer needs you.
+mark_working() {
+  local f="$STATE/status-$1"
+  [ "$(head -1 "$f" 2>/dev/null)" = needs ] || return 0
+  { echo working; date +%s; sed -n 3p "$f"; echo; } > "$f.t" && mv "$f.t" "$f"
+}
+
 # remind <session> <token> <step>: a timer step. It runs this script again, so
 # the /voice and mute checks above apply at the moment it speaks.
 if [ "$1" = remind ]; then
@@ -297,6 +316,8 @@ if [ "$1" = remind ]; then
   if [ -f "$transcript" ] && [ "$(stat -f %m "$transcript")" -gt $(( $(stat -f %m "$wf") + 2 )) ]; then
     rm -f "$wf"; exit 0
   fi
+  # A permission prompt you approved: its command is running.
+  if [ "$kind" = permission ] && approved "$sid"; then rm -f "$wf"; mark_working "$sid"; exit 0; fi
   if [ "$4" = first ]; then
     tell need "Hey, $proj has a question for you."
   else
@@ -330,6 +351,7 @@ if [ "$1" = rollcall ]; then
     s=${f##*/}
     st=open; since=0; name=""; detail=""
     { read -r st; read -r since; read -r _; read -r detail; } 2>/dev/null < "$STATE/status-$s"
+    [ "$st" = needs ] && approved "$s" && st=working
     # The name as the alerts say it, worked out now, so a second session in
     # the same project is told apart by its title.
     { read -r name; read -r title; } < "$f"
@@ -389,6 +411,8 @@ watch_command() {
       t=$(date +%s)
       [ $((t - began)) -ge "$LONG_MAX" ] && exit 0
       # While a permission prompt waits, the command has not started yet.
+      # Once it runs, you approved it: forget the prompt and give updates.
+      if [ -f "$STATE/wait-$sid" ] && approved "$sid"; then rm -f "$STATE/wait-$sid"; mark_working "$sid"; fi
       [ -f "$STATE/wait-$sid" ] || bash "$self" longbeat "$sid" "$token" $((t - start))
       [ -f "$STATE/turn-$sid" ] && echo "$start $t" > "$STATE/turn-$sid"
     done
@@ -422,6 +446,7 @@ asks_for() {
     Edit|MultiEdit|Write|NotebookEdit)
       desc=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input")
       echo "to edit ${desc##*/}" ;;
+    WebSearch) echo "to search the web" ;;
     WebFetch) echo "to open $(jq -r '.tool_input.url // empty' <<<"$input" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')" ;;
     mcp__*) echo "to use $(awk -F'__' '{print $2}' <<<"$tool" | sed 's/^claude_ai_//' | tr '_-' '  ')" ;;
     "") echo "" ;;
@@ -572,7 +597,18 @@ stop_watch() {
   [ -f "$running" ] || return 0
   pid=$(sed -n 4p "$running")
   [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -q '/speak\.sh pretool$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
-  rm -f "$running"
+  rm -f "$running" "$STATE/cmd-$sid"
+}
+
+# claude_pid: Claude Code's process, the parent of the shells it runs commands in.
+claude_pid() {
+  local p=$PPID c
+  [ -n "$EARSHOT_CLAUDE_PID" ] && { echo "$EARSHOT_CLAUDE_PID"; return; }
+  while [ "${p:-1}" -gt 1 ]; do
+    c=$(ps -o comm= -p "$p" 2>/dev/null)
+    [ "${c##*/}" = claude ] && { echo "$p"; return; }
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  done
 }
 
 warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; set_status stuck; tell alert "$2"; }
@@ -740,15 +776,24 @@ inputnotify)
   tell need "Hey, $who needs your input${what:+ $what}."
   ;;
 pretool)
-  # PreToolUse for Bash (async): one long command fires no other hook until it
-  # ends, so a timer gives the "still on it" updates while it runs.
+  # PreToolUse (async) for Bash, MCP tools and web calls: one long call fires
+  # no other hook until it ends, so a timer gives the "still on it" updates.
   [ "$(jq -r '.tool_input.run_in_background // false' <<<"$input")" = true ] && exit 0
-  case "$LEVEL" in normal|all) ;; *) exit 0 ;; esac
   stop_watch
   # No turn file: this async hook landed after the turn already ended.
   [ -f "$state" ] || exit 0
+  if [ "$tool" = Bash ]; then
+    desc=$(jq -r '.tool_input.description // empty | gsub("[\r\n]+"; " ")' <<<"$input")
+    # For approvals: Claude Code's PID, and the command's first line up to a
+    # quote (the child shell's arguments escape quotes), at most 40 characters.
+    printf '%s\n%s\n' "$(claude_pid)" "$(jq -r '.tool_input.command // empty' <<<"$input" | head -1 | cut -c1-40 | sed "s/[\"'\\\\].*//")" > "$STATE/cmd-$sid"
+  else
+    desc=$(asks_for); desc=${desc#to }
+  fi
+  # Updates are progress lines, so quiet level needs no timer.
+  case "$LEVEL" in normal|all) ;; *) exit 0 ;; esac
   token=$(jq -r '.tool_use_id // empty' <<<"$input"); [ -n "$token" ] || token="$now-$$"
-  printf '%s\n%s\n%s\n' "$token" "$on" "$(jq -r '.tool_input.description // empty | gsub("[\r\n]+"; " ")' <<<"$input")" > "$running"
+  printf '%s\n%s\n%s\n' "$token" "$on" "$desc" > "$running"
   watch_command "$sid" "$token" "$transcript"
   ;;
 notify)
