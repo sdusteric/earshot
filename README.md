@@ -15,12 +15,16 @@ talks back with an ElevenLabs voice.
 | Your prompt arrives | "On it." |
 | Every 3 minutes of work | "Still on billing service, about 6 minutes in. Latest step: run the invoice tests." |
 | The same step runs 3 times in a row | "Heads up, billing service keeps running the same thing over and over. It might be stuck." |
-| A permission prompt is waiting | "Hey, billing service needs your OK before it keeps going." |
+| A permission prompt waits more than a few seconds | "Hey, billing service needs your OK to run the database migration." |
+| You still haven't answered it | "Still waiting on you in billing service, 5 minutes now." (at 2, 5 and 10 minutes) |
+| Claude asks you a question | "Hey, billing service has a question for you." |
+| Claude ended on a question and you didn't reply | "Hey, billing service is still waiting on your answer." |
 | The turn fails | "Something broke in billing service. Take a look when you can." |
 | Claude finishes | One short line Claude writes for you, e.g. "Fixed the rounding bug, though the refund test is still flaky." |
 
 Earshot only speaks while `/voice` is on. It stops talking when you start, plays
-repeated lines from a cache, and beeps if the voice fails.
+repeated lines from a cache, and beeps if the voice fails. Reminders stop as soon
+as you answer, including when you press Esc.
 
 Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a day.
 
@@ -109,9 +113,15 @@ Your key and voice stay the same.
 
 ## How it works
 
-The plugin adds five hooks: `UserPromptSubmit`, `PostToolUse`, `Stop`,
-`StopFailure`, and `Notification` (for permission prompts). Each hook runs
-`scripts/speak.sh`.
+The plugin adds hooks for these events: `UserPromptSubmit`, `PreToolUse` (for
+`AskUserQuestion` only), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
+`Stop`, `StopFailure`, and `Notification` (for `permission_prompt` and
+`idle_prompt`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
+speech runs in the background, so Earshot does not slow down Claude.
+
+When a permission prompt or a question shows, Earshot starts a timer. The timer
+speaks the reminders. Each reminder first checks that the prompt still waits. If
+you answered, the timer stops.
 
 When `/voice` is on, the prompt hook tells Claude to end each reply with one line
 that starts with 🗣. When Claude stops, the `Stop` hook reads that line aloud.
@@ -131,6 +141,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech |
 | `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |
 | `EARSHOT_LOOP_REPEATS` | `3` | The number of identical steps in a row that causes a "might be stuck" warning |
+| `EARSHOT_REMIND_MINS` | `"2 5 10"` | The minutes after a prompt when Earshot reminds you that it still waits. Use quotes. |
 
 ## Troubleshooting
 

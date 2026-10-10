@@ -1,6 +1,7 @@
 #!/bin/bash
 # Earshot: spoken updates for Claude Code via ElevenLabs.
-# Modes: start | tool | stop | notify | fail (hooks), say "<text>" (manual test)
+# Modes: start | tool | clear | ask | question | notify | idle | stop | fail (hooks),
+# remind (internal timer), say "<text>" (manual test)
 CONF=~/.config/earshot/config
 [ -f "$CONF" ] && . "$CONF"
 # The saved config wins, so a generic ELEVENLABS_API_KEY set for other tools
@@ -55,14 +56,84 @@ say() {
 
 [ "$1" = say ] && { say "$2"; exit 0; }
 
+# --- Waiting on you: permission prompts and questions -------------------------
+# A wait file per session holds: token, kind (permission|question), project,
+# what is being asked, and the transcript path. Any later hook activity deletes
+# it, which cancels reminders.
+REMIND_MINS=${EARSHOT_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
+UNIT=${EARSHOT_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
+wait_file() { echo "/tmp/earshot-wait-$1"; }
+
+# remind <session> <token> <step>: a timer step. It runs this script again, so
+# the /voice and mute checks above apply at the moment it speaks.
+if [ "$1" = remind ]; then
+  wf=$(wait_file "$2")
+  { read -r token; read -r kind; read -r proj; read -r what; read -r transcript; } 2>/dev/null < "$wf" || exit 0
+  [ "$token" = "$3" ] || exit 0
+  # While a prompt waits, the agent is blocked and its transcript does not
+  # change. A newer transcript means you answered it, for example with Esc,
+  # which fires no hook. (2s grace: the tool call itself may land just after.)
+  if [ -f "$transcript" ] && [ "$(stat -f %m "$transcript")" -gt $(( $(stat -f %m "$wf") + 2 )) ]; then
+    rm -f "$wf"; exit 0
+  fi
+  if [ "$4" = first ]; then
+    say "Hey, $proj has a question for you."
+  else
+    say "Still waiting on you in $proj, $4 minute$([ "$4" = 1 ] || echo s) now."
+  fi
+  exit 0
+fi
+
+# start_timer <session> <token> [first]: speaks the reminders in the background.
+# With "first", it also speaks the opening line after a 6 second grace period.
+start_timer() {
+  local sid=$1 token=$2 first=$3 self=$0
+  (
+    t=0
+    if [ -n "$first" ]; then sleep 6; t=6; bash "$self" remind "$sid" "$token" first; fi
+    for m in $REMIND_MINS; do
+      sleep $((m * UNIT - t)); t=$((m * UNIT))
+      [ "$(head -1 "$(wait_file "$sid")" 2>/dev/null)" = "$token" ] || exit 0
+      bash "$self" remind "$sid" "$token" "$m"
+    done
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
+
+# Plain words for what a permission prompt asks for, e.g. "to run the invoice tests".
+asks_for() {
+  local tool desc
+  tool=$(jq -r '.tool_name // empty' <<<"$input")
+  case "$tool" in
+    Bash)
+      desc=$(jq -r '.tool_input.description // empty' <<<"$input" | tr '_' ' ' | awk '{for (i = 1; i <= NF && i <= 12; i++) printf "%s%s", $i, (i < NF && i < 12 ? " " : "")}' | sed 's/[.]*$//')
+      if [ -n "$desc" ]; then echo "to $(lower_first "$desc")"; else echo "to run a command"; fi ;;
+    Edit|MultiEdit|Write|NotebookEdit)
+      desc=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input")
+      echo "to edit ${desc##*/}" ;;
+    WebFetch) echo "to open $(jq -r '.tool_input.url // empty' <<<"$input" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')" ;;
+    mcp__*) echo "to use $(awk -F'__' '{print $2}' <<<"$tool" | sed 's/^claude_ai_//' | tr '_-' '  ')" ;;
+    "") echo "" ;;
+    *) echo "to use $tool" ;;
+  esac
+}
+
 input=$(cat)
 now=$(date +%s)
+sid=$(jq -r '.session_id' <<<"$input")
 cwd=$(jq -r '.cwd // empty' <<<"$input")
 proj=$(basename "$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")" | tr '_-' '  ')
-state="/tmp/earshot-$(jq -r '.session_id' <<<"$input")"
+state="/tmp/earshot-$sid"
+clear_wait() { rm -f "$(wait_file "$sid")"; }
+new_wait() {
+  token="$now-$$-$RANDOM"
+  printf '%s\n%s\n%s\n%s\n%s\n' "$token" "$1" "$proj" "$2" "$(jq -r '.transcript_path // empty' <<<"$input")" > "$(wait_file "$sid")"
+}
 
 case "$1" in
 start)
+  clear_wait
   # Few fixed phrases, so all of them come from the cache after the first use.
   acks=("Got it." "On it." "Okay, on it.")
   say "${acks[RANDOM % 3]}"
@@ -75,6 +146,7 @@ The prompt was probably dictated: read misheard code terms as the closest name i
 EOF
   ;;
 tool)
+  clear_wait
   [ -f "$state" ] || echo "$now $now - 0" > "$state"
   read -r start beat sig count < "$state"
   new_sig=$(jq -c '[.tool_name, .tool_input]' <<<"$input" | md5 -q)
@@ -85,13 +157,48 @@ tool)
   elif [ $((now - beat)) -ge "$BEAT_SECS" ]; then
     line="Still on $proj, about $(( (now - start) / 60 )) minutes in."
     desc=$(jq -r '.tool_input.description // empty' <<<"$input")
-    [ -n "$desc" ] && line="$line Latest step: $(tr '[:upper:]' '[:lower:]' <<<"${desc:0:1}")${desc:1}."
+    [ -n "$desc" ] && line="$line Latest step: $(lower_first "$desc")."
     say "$line"
     beat=$now
   fi
   echo "$start $beat $new_sig $count" > "$state"
   ;;
+clear)
+  clear_wait
+  ;;
+ask)
+  # PermissionRequest: fires as soon as the prompt shows. Record what it asks
+  # and start the reminders; the Notification below speaks first, after ~6s.
+  if [ "$(jq -r '.tool_name' <<<"$input")" = AskUserQuestion ]; then
+    grep -qx question <(sed -n 2p "$(wait_file "$sid")" 2>/dev/null) && exit 0
+    new_wait question ""; start_timer "$sid" "$token" first
+  else
+    new_wait permission "$(asks_for)"; start_timer "$sid" "$token"
+  fi
+  ;;
+question)
+  # PreToolUse for AskUserQuestion: the same grace period, then reminders.
+  new_wait question ""; start_timer "$sid" "$token" first
+  ;;
+notify)
+  # Notification permission_prompt: the prompt has waited about 6 seconds.
+  { read -r _; read -r kind; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
+  [ "$kind" = question ] && exit 0
+  if [ -n "$what" ]; then say "Hey, $proj needs your OK $what."
+  else say "Hey, $proj needs your OK before it keeps going."
+  fi
+  ;;
+idle)
+  # Notification idle_prompt: 60s after a turn ended with no typing. Speak only
+  # when the last reply asked the user something.
+  transcript=$(jq -r '.transcript_path // empty' <<<"$input")
+  [ -f "$transcript" ] || exit 0
+  last=$(jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last // empty' "$transcript" \
+    | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
+  case "$last" in *'?') say "Hey, $proj is still waiting on your answer." ;; esac
+  ;;
 stop)
+  clear_wait
   rm -f "$state"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then
@@ -104,10 +211,8 @@ stop)
     | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
   [ -n "$line" ] && say "$line"
   ;;
-notify)
-  say "Hey, $proj needs your OK before it keeps going."
-  ;;
 fail)
+  clear_wait
   rm -f "$state"
   say "Something broke in $proj. Take a look when you can."
   ;;
