@@ -1,9 +1,11 @@
 #!/bin/bash
 # Checks stuck detection and EARSHOT_LEVEL with simulated hook input.
 # Nothing is spoken: EARSHOT_DRYRUN collects the lines instead.
-# Needs a saved key and /voice on, because speak.sh exits early without them.
+# Needs /voice on, because speak.sh exits early without it. A throwaway config
+# with a dummy key keeps your own settings out of the results.
 S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
-OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_LIVE_DIR=$(mktemp -d)
+OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_LIVE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
+printf 'EARSHOT_KEY=sk_test\nEARSHOT_VOICE=test\n' > "$EARSHOT_CONF"
 P=$(mktemp -d)/billing-service; mkdir -p "$P"; git -C "$P" init -q
 pass=0; fail=0
 hook() { # hook <mode> <session> <json-extra>
@@ -77,6 +79,27 @@ check "EARSHOT_SESSION_NAME=never: no names" 0 "Tax export\|billing service:"
 hook end w2 '{}'; hook end w9 '{}'; finish w1
 check "closed sessions stop counting" 1 "^Fixed it.$"
 
+echo "Question reminder"
+printf '%s\n' tok question "billing service" "" "" > /tmp/earshot-wait-q1
+bash "$S" remind q1 tok first </dev/null
+check "the first reminder names the project" 1 "^Hey, billing service has a question for you.$"
+rm -f /tmp/earshot-wait-q1
+
+echo "EARSHOT_STYLE"
+style_says() { # style_says <name> <style> <expected count> <pattern>
+  local got
+  got=$(jq -nc --arg cwd "$P" '{session_id: "st", cwd: $cwd}' | EARSHOT_STYLE=$2 bash "$S" start | grep -c -- "$4")
+  if [ "$got" = "$3" ]; then pass=$((pass + 1)); echo "  ok    $1"; else fail=$((fail + 1)); echo "  FAIL  $1 (matched $got, expected $3)"; fi
+}
+style_says "plain by default" "" 1 "the way a coworker talks out loud: casual"
+style_says "plain: no humor rule" plain 0 "drop the style"
+style_says "upbeat asks for encouragement" upbeat 1 "upbeat coworker"
+style_says "cheeky asks for a light joke" cheeky 1 "cheeky sense of humor"
+style_says "cheeky stays plain on failures" cheeky 1 "drop the style and say it plainly"
+style_says "styles keep the 25 word cap" cheeky 1 "25 words at most"
+style_says "unknown style falls back to plain" loud 1 "the way a coworker talks out loud: casual"
+: > "$OUT"
+
 rm -rf "$T" "$EARSHOT_LIVE_DIR"
-rm -f "$OUT" /tmp/earshot-{hist,errs,warned,wait}-{s,l-,w}* /tmp/earshot-{s,l-,w}*
+rm -f "$OUT" "$EARSHOT_CONF" /tmp/earshot-{hist,errs,warned,wait}-{s,l-,w}* /tmp/earshot-{s,l-,w}* /tmp/earshot-st
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

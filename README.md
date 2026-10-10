@@ -43,6 +43,18 @@ You choose how much Earshot says. `normal` is the default:
 | `normal` | Quiet, plus a progress update every 3 minutes |
 | `all` | Normal, plus "On it." when your prompt arrives |
 
+You also choose the tone of the finished line. `plain` is the default:
+
+| Style | Example |
+|---|---|
+| `plain` | "Fixed the rounding bug, though the refund test is still flaky." |
+| `upbeat` | "Fixed the rounding bug, nice one. The refund test is still flaky, though." |
+| `cheeky` | "Rounding bug's fixed. The refund test is still flaky, as is tradition." |
+
+Claude writes the line fresh each time, so the jokes don't repeat. The style
+only changes the finished line. Alerts, reminders and stuck warnings stay plain.
+When a task fails or Claude needs an answer from you, the finished line is plain too.
+
 Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a day.
 
 ## Requirements
@@ -67,7 +79,8 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 4. Listen for the test line. When you hear it, the setup is complete.
 5. Claude asks if Earshot can update itself. Answer yes to get new versions automatically.
 6. Claude asks how much Earshot should say. Choose `quiet`, `normal`, or `all`.
-7. Run `/voice`. Hold Space to talk.
+7. Claude asks for a style. Choose `plain`, `upbeat`, or `cheeky`.
+8. Run `/voice`. Hold Space to talk.
 
 ### Install with a terminal
 
@@ -111,6 +124,7 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 | Unmute Earshot | Run `rm ~/.config/earshot/mute`. |
 | Change the voice or the key | Run `/earshot:setup`. See [Change the voice](#change-the-voice). |
 | Change how much Earshot says | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --level quiet`. Use `quiet`, `normal`, or `all`. |
+| Change the style | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --style cheeky`. Use `plain`, `upbeat`, or `cheeky`. |
 | Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
 
 ## Update
@@ -181,6 +195,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | Setting | Default | What it controls |
 |---|---|---|
 | `EARSHOT_LEVEL` | `normal` | How much Earshot says: `quiet`, `normal`, or `all` |
+| `EARSHOT_STYLE` | `plain` | The tone of the finished line: `plain`, `upbeat`, or `cheeky` |
 | `EARSHOT_SESSION_NAME` | `auto` | When to say the session's name: `auto` (only when two sessions share a project), `always`, or `never`. `never` also removes the project name from the finished line. |
 | `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech |
 | `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |

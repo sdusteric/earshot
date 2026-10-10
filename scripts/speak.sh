@@ -2,7 +2,7 @@
 # Earshot: spoken updates for Claude Code via ElevenLabs.
 # Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end (hooks),
 # remind (internal timer), say "<text>" (manual test)
-CONF=~/.config/earshot/config
+CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewhere
 [ -f "$CONF" ] && . "$CONF"
 # The saved config wins, so a generic ELEVENLABS_API_KEY set for other tools
 # does not replace the key you chose for Earshot.
@@ -18,6 +18,7 @@ MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
 BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
 LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
 LEVEL=${EARSHOT_LEVEL:-normal}            # quiet | normal | all (see tell)
+STYLE=${EARSHOT_STYLE:-plain}             # plain | upbeat | cheeky: tone of the finished line
 CACHE=/tmp/earshot-cache
 LOG=/tmp/earshot.log
 MIC=~/.config/earshot/mic-in-use
@@ -90,7 +91,7 @@ if [ "$1" = remind ]; then
     rm -f "$wf"; exit 0
   fi
   if [ "$4" = first ]; then
-    tell alert "Hey, $who has a question for you."
+    tell alert "Hey, $proj has a question for you."
   else
     tell alert "Still waiting on you in $proj, $4 minute$([ "$4" = 1 ] || echo s) now."
   fi
@@ -255,10 +256,18 @@ start)
   tell ack "${acks[RANDOM % 3]}"
   echo "$now $now" > "$state"
   rm -f "$hist" "$errs" "$warned"
+  # EARSHOT_STYLE only changes the finished line, which Claude writes fresh each
+  # time. Alerts stay plain, and so does a turn that ends badly.
+  serious="If the task failed, or the user needs to answer something or fix a blocker, drop the style and say it plainly."
+  case "$STYLE" in
+    upbeat) tone="Write it the way an upbeat coworker talks out loud: warm and encouraging, with contractions. Say the result, and add a few words of encouragement when it fits. $serious" ;;
+    cheeky) tone="Write it the way a coworker with a dry, cheeky sense of humor talks out loud: casual, with contractions. Say the result, with a light joke or wry aside when it fits. Tease the code or the task, never the user. $serious" ;;
+    *) tone="Write it the way a coworker talks out loud: casual, with contractions. Say the result." ;;
+  esac
   # Plain stdout from UserPromptSubmit is added to Claude's context.
-  cat <<'EOF'
+  cat <<EOF
 Earshot voice is on. End your final reply with one line that starts with "🗣 " (the speaking-head emoji and a space). A hook reads that line aloud when you finish.
-Write it the way a coworker talks out loud: casual, with contractions. Say the result. If there is a question or blocker for the user, say it first; if there is a real risk, say it last. When there is none, leave it out: never say that there is no blocker or no risk. One or two short sentences, 25 words at most; for a small task a few words are enough. No code, file paths, markdown, emotion tags or stage directions.
+$tone If there is a question or blocker for the user, say it first; if there is a real risk, say it last. When there is none, leave it out: never say that there is no blocker or no risk. One or two short sentences, 25 words at most; for a small task a few words are enough. No code, file paths, markdown, emotion tags or stage directions.
 The prompt was probably dictated: read misheard code terms as the closest name in this repo, and ask if unsure.
 EOF
   ;;

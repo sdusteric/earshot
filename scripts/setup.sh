@@ -11,6 +11,7 @@
 #   setup.sh --auto-update          let Claude Code update Earshot by itself
 #   setup.sh --no-auto-update       turn that off again
 #   setup.sh --level LEVEL          how much Earshot says: quiet, normal or all
+#   setup.sh --style STYLE          tone of the finished line: plain, upbeat or cheeky
 set -euo pipefail
 
 DIR=~/.config/earshot
@@ -40,9 +41,10 @@ while [ $# -gt 0 ]; do
     --list-voices) mode=list ;;
     --status) mode=status ;;
     --level) mode=level; level=${2:?--level needs quiet, normal or all}; shift ;;
+    --style) mode=style; style=${2:?--style needs plain, upbeat or cheeky}; shift ;;
     --auto-update) mode=autoupdate; au=true ;;
     --no-auto-update) mode=autoupdate; au=false ;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
   shift
@@ -128,15 +130,31 @@ if [ "$mode" = autoupdate ]; then
   exit 0
 fi
 
-# Level is a line in the config file; other lines stay as they are.
+# set_conf NAME VALUE: level and style are lines in the config file; other
+# lines stay as they are.
+set_conf() {
+  mkdir -p "$DIR"
+  ( umask 077; touch "$CONF"; { grep -v "^$1=" "$CONF" || true; } > "$CONF.tmp"; echo "$1=$2" >> "$CONF.tmp"; mv "$CONF.tmp" "$CONF" )
+}
+
 if [ "$mode" = level ]; then
   case "$level" in quiet|normal|all) ;; *) die "Level must be quiet, normal or all." ;; esac
-  mkdir -p "$DIR"
-  ( umask 077; touch "$CONF"; { grep -v '^EARSHOT_LEVEL=' "$CONF" || true; } > "$CONF.tmp"; echo "EARSHOT_LEVEL=$level" >> "$CONF.tmp"; mv "$CONF.tmp" "$CONF" )
+  set_conf EARSHOT_LEVEL "$level"
   case "$level" in
     quiet) echo "Level: quiet. Earshot speaks only when it needs you, when it might be stuck, when something fails, and when Claude finishes." ;;
     normal) echo "Level: normal. Quiet, plus a short progress update every few minutes." ;;
     all) echo "Level: all. Normal, plus \"On it\" when your prompt arrives." ;;
+  esac
+  exit 0
+fi
+
+if [ "$mode" = style ]; then
+  case "$style" in plain|upbeat|cheeky) ;; *) die "Style must be plain, upbeat or cheeky." ;; esac
+  set_conf EARSHOT_STYLE "$style"
+  case "$style" in
+    plain) echo "Style: plain. The finished line says what Claude did, nothing extra." ;;
+    upbeat) echo "Style: upbeat. The finished line adds a little encouragement. Alerts stay plain." ;;
+    cheeky) echo "Style: cheeky. The finished line adds a light joke when it fits. Alerts stay plain." ;;
   esac
   exit 0
 fi
@@ -159,6 +177,7 @@ if [ "$mode" = status ]; then
     *) say_ok "Auto-update: off (turn it on: setup.sh --auto-update)" ;;
   esac
   say_ok "Level: $(sed -n 's/^EARSHOT_LEVEL=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo normal)"
+  say_ok "Style: $(sed -n 's/^EARSHOT_STYLE=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo plain)"
   [ -e "$DIR/mute" ] && say_ok "Muted: yes (rm $DIR/mute to unmute)"
   exit 0
 fi
@@ -227,7 +246,8 @@ mkdir -p "$DIR"
   { printf 'EARSHOT_KEY=%q\n' "$KEY"
     printf 'EARSHOT_VOICE=%q\n' "$VOICE"
     if [ -n "$EARSHOT_MODEL" ]; then printf 'EARSHOT_MODEL=%q\n' "$EARSHOT_MODEL"; fi
-    grep -E '^EARSHOT_(LEVEL|BEAT_SECS|LOOP_REPEATS|REMIND_MINS)=' "$CONF" 2>/dev/null || true
+    # Every other setting stays as it is.
+    grep -E '^EARSHOT_' "$CONF" 2>/dev/null | grep -vE '^EARSHOT_(KEY|VOICE|MODEL)=' || true
   } > "$CONF.tmp"
   mv "$CONF.tmp" "$CONF" )
 echo "Saved your key and voice to $CONF (only you can read it)."
