@@ -73,7 +73,7 @@ Cost: nothing with Kokoro. With ElevenLabs v4 Turbo, about $8 a month at roughly
 
 - A Mac.
 - Claude Code in a terminal, or the Code tab of the Claude Mac app. Claude Code must be signed in with a Claude.ai account. `/voice` does not work with an API key, Bedrock, Vertex, or Foundry.
-- For Kokoro (the default): a Mac with Apple Silicon, macOS 15 or later, and the Command Line Tools. To install them, run `xcode-select --install`. The first setup builds a helper (about 2 minutes) and downloads the voice (about 400 MB on disk).
+- For Kokoro (the default): a Mac with Apple Silicon, macOS 15 or later, and the Command Line Tools. To install them, run `xcode-select --install`. The first setup builds a helper (about 2 minutes) and downloads the voice (about 460 MB on disk).
 - For ElevenLabs instead: an ElevenLabs API key with the Text to Speech permission. A free ElevenLabs account works with premade voices.
 - `jq`. To install it, run `brew install jq`.
 - Optional: `swiftc`, which comes with the Command Line Tools. Without it, Earshot does not stop talking when you start to talk, and it does not wait while you are on a call.

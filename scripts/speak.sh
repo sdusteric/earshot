@@ -161,12 +161,12 @@ speak() {
   if [ ! -s "$out" ]; then
     # A unique download file keeps two lines from writing the same file, even
     # from one hook. It keeps the extension, because say picks its format by it.
-    tmp=$(mktemp "$CACHE/dl.XXXXXX") || return
+    tmp=$(mktemp "$CACHE/dl.XXXXXX") || echo "$(date '+%F %T') no room for a download file in $CACHE" >> "$LOG"
     dl=$tmp.${out##*.}
-    if synth "$ENGINE" "$1" "$dl"; then
+    if [ -n "$tmp" ] && synth "$ENGINE" "$1" "$dl"; then
       mv "$dl" "$out"
     else
-      rm -f "$dl"
+      [ -n "$tmp" ] && rm -f "$dl"
       # Say it with the Mac's own voice, uncached, so the next line tries the
       # engine again. The error tone is the last resort, and waits its turn too.
       fb=$(mktemp "$STATE/fallback.XXXXXX") && out=$fb.aiff
@@ -441,8 +441,10 @@ fi
 # The same for the Kokoro helper, for Kokoro users. An update gives every file
 # a new time, so newer files only mean "compare": the helper is rebuilt when its
 # sources really changed (source.md5, written by build-tts.sh). build-tts.sh
-# stops the old server after a good build. A failed build leaves TTS.stale, so
-# hooks do not try again; setup rebuilds it and --status shows it.
+# stops the old server after a good build; then prepare loads both runtimes for
+# the voice, so a retry on the older one never downloads while you work. A
+# failed build leaves TTS.stale, so hooks do not try again; setup rebuilds it
+# and --status shows it.
 TTS_SRC=${0%/*}/../tts
 if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
   && { [ "$TTS_SRC/Sources/earshot-tts/main.swift" -nt "$TTS" ] || [ "$TTS_SRC/Package.swift" -nt "$TTS" ]; }; then
@@ -450,7 +452,8 @@ if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
     = "$(cat "${TTS%/*}/source.md5" 2>/dev/null)" ]; then
     touch "$TTS"   # same sources: skip the comparison next time
   else
-    ( lockf -k -t 0 "$STATE/tts-build.lock" sh -c 'bash "$1" || touch "$2.stale"' _ "${EARSHOT_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" ) \
+    ( lockf -k -t 0 "$STATE/tts-build.lock" sh -c 'if bash "$1"; then "$2" prepare --voice "$3"; else touch "$2.stale"; fi' \
+      _ "${EARSHOT_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" "$KOKORO_VOICE" ) \
       </dev/null >/dev/null 2>&1 &
   fi
 fi

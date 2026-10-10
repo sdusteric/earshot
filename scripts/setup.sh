@@ -329,16 +329,24 @@ setup_kokoro() {
     echo "Building the Kokoro helper. The first build takes about 2 minutes."
     # The same lock as the rebuild that hooks start after an update, so the
     # two never write the helper at once. This waits for that one to finish.
-    lockf -k -t 900 "$STATE_DIR/tts-build.lock" bash "${EARSHOT_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 \
-      || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
+    local rc=0
+    lockf -k -t 900 "$STATE_DIR/tts-build.lock" bash "${EARSHOT_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 || rc=$?
+    [ "$rc" = 75 ] && die "Another build of the Kokoro helper is still running. Try setup again in a few minutes."
+    [ "$rc" = 0 ] || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
   fi
   kokoro_voices | grep -qx -- "$KVOICE" \
     || die "Kokoro has no voice called $KVOICE. To see the list, run: setup.sh --engine kokoro --list-voices"
-  echo "Getting the voice ready. The first time, this downloads it (about 400 MB on disk)."
+  echo "Getting the voice ready. The first time, this downloads it (about 460 MB on disk)."
   # Both runtimes: Kokoro retries a line on the older one when v3 fails, and
-  # that should never mean a download while you work.
-  "$TTS" prepare 2>"$TMP/err" \
-    || die "Kokoro couldn't load: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
+  # that should never mean a download while you work. Exit 3: only the older
+  # one failed, and Kokoro works without it.
+  local prc=0
+  "$TTS" prepare --voice "$KVOICE" >/dev/null 2>"$TMP/err" || prc=$?
+  case "$prc" in
+    0) ;;
+    3) echo "Note: the backup voice model didn't download ($(tail -1 "$TMP/err")). Kokoro works. A line it can't say uses the Mac's own voice until you run setup again." ;;
+    *) die "Kokoro couldn't load: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs" ;;
+  esac
   printf 'Earshot is set up. Talk to you soon.' \
     | "$TTS" speak --socket "$STATE_DIR/kokoro.sock" --voice "$KVOICE" --out "$TMP/test.wav" --timeout 600 2>"$TMP/err" \
     || die "Kokoro couldn't make the test line: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"

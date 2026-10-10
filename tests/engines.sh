@@ -12,6 +12,7 @@ cat > "$EARSHOT_TTS" <<EOF
 #!/bin/bash
 echo "\$*" >> "$CALLS"
 [ "\$1" = voices ] && { printf "af_heart\\naf_bella\\n"; exit 0; }
+[ "\$1" = prepare ] && { [ -e "$T/legacy-fail" ] && { echo "legacy download failed" >&2; exit 3; }; echo ready; exit 0; }
 [ "\$1" = speak ] || exit 0
 [ -e "$T/tts-fail" ] && { echo "model exploded" >&2; exit 1; }
 while [ \$# -gt 0 ]; do case "\$1" in --out) out=\$2; shift ;; --voice) v=\$2; shift ;; esac; shift; done
@@ -73,6 +74,9 @@ is "a say fallback is not cached" "$(heard "Fallback one.")" "KOKORO(af_heart):F
 touch "$T/tts-fail" "$T/say-fail"
 is "kokoro and say both fail: the error tone" "$(heard "Fallback two.")" BASSO
 rm "$T/tts-fail" "$T/say-fail"
+chmod a-w "$EARSHOT_CACHE_DIR"
+is "no room for a download file: the line is still said with say" "$(heard "Read-only cache.")" "SAY:Read-only cache."
+chmod u+w "$EARSHOT_CACHE_DIR"
 sleep 1; is "no fallback files are left" "$(ls "$EARSHOT_STATE_DIR" | grep -c "^fallback")" 0
 conf 'EARSHOT_ENGINE=say'
 is "the say engine" "$(heard "Plain voice.")" "SAY:Plain voice."
@@ -143,7 +147,7 @@ setup_run --engine kokoro --voice af_heart >/dev/null
 is "setup rebuilds a helper whose last rebuild failed" "$(wc -l < "$T/builds" | tr -d ' ')" 1
 # speak.sh rebuilds in the background after an update, for Kokoro only.
 hook_once() { jq -nc --arg cwd "$T" '{session_id: "rb", cwd: $cwd}' | EARSHOT_TTS=$K/earshot-tts EARSHOT_BUILD_TTS=$T/build-tts bash "$S" stop >/dev/null; sleep 0.5; }
-rm -f "$K/earshot-tts.stale"; : > "$T/builds"; touch -t 202001010000 "$K/earshot-tts"
+rm -f "$K/earshot-tts.stale"; : > "$T/builds"; touch -t 202001010000 "$K/earshot-tts"; : > "$CALLS"
 conf 'EARSHOT_ENGINE=kokoro'; hook_once
 is "hooks: same sources, only newer times: no rebuild" "$(wc -l < "$T/builds" | tr -d ' ')" 0
 echo old > "$K/source.md5"; touch -t 202001010000 "$K/earshot-tts"
@@ -151,6 +155,7 @@ conf 'EARSHOT_KEY=sk_x' 'EARSHOT_VOICE=v1'; hook_once
 is "hooks: an ElevenLabs user is never rebuilt" "$(wc -l < "$T/builds" | tr -d ' ')" 0
 conf 'EARSHOT_ENGINE=kokoro'; hook_once
 is "hooks: changed sources: one rebuild" "$(wc -l < "$T/builds" | tr -d ' ')" 1
+is "hooks: after a rebuild the voice is prepared, so a retry never downloads" "$(grep -c '^prepare --voice af_heart' "$CALLS")" 1
 printf '#!/bin/bash\necho FAILED BUILD >> "%s"\nexit 1\n' "$T/builds" > "$T/build-tts"; : > "$T/builds"; touch -t 202001010000 "$K/earshot-tts"
 hook_once; hook_once
 is "hooks: a failed rebuild marks the helper and is not retried" "$(wc -l < "$T/builds" | tr -d ' ') $([ -e "$K/earshot-tts.stale" ] && echo marked)" "1 marked"
@@ -161,7 +166,15 @@ printf '#!/bin/bash\necho STUB BUILD >> "%s"\nrm -f "%s.stale"\n' "$T/builds" "$
 ( lockf -k "$EARSHOT_STATE_DIR/tts-build.lock" sleep 2 ) & sleep 0.2
 t0=$(date +%s); setup_run --engine kokoro --voice af_heart >/dev/null; t1=$(date +%s); wait
 is "setup waits for a background build before building" "$([ $((t1 - t0)) -ge 2 ] && echo waited) $(wc -l < "$T/builds" | tr -d ' ')" "waited 1"
-is "setup prepares both Kokoro runtimes" "$(grep -c '^prepare' "$CALLS")" 1
+is "setup prepares both Kokoro runtimes for the chosen voice" "$(grep -c '^prepare --voice af_heart' "$CALLS")" 1
+out=$(setup_run --engine kokoro --voice af_heart)
+is "setup does not print the helper's ready" "$(grep -cx ready <<<"$out")" 0
+touch "$T/legacy-fail"; out=$(setup_run --engine kokoro --voice af_bella); code=$?; rm "$T/legacy-fail"
+is "only the backup runtime failed: setup still finishes, with a note" "$code $(grep -c 'backup' <<<"$out") $(grep -c '^EARSHOT_KOKORO_VOICE=af_bella$' "$EARSHOT_CONF")" "0 1 1"
+B=$(dirname "$S")/build-tts.sh
+mkdir -p "$T/current"; cp "$EARSHOT_TTS" "$T/current/earshot-tts"; src_hash > "$T/current/source.md5"
+out=$(EARSHOT_KOKORO_DIR=$T/current bash "$B" 2>&1)
+is "build-tts.sh skips a helper that is already current" "$(grep -c 'up to date' <<<"$out")" 1
 
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

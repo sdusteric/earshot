@@ -9,9 +9,10 @@
 //       after EARSHOT_KOKORO_IDLE_SECS (default 600) without a request, and
 //       when one request takes over EARSHOT_KOKORO_REQUEST_SECS (default 15),
 //       so a hung Core ML call does not block every later line.
-//   earshot-tts prepare
-//       Loads both runtimes once, downloading what is missing. Setup runs it,
-//       so the legacy retry never downloads while you work.
+//   earshot-tts prepare [--voice NAME]
+//       Loads both runtimes and the voice once, downloading what is missing.
+//       Setup and the rebuild after an update run it, so the legacy retry
+//       never downloads while you work. Exit 3: only the legacy runtime failed.
 //   earshot-tts voices
 //       The English voices, one per line.
 //
@@ -48,8 +49,8 @@ final class Speaker {
     private var legacy: KokoroAneManager?
     private var legacyFailed = false   // try loading it once per process, not per line
 
-    func load() async throws {
-        try await v3.initialize(preloadVoices: [defaultVoice])
+    func load(voice: String = defaultVoice) async throws {
+        try await v3.initialize(preloadVoices: [defaultVoice, voice])
     }
 
     /// The first long line after a short one is slow, so warm up with both.
@@ -81,10 +82,10 @@ final class Speaker {
         try wav.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
-    /// Loads the legacy runtime too, for `prepare`.
-    func loadLegacy() async throws {
+    /// Loads the legacy runtime and the voice too, for `prepare`.
+    func loadLegacy(voice: String) async throws {
         let m = KokoroAneManager(version: .legacy)
-        try await m.initialize(preloadVoices: [defaultVoice])
+        try await m.initialize(preloadVoices: [defaultVoice, voice])
         legacy = m
     }
 }
@@ -299,12 +300,14 @@ case "serve":
     guard let socketPath = option("--socket") else { fail("Usage: earshot-tts serve --socket PATH") }
     await serve(socketPath)
 case "prepare":
+    let voice = option("--voice") ?? defaultVoice
     let speaker = Speaker()
-    do {
-        try await speaker.load()
-        try await speaker.loadLegacy()
-        print("ready")
-    } catch { fail("\(error)") }
+    do { try await speaker.load(voice: voice) } catch { fail("\(error)") }
+    do { try await speaker.loadLegacy(voice: voice) } catch {
+        FileHandle.standardError.write(Data("\(error)\n".utf8))
+        exit(3)
+    }
+    print("ready")
 case "voices": KokoroAneConstants.englishVoices.forEach { print($0) }
 default: fail("Usage: earshot-tts speak|serve|voices (see the comment at the top of main.swift)")
 }
