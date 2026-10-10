@@ -1,6 +1,6 @@
 {
   "name": "earshot",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Spoken updates from Claude Code: hear when it starts, gets stuck, needs your OK, and what it got done.",
   "author": {
     "name": "Eric Lee"

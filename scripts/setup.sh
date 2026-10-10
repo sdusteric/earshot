@@ -8,6 +8,8 @@
 #   setup.sh --voice VOICE_ID       use this voice without asking
 #   setup.sh --list-voices          print voices you can use, then stop
 #   setup.sh --status               print what is set up, then stop
+#   setup.sh --auto-update          let Claude Code update Earshot by itself
+#   setup.sh --no-auto-update       turn that off again
 set -euo pipefail
 
 DIR=~/.config/earshot
@@ -36,7 +38,9 @@ while [ $# -gt 0 ]; do
     --voice) voice_arg=${2:?--voice needs a voice ID}; shift ;;
     --list-voices) mode=list ;;
     --status) mode=status ;;
-    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --auto-update) mode=autoupdate; au=true ;;
+    --no-auto-update) mode=autoupdate; au=false ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
   shift
@@ -98,6 +102,30 @@ explain() {
   esac
 }
 
+SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+
+# Auto-update is a per-user setting: the autoUpdate flag on Earshot's entry in
+# extraKnownMarketplaces, the same flag the /plugin Marketplaces toggle writes.
+if [ "$mode" = autoupdate ]; then
+  [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  jq empty "$SETTINGS" 2>/dev/null || die "$SETTINGS is not valid JSON. Fix it, then run this again."
+  jq --argjson on "$au" '
+    .extraKnownMarketplaces.earshot.source //= {source: "github", repo: "sdusteric/earshot"}
+    | .extraKnownMarketplaces.earshot.autoUpdate = $on' "$SETTINGS" > "$SETTINGS.earshot-tmp" \
+    && mv "$SETTINGS.earshot-tmp" "$SETTINGS"
+  # Claude Code's own record, which the /plugin toggle also writes.
+  KNOWN="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins}/known_marketplaces.json"
+  if jq -e '.earshot' "$KNOWN" >/dev/null 2>&1; then
+    jq --argjson on "$au" '.earshot.autoUpdate = $on' "$KNOWN" > "$KNOWN.earshot-tmp" && mv "$KNOWN.earshot-tmp" "$KNOWN"
+  fi
+  if [ "$au" = true ]; then
+    echo "Auto-update is on. Claude Code now installs new Earshot versions by itself, a few minutes after a session starts."
+  else
+    echo "Auto-update is off. To update, run: claude plugin update earshot@earshot"
+  fi
+  exit 0
+fi
+
 if [ "$mode" = list ]; then
   voices
   exit 0
@@ -110,6 +138,11 @@ if [ "$mode" = status ]; then
   [ -x "$DIR/mic-in-use" ] && say_ok "Microphone check: built" || say_ok "Microphone check: not built (Earshot won't stop when you talk)"
   [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] \
     && say_ok "/voice: on" || say_ok "/voice: off (Earshot stays quiet until you turn it on)"
+  case "$(jq -r '.extraKnownMarketplaces.earshot | if . == null then "none" elif .source.source == "directory" then "local" else (.autoUpdate // false | tostring) end' "$SETTINGS" 2>/dev/null)" in
+    true) say_ok "Auto-update: on" ;;
+    local) say_ok "Auto-update: not needed (Earshot loads from a local folder)" ;;
+    *) say_ok "Auto-update: off (turn it on: setup.sh --auto-update)" ;;
+  esac
   [ -e "$DIR/mute" ] && say_ok "Muted: yes (rm $DIR/mute to unmute)"
   exit 0
 fi

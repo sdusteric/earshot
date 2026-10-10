@@ -20,4 +20,5 @@ The setup script is `../../scripts/setup.sh` relative to this skill's base direc
 4. If the script fails, relay its message in plain words. Common cases: the plan can't use that voice (offer premade voices and go back to step 2), the key was rejected (ask them to copy it again), or out of credits.
 5. When it succeeds the user hears a test line. Tell them to copy something else over the key on their clipboard.
 6. Ask whether they want dictation sent automatically when they release Space. If yes, set `voice.autoSubmit` to `true` in `~/.claude/settings.json`, keeping every other setting as it is.
-7. Tell them to run `/voice` and hold Space to talk. Earshot only speaks while `/voice` is on. To mute it for a while: `touch ~/.config/earshot/mute`; to unmute: `rm ~/.config/earshot/mute`.
+7. Ask whether Earshot should update itself (recommended: yes). Claude Code leaves auto-update off for plugins outside Anthropic's own marketplaces, so without this the user keeps the version they installed. If yes, run `bash SETUP --auto-update`. If the status from step 1 says auto-update is not needed (a local folder install), skip this step.
+8. Tell them to run `/voice` and hold Space to talk. Earshot only speaks while `/voice` is on. To mute it for a while: `touch ~/.config/earshot/mute`; to unmute: `rm ~/.config/earshot/mute`.

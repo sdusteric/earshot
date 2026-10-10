@@ -48,7 +48,8 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 2. Run `/earshot:setup`. Claude asks you to choose a voice.
 3. Copy your ElevenLabs API key to the clipboard. Tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
 4. Listen for the test line. When you hear it, the setup is complete.
-5. Run `/voice`. Hold Space to talk.
+5. Claude asks if Earshot can update itself. Answer yes to get new versions automatically.
+6. Run `/voice`. Hold Space to talk.
 
 ### Install with a terminal
 
@@ -94,6 +95,12 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 | Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
 
 ## Update
+
+If you turned on auto-update during setup, you do not need to do anything. Claude Code installs new versions a few minutes after a session starts, then shows `Plugin updated: earshot`.
+
+To turn on auto-update later, run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --auto-update`. You can also use `/plugin`, then **Marketplaces**, then **earshot**, then **Enable auto-update**.
+
+To update by hand:
 
 1. In a terminal, run these two commands:
 
