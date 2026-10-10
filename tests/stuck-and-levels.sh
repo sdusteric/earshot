@@ -6,6 +6,14 @@
 S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
 OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_STATE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
 printf 'EARSHOT_KEY=sk_test\nEARSHOT_VOICE=test\n' > "$EARSHOT_CONF"
+# A fake mic helper, so a real call on this Mac cannot change the results.
+# mic 0 = an app is capturing, mic 1 = free, mic 2 = busy but the app is unknown.
+MICST=$(mktemp); echo 1 > "$MICST"
+export EARSHOT_MIC=$(mktemp) EARSHOT_POLL_SECS=0.1
+printf '#!/bin/bash\nexit $(cat "%s")\n' "$MICST" > "$EARSHOT_MIC"; chmod +x "$EARSHOT_MIC"
+mic() { echo "$1" > "$MICST"; }
+HELD=$EARSHOT_STATE_DIR/held
+held_count() { cat "$HELD" 2>/dev/null | grep -c -- "$1"; }   # 0 when nothing is held
 P=$(mktemp -d)/billing-service; mkdir -p "$P"; git -C "$P" init -q
 pass=0; fail=0
 hook() { # hook <mode> <session> <json-extra>
@@ -125,6 +133,29 @@ style_says "styles keep the 25 word cap" cheeky 1 "25 words at most"
 style_says "unknown style falls back to plain" loud 1 "the way a coworker talks out loud: casual"
 : > "$OUT"
 
+echo "Holding lines while the mic is busy"
+done_line() { hook stop "$1" "$(jq -nc --arg m "$2" '{last_assistant_message: ("Done.\n🗣 " + $m)}')"; }
+held_check() { # held_check <name> <expected count> <pattern>
+  local got; got=$(held_count "$3")
+  if [ "$got" = "$2" ]; then pass=$((pass + 1)); echo "  ok    $1"; else fail=$((fail + 1)); echo "  FAIL  $1 (held $got, expected $2)"; fi
+}
+rm -f "$HELD"; mic 0
+done_line h1 "Fixed the rounding bug."
+check "mic busy: the finished line is not spoken yet" 0 "rounding"
+held_check "mic busy: the finished line waits in the queue" 1 "rounding"
+hook notify h2 '{"notification_type":"permission_prompt"}'
+held_check "mic busy: needs-your-OK is held as need" 1 $'\037need\037'
+EARSHOT_BEAT_SECS=0 bash_ok h3 "echo hi" "hi"
+held_check "mic busy: progress updates are dropped, not held" 0 "Still on"
+check "mic busy: progress updates are not spoken either" 0 "Still on"
+mic 1; done_line h4 "Shipped the export."
+check "mic free: the line is spoken right away" 1 "Shipped the export"
+mic 2; done_line h5 "Old Mac line."
+check "mic busy but the app is unknown: spoken, not held" 1 "Old Mac line"
+mic 0; EARSHOT_HOLD_ON_MIC=off done_line h6 "Hold is off."
+check "EARSHOT_HOLD_ON_MIC=off: spoken while the mic is busy" 1 "Hold is off"
+mic 1; rm -f "$HELD"; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
-rm -f "$OUT" "$EARSHOT_CONF"
+rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

@@ -37,55 +37,82 @@ mic_busy() { mic_state; [ $? != 1 ]; }
 lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
 upper_first() { printf '%s%s' "$(tr '[:lower:]' '[:upper:]' <<<"${1:0:1}")" "${1:1}"; }
 
-# tell <tier> "<line>": speak only if EARSHOT_LEVEL includes the tier.
-#   alert  needs you, might be stuck, failures, the final summary   every level
-#   beat   "still on it" progress updates                           normal, all
-#   ack    "On it" when your prompt arrives                         all
+# tell <kind> "<line>": speak only if EARSHOT_LEVEL includes the kind.
+#   need   waiting on you: a permission prompt, a question, reminders   every level
+#   alert  might be stuck, something broke                              every level
+#   done   the finished line                                            every level
+#   beat   "still on it" progress updates                               normal, all
+#   ack    "On it" when your prompt arrives                             all
 tell() {
   case "$1:$LEVEL" in
-    alert:*|beat:normal|beat:all|ack:all) say "$2" ;;
+    need:*|alert:*|done:*|beat:normal|beat:all|ack:all) say "$2" "$1" "$sid" ;;
   esac
 }
 
+# say "<line>" [kind] [session]: speaks in the background, so hooks return at
+# once. Tests set EARSHOT_DRYRUN, which makes it wait.
 say() {
-  # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
-  [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
-  (
-    asked=$(date +%s)
-    out="$CACHE/$(printf '%s' "$MODEL $VOICE $1" | md5 -q).mp3"
-    if [ ! -s "$out" ]; then
-      # The key goes in through stdin and the text through a file, so neither
-      # shows up in the process list. A unique download file keeps two
-      # sessions from writing the same file.
-      dl=$(mktemp "$CACHE/dl.XXXXXX") && body=$(mktemp "$STATE/body.XXXXXX") || exit
-      jq -n --arg t "$1" --arg m "$MODEL" '{text: $t, model_id: $m}' > "$body"
-      code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s --connect-timeout 5 --max-time 20 -w '%{http_code}' -o "$dl" \
-        "https://api.elevenlabs.io/v1/text-to-speech/$VOICE" \
-        -H @- -H 'Content-Type: application/json' --data-binary @"$body")
-      ok=$?
-      rm -f "$body"
-      # A dropped connection can still report 200, so curl must succeed too.
-      if [ "$ok" != 0 ] || [ "$code" != 200 ]; then
-        echo "$(date '+%F %T') HTTP $code curl $ok: $(head -c 300 "$dl" 2>/dev/null)" >> "$LOG"
-        rm -f "$dl"
-        out=/System/Library/Sounds/Basso.aiff   # the error tone waits its turn too
-      else
-        mv "$dl" "$out"
-      fi
-    fi
-    # All sessions share one speaker, so lines take turns: a line waits for
-    # the one playing to finish, and is dropped after a minute in the queue.
-    # -k keeps the lock file, so a new line cannot lock a fresh copy of it.
-    lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked"
-  ) >/dev/null 2>&1 &
+  if [ -n "$EARSHOT_DRYRUN" ]; then speak "$1" "${2:-alert}" "$3"
+  else speak "$1" "${2:-alert}" "$3" </dev/null >/dev/null 2>&1 &
+  fi
 }
 
-# play <file> <asked>: plays one line while it holds the speaker.
+HELD=$STATE/held   # lines held while an app uses the mic: time, session, kind, text
+
+# hold <kind> "<line>" <session>: keeps a line for the catch-up after the call
+# and starts the watcher. Progress updates and "On it" are stale by then.
+hold() {
+  case "$1" in need|alert|done) ;; *) return ;; esac
+  printf '%s\037%s\037%s\037%s\n' "$(date +%s)" "$3" "$1" "$(printf '%s' "$2" | tr -d '\037\n')" \
+    | lockf -k "$HELD.lock" sh -c 'cat >> "$1"' _ "$HELD"
+  # One watcher at a time: a second one gives up at once.
+  [ -n "$EARSHOT_DRYRUN" ] || ( lockf -t 0 -k "$STATE/release.lock" bash "$0" release ) </dev/null >/dev/null 2>&1 &
+}
+
+# speak "<line>" <kind> <session>: holds the line while an app uses the mic,
+# or plays it. It returns when the line has played.
+speak() {
+  local asked out dl body code ok
+  if [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
+  # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
+  [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
+  asked=$(date +%s)
+  out="$CACHE/$(printf '%s' "$MODEL $VOICE $1" | md5 -q).mp3"
+  if [ ! -s "$out" ]; then
+    # The key goes in through stdin and the text through a file, so neither
+    # shows up in the process list. A unique download file keeps two
+    # sessions from writing the same file.
+    dl=$(mktemp "$CACHE/dl.XXXXXX") && body=$(mktemp "$STATE/body.XXXXXX") || return
+    jq -n --arg t "$1" --arg m "$MODEL" '{text: $t, model_id: $m}' > "$body"
+    code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s --connect-timeout 5 --max-time 20 -w '%{http_code}' -o "$dl" \
+      "https://api.elevenlabs.io/v1/text-to-speech/$VOICE" \
+      -H @- -H 'Content-Type: application/json' --data-binary @"$body")
+    ok=$?
+    rm -f "$body"
+    # A dropped connection can still report 200, so curl must succeed too.
+    if [ "$ok" != 0 ] || [ "$code" != 200 ]; then
+      echo "$(date '+%F %T') HTTP $code curl $ok: $(head -c 300 "$dl" 2>/dev/null)" >> "$LOG"
+      rm -f "$dl"
+      out=/System/Library/Sounds/Basso.aiff   # the error tone waits its turn too
+    else
+      mv "$dl" "$out"
+    fi
+  fi
+  # All sessions share one speaker, so lines take turns: a line waits for
+  # the one playing to finish, and is dropped after a minute in the queue.
+  # -k keeps the lock file, so a new line cannot lock a fresh copy of it.
+  lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked" "$2" "$1" "$3"
+}
+
+# play <file> <asked> <kind> <line> <session>: plays one line while it holds the speaker.
 play() {
   # You talked over an earlier line, so the lines queued behind it are dropped too.
   [ "$(stat -f %m "$STATE/hushed" 2>/dev/null || echo 0)" -ge "$2" ] && return
-  # Stop when you start talking. A mic that was already on (e.g. Voice
-  # Control listening for a wake word) does not count.
+  # A call started while this line waited for the speaker: keep it for later.
+  # Its audio is cached, so the catch-up does not download it again.
+  if [ "$HOLD" = on ] && mic_state; then hold "$3" "$4" "$5"; return; fi
+  # Stop when you start talking. A mic that was already on (an app the helper
+  # cannot name, or holding is off) does not count.
   mic_busy && mic_was_on=1
   afplay "$1" & pid=$!
   while kill -0 $pid 2>/dev/null; do
@@ -95,7 +122,7 @@ play() {
 }
 
 [ "$1" = say ] && { say "$2"; exit 0; }
-[ "$1" = play ] && { play "$2" "$3"; exit 0; }
+[ "$1" = play ] && { play "$2" "$3" "$4" "$5" "$6"; exit 0; }
 
 # --- Waiting on you: permission prompts and questions -------------------------
 # A wait file per session holds: token, kind (permission|question), project,
@@ -108,6 +135,7 @@ wait_file() { echo "$STATE/wait-$1"; }
 # remind <session> <token> <step>: a timer step. It runs this script again, so
 # the /voice and mute checks above apply at the moment it speaks.
 if [ "$1" = remind ]; then
+  sid=$2
   wf=$(wait_file "$2")
   { read -r token; read -r kind; read -r proj; read -r what; read -r transcript; } 2>/dev/null < "$wf" || exit 0
   [ "$token" = "$3" ] || exit 0
@@ -118,9 +146,9 @@ if [ "$1" = remind ]; then
     rm -f "$wf"; exit 0
   fi
   if [ "$4" = first ]; then
-    tell alert "Hey, $proj has a question for you."
+    tell need "Hey, $proj has a question for you."
   else
-    tell alert "It's been $4 minute$([ "$4" = 1 ] || echo s). $(upper_first "$proj") is still waiting on you."
+    tell need "It's been $4 minute$([ "$4" = 1 ] || echo s). $(upper_first "$proj") is still waiting on you."
   fi
   exit 0
 fi
@@ -388,8 +416,8 @@ notify)
   # Notification permission_prompt: the prompt has waited about 6 seconds.
   { read -r _; read -r kind; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
   [ "$kind" = question ] && exit 0
-  if [ -n "$what" ]; then tell alert "Hey, $who needs your OK $what."
-  else tell alert "Hey, $who needs your OK before it keeps going."
+  if [ -n "$what" ]; then tell need "Hey, $who needs your OK $what."
+  else tell need "Hey, $who needs your OK before it keeps going."
   fi
   ;;
 idle)
@@ -398,7 +426,7 @@ idle)
   [ -f "$transcript" ] || exit 0
   last=$(last_text \
     | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
-  case "$last" in *'?') tell alert "Hey, $who is still waiting on your answer." ;; esac
+  case "$last" in *'?') tell need "Hey, $who is still waiting on your answer." ;; esac
   ;;
 stop)
   clear_wait
@@ -419,7 +447,7 @@ stop)
     | awk '{for (i = 1; i <= NF && i <= 40; i++) printf "%s%s", $i, (i < NF && i < 40 ? " " : "")}')
   # With other sessions open, say whose summary it is.
   [ -n "$line" ] && [ "$SESSION_NAME" != never ] && { [ "$others" -gt 0 ] || [ "$SESSION_NAME" = always ]; } && line="From $who: $line"
-  [ -n "$line" ] && tell alert "$line"
+  [ -n "$line" ] && tell done "$line"
   ;;
 fail)
   clear_wait
