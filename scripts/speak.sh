@@ -25,6 +25,7 @@ fi
 
 MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
 BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
+LONG_MAX=${EARSHOT_LONG_MAX_SECS:-7200}   # updates during one command stop after 2 hours
 LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
 LEVEL=${EARSHOT_LEVEL:-normal}            # quiet | normal | all (see tell)
 STYLE=${EARSHOT_STYLE:-plain}             # plain | upbeat | cheeky: tone of the finished line
@@ -278,6 +279,7 @@ if [ "$1" = rollcall ]; then
       failed) r=1; text="$Name hit an error." ;;
       working)
         r=2; start=$since; read -r start _ 2>/dev/null < "$STATE/turn-$s"
+        case "$start" in ''|0|*[!0-9]*) start=$now ;; esac
         m=$(( (now - start) / 60 ))
         case "$m" in 0) text="$Name is working, just started." ;; 1) text="$Name is working, 1 minute in." ;; *) text="$Name is working, $m minutes in." ;; esac ;;
       done)
@@ -304,19 +306,26 @@ if [ "$1" = rollcall ]; then
   exit 0
 fi
 
-# watch_command <session> <token>: while the same command runs, says an update
-# each time one is due, at most once a second. The command's PostToolUse
-# removes the running file and stops it.
+# watch_command <session> <token> <transcript>: while the same command runs,
+# says an update each time one is due, at most once a second. The command's
+# PostToolUse removes the running file and stops it.
 watch_command() {
-  local sid=$1 token=$2 self=$0
+  local sid=$1 token=$2 tr=$3 self=$0
   (
+    began=$(date +%s)
     while :; do
       read -r start beat _ < "$STATE/turn-$sid" 2>/dev/null || exit 0
       wait=$((beat + BEAT_SECS - $(date +%s))); [ "$wait" -lt 1 ] && wait=1
       sleep "$wait"
       [ "$(head -1 "$STATE/running-$sid" 2>/dev/null)" = "$token" ] || exit 0
+      # The turn ended, or the command already has a result: you said no or
+      # pressed Esc, which fires no hook. Either way the command is over.
+      [ -f "$STATE/turn-$sid" ] || exit 0
+      [ -f "$tr" ] && tail -c 262144 "$tr" | grep -F "\"tool_use_id\":\"$token\"" | grep -qF '"type":"tool_result"' && exit 0
       t=$(date +%s)
-      bash "$self" longbeat "$sid" "$token" $((t - start))
+      [ $((t - began)) -ge "$LONG_MAX" ] && exit 0
+      # While a permission prompt waits, the command has not started yet.
+      [ -f "$STATE/wait-$sid" ] || bash "$self" longbeat "$sid" "$token" $((t - start))
       [ -f "$STATE/turn-$sid" ] && echo "$start $t" > "$STATE/turn-$sid"
     done
   ) </dev/null >/dev/null 2>&1 &
@@ -541,8 +550,9 @@ progress() {
 
 case "$1" in
 begin)
-  # SessionStart: registered above, nothing to say.
-  set_status open
+  # SessionStart: registered above, nothing to say. It also fires after a
+  # compact or resume, so a status that is already there stays.
+  [ -f "$status" ] || set_status open
   ;;
 end)
   # SessionEnd: this session no longer counts as open.
@@ -553,7 +563,7 @@ end)
 start)
   stop_watch
   # /earshot:rollcall speaks for itself, so this turn gets no 🗣 line.
-  case "$(jq -r '.prompt // empty' <<<"$input")" in /earshot:rollcall*) exit 0 ;; esac
+  case "$(jq -r '.prompt // empty' <<<"$input")" in /earshot:rollcall*|/rollcall*) exit 0 ;; esac
   clear_wait
   set_status working
   # Few fixed phrases, so all of them come from the cache after the first use.
@@ -579,7 +589,10 @@ EOF
 tool)
   stop_watch
   clear_wait
-  [ "$(head -1 "$status" 2>/dev/null)" = needs ] && set_status working
+  # You answered: back to work, or still stuck if it was before the prompt.
+  if [ "$(head -1 "$status" 2>/dev/null)" = needs ]; then
+    if [ -s "$warned" ]; then set_status stuck; else set_status working; fi
+  fi
   progress
   # The end of the result is enough to tell results apart, and hashing less
   # keeps big Edit and Write payloads fast.
@@ -589,7 +602,10 @@ toolfail)
   # PostToolUseFailure: a Bash command that exits non-zero lands here, not in tool.
   stop_watch
   clear_wait
-  [ "$(head -1 "$status" 2>/dev/null)" = needs ] && set_status working
+  # You answered: back to work, or still stuck if it was before the prompt.
+  if [ "$(head -1 "$status" 2>/dev/null)" = needs ]; then
+    if [ -s "$warned" ]; then set_status stuck; else set_status working; fi
+  fi
   [ "$(jq -r '.is_interrupt // false' <<<"$input")" = true ] && exit 0
   progress
   call=$(jq -c '[.tool_name, .tool_input]' <<<"$input")
@@ -641,10 +657,11 @@ pretool)
   [ "$(jq -r '.tool_input.run_in_background // false' <<<"$input")" = true ] && exit 0
   case "$LEVEL" in normal|all) ;; *) exit 0 ;; esac
   stop_watch
-  [ -f "$state" ] || echo "$now $now" > "$state"
+  # No turn file: this async hook landed after the turn already ended.
+  [ -f "$state" ] || exit 0
   token=$(jq -r '.tool_use_id // empty' <<<"$input"); [ -n "$token" ] || token="$now-$$"
-  printf '%s\n%s\n%s\n' "$token" "$on" "$(jq -r '.tool_input.description // empty' <<<"$input")" > "$running"
-  watch_command "$sid" "$token"
+  printf '%s\n%s\n%s\n' "$token" "$on" "$(jq -r '.tool_input.description // empty | gsub("[\r\n]+"; " ")' <<<"$input")" > "$running"
+  watch_command "$sid" "$token" "$transcript"
   ;;
 notify)
   # Notification permission_prompt: the prompt has waited about 6 seconds.
@@ -668,6 +685,8 @@ stop)
   # Your own cache is not cleared at restart like /tmp. Drop lines unused for a
   # month and downloads that never finished.
   find "$CACHE" -type f \( -name '*.mp3' -mtime +30 -o -name 'dl.*' -mmin +10 \) -delete 2>/dev/null
+  # Sessions that quit without SessionEnd leave files; 6 hours quiet means gone.
+  find "$STATE" -maxdepth 1 -type f \( -name 'status-*' -o -name 'running-*' -o -name 'wait-*' \) -mmin +360 -delete 2>/dev/null
   rm -f "$state" "$hist" "$errs" "$warned"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then

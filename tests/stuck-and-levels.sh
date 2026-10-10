@@ -287,6 +287,23 @@ new lc5; pre lc5 t5; sleep 2.5
 got=$(grep -c "Latest step" "$OUT")
 if [ "$got" -le 3 ]; then pass=$((pass + 1)); echo "  ok    EARSHOT_BEAT_SECS=0: at most one update a second"; else fail=$((fail + 1)); echo "  FAIL  EARSHOT_BEAT_SECS=0: $got updates in 2.5 s"; fi
 for s in lc1 lc2 lc3 lc4 lc5; do hook end "$s" '{}'; done; : > "$OUT"
+export EARSHOT_BEAT_SECS=1
+new lc6; hook stop lc6 '{}'; : > "$OUT"; pre lc6 t6; sleep 2.5
+check "a command that starts after the turn ended gets no updates" 0 "Latest step"
+[ -e "$EARSHOT_STATE_DIR/turn-lc6" ] && { fail=$((fail + 1)); echo "  FAIL  pretool recreated the turn file"; } || { pass=$((pass + 1)); echo "  ok    pretool does not recreate an ended turn"; }
+TL=$(mktemp); new lc7
+hook pretool lc7 "$(jq -nc --arg t "$TL" '{tool_name: "Bash", tool_use_id: "t7", transcript_path: $t, tool_input: {command: "rm -rf build", description: "Delete build"}}')"
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t7","content":"The user doesn'"'"'t want to proceed"}]}}' >> "$TL"; sleep 2.5
+check "a rejected command (result in the transcript, no hook) gets no updates" 0 "Latest step"
+new lc8; pre lc8 t8; EARSHOT_REMIND_UNIT=100 hook ask lc8 '{"tool_name":"Bash","tool_input":{"command":"x","description":"Delete build"}}'; : > "$OUT"; sleep 2.5
+check "no updates while the command waits for your OK" 0 "Latest step"
+new lc9; EARSHOT_LONG_MAX_SECS=2 pre lc9 t9; sleep 4.5; : > "$OUT"; sleep 2
+check "updates stop after the cap" 0 "Latest step"
+new lc10; hook pretool lc10 '{"tool_name":"Bash","tool_use_id":"t10","tool_input":{"command":"x","description":"Line one\nline two"}}'
+pidline=$(sed -n 4p "$EARSHOT_STATE_DIR/running-lc10")
+case "$pidline" in ''|*[!0-9]*) fail=$((fail + 1)); echo "  FAIL  a two-line description moved the timer PID: $pidline" ;; *) pass=$((pass + 1)); echo "  ok    a two-line description keeps the timer PID on line 4" ;; esac
+export EARSHOT_BEAT_SECS=0
+for s in lc1 lc2 lc3 lc4 lc5 lc6 lc7 lc8 lc9 lc10; do hook end "$s" '{}'; done; rm -f "$TL"; : > "$OUT"
 
 echo "The log"
 LOGF=$EARSHOT_STATE_DIR/earshot.log; rm -f "$LOGF" "$HELD"
@@ -346,6 +363,26 @@ printf '%s\n%s\n' "billing service" "Refund rounding" > "$EARSHOT_LIVE_DIR/n2"
 printf '%s\n%s\n' "docs site" "Broken links" > "$EARSHOT_LIVE_DIR/n3"
 : > "$OUT"; roll
 order_check "two sessions in one project are told apart by title" "Three sessions. Docs site is open. The refund rounding session in billing service is open. The tax export session in billing service is open.|"
+printf '%s\n%s\n%s\n%s\n' working "" "docs site" "" > "$EARSHOT_STATE_DIR/status-n3"
+: > "$OUT"; roll
+at_least "a damaged status file reads as just started" 1 "Docs site is working, just started"
+rm -f "$EARSHOT_LIVE_DIR"/* "$EARSHOT_STATE_DIR/status-n3"
+at start b1 "$P" '{}'; at begin b1 "$P" '{"source":"compact"}'
+st=$(head -1 "$EARSHOT_STATE_DIR/status-b1")
+[ "$st" = working ] && { pass=$((pass + 1)); echo "  ok    compacting a working session keeps it working"; } || { fail=$((fail + 1)); echo "  FAIL  after compact the status is $st"; }
+at start b2 "$P" '{}'; for i in 1 2 3; do at toolfail b2 "$P" '{"tool_name":"Bash","tool_input":{"command":"make"},"error":"Exit code 2\nmake: *** [all] Error 2"}'; done
+EARSHOT_REMIND_UNIT=100 at ask b2 "$P" '{"tool_name":"Bash","tool_input":{"command":"x"}}'; at tool b2 "$P" '{"tool_name":"Bash","tool_input":{"command":"x"},"tool_response":{}}'
+st=$(head -1 "$EARSHOT_STATE_DIR/status-b2")
+[ "$st" = stuck ] && { pass=$((pass + 1)); echo "  ok    stuck lasts until the turn ends"; } || { fail=$((fail + 1)); echo "  FAIL  stuck became $st"; }
+out=$(jq -nc --arg cwd "$P" '{session_id: "b1", cwd: $cwd, prompt: "/rollcall"}' | bash "$S" start)
+case "$out" in *🗣*) fail=$((fail + 1)); echo "  FAIL  bare /rollcall still asks for a 🗣 line" ;; *) pass=$((pass + 1)); echo "  ok    bare /rollcall does not ask for a 🗣 line" ;; esac
+printf 'x\n' > "$EARSHOT_STATE_DIR/status-gone"; touch -t 202601010000 "$EARSHOT_STATE_DIR/status-gone"
+at stop b1 "$P" '{}'
+[ -e "$EARSHOT_STATE_DIR/status-gone" ] && { fail=$((fail + 1)); echo "  FAIL  an old status file was kept"; } || { pass=$((pass + 1)); echo "  ok    status files of sessions gone for 6 hours are removed"; }
+at end b1 "$P" '{}'; at end b2 "$P" '{}'
+SK="$(dirname "$S")/../skills/rollcall/SKILL.md"
+rule=$(sed -n 's/^allowed-tools: Bash(\(.*\))$/\1/p' "$SK"); body=$(sed -n 's/^!`\(.*\)`$/\1/p' "$SK")
+[ -n "$rule" ] && [ "$rule" = "$body" ] && { pass=$((pass + 1)); echo "  ok    the rollcall command is pre-approved by its own allowed-tools rule"; } || { fail=$((fail + 1)); echo "  FAIL  allowed-tools ($rule) does not match the command ($body)"; }
 rm -f "$EARSHOT_LIVE_DIR"/*; unset EARSHOT_LIVE_DIR; : > "$OUT"
 
 rm -rf "$T" "$EARSHOT_STATE_DIR"

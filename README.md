@@ -148,7 +148,7 @@ Ask what every open session is doing, and hear the ones that need you first:
 The roll call plays even when Earshot is muted, `/voice` is off, or you are on a call, because you asked for it.
 
 - **In a session:** run `/earshot:rollcall`.
-- **With a hotkey (no Claude turn, instant):**
+- **With a hotkey (no Claude turn, about a second):**
   1. Open the Shortcuts app and make a new shortcut.
   2. Add the action **Run Shell Script** with this script:
      `bash ~/.claude/plugins/marketplaces/earshot/scripts/speak.sh rollcall`
@@ -252,6 +252,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
 - During one long command, Earshot gives "still on it" updates for shell commands only. A long MCP call or web fetch is silent until it ends.
+- No hook fires when you approve a permission prompt. Until that command ends, Earshot still treats the session as waiting on you: the roll call says it needs your OK, and the command gets no "still on it" updates.
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
