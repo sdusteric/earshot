@@ -176,5 +176,29 @@ mkdir -p "$T/current"; cp "$EARSHOT_TTS" "$T/current/earshot-tts"; src_hash > "$
 out=$(EARSHOT_KOKORO_DIR=$T/current bash "$B" 2>&1)
 is "build-tts.sh skips a helper that is already current" "$(grep -c 'up to date' <<<"$out")" 1
 
+echo "Can this Mac run Kokoro"
+mkdir -p "$T/fake"
+fake() { printf '#!/bin/bash\n%s\n' "$2" > "$T/fake/$1"; chmod +x "$T/fake/$1"; }
+support() { PATH=$T/fake:$PATH bash "$SETUP" --status 2>/dev/null | sed -n 's/^  Kokoro on this Mac: //p'; }
+rm -f "$T"/fake/*
+is "an Apple Silicon Mac on macOS 15+ with the tools: yes" "$(support)" "yes"
+conf; is "status says when nothing is set up yet" "$(bash "$SETUP" --status 2>/dev/null | grep -c 'Engine: kokoro (not set up yet)')" 1
+fake uname 'echo x86_64'
+is "an Intel Mac: no" "$(support)" "no, it needs a Mac with Apple Silicon"
+rm -f "$T"/fake/*; fake sw_vers 'echo 14.6'
+is "macOS 14: no" "$(support)" "no, it needs macOS 15 or later"
+rm -f "$T"/fake/*; fake xcode-select 'exit 2'
+is "no Command Line Tools: not yet" "$(support)" "not yet, it needs the Command Line Tools (run xcode-select --install)"
+fake uname 'echo x86_64'; out=$(PATH=$T/fake:$PATH setup_run --engine kokoro --voice af_heart); code=$?
+is "Kokoro setup on an Intel Mac stops before building, and says why" "$code $(grep -c 'Building' <<<"$out") $(grep -c 'Apple Silicon' <<<"$out")" "1 0 1"
+is "that message reads cleanly" "$(grep -c "Kokoro can't run on this Mac: it needs a Mac with Apple Silicon" <<<"$out")" 1
+st=$(PATH=$T/fake:$PATH EARSHOT_KOKORO_DIR=$T/none bash "$SETUP" --status 2>/dev/null)
+is "status on an Intel Mac does not suggest building Kokoro" "$(grep -c 'run setup.sh --engine kokoro' <<<"$st") $(grep -c 'Kokoro helper: not available on this Mac' <<<"$st")" "0 1"
+rm -f "$T"/fake/*
+mkdir -p "$T/k2"; cp "$EARSHOT_TTS" "$T/k2/earshot-tts"; fake xcode-select 'exit 2'
+out=$(HOME=$T/home PATH=$T/fake:$T/bin:$PATH EARSHOT_KOKORO_DIR=$T/k2 bash "$(dirname "$S")/build-tts.sh" 2>&1)
+is "build-tts.sh notices missing Command Line Tools (the swift shim always exists)" "$(grep -c 'Command Line Tools' <<<"$out")" 1
+rm -f "$T"/fake/*
+
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

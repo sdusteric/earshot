@@ -10,7 +10,9 @@ BUILD=$HOME/.config/earshot/kokoro-build   # SwiftPM's folder, reused by rebuild
 fail() { echo "$*"; exit 1; }
 [ "$(uname -m)" = arm64 ] || fail "Kokoro needs a Mac with Apple Silicon."
 [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ] || fail "Kokoro needs macOS 15 or later."
-command -v swift >/dev/null || fail "swift not found. Install the Command Line Tools: xcode-select --install"
+# /usr/bin/swift exists even without the tools (it offers to install them), so
+# ask xcode-select whether they are there.
+xcode-select -p >/dev/null 2>&1 || fail "Kokoro needs the Command Line Tools. Install them: xcode-select --install"
 # Already built from these sources: nothing to do. Setup and the background
 # rebuild both check first, but either may have waited for the other.
 hash=$(cat "$ROOT/tts/Package.swift" "$ROOT/tts/Package.resolved" "$ROOT/tts/Sources/earshot-tts/main.swift" | md5 -q)

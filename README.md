@@ -69,6 +69,18 @@ When a task fails or Claude needs an answer from you, the finished line is plain
 
 Cost: nothing with Kokoro. With ElevenLabs v4 Turbo, about $8 a month at roughly 100 spoken lines a day.
 
+### Kokoro or ElevenLabs?
+
+| | Kokoro (default) | ElevenLabs |
+|---|---|---|
+| Sound | Clear and natural, a little flat | The most natural and expressive. Listeners pick it over Kokoro in about 4 of 5 blind votes. |
+| Cost | Free | About $8 a month |
+| Privacy | Lines stay on your Mac | Each line goes to ElevenLabs |
+| Speed for a new line | About 0.1 to 0.3 s | About 0.7 to 1.1 s |
+| Needs | Apple Silicon, macOS 15 or later, the Command Line Tools | An API key and internet |
+
+The blind votes are from the [Artificial Analysis Speech Arena](https://artificialanalysis.ai/text-to-speech/leaderboard) in October 2026: Eleven v4 Turbo ranked first of 96 models, and Kokoro about 50th. You can switch at any time. See [Change the voice](#change-the-voice).
+
 ## Requirements
 
 - A Mac.
@@ -87,13 +99,11 @@ Cost: nothing with Kokoro. With ElevenLabs v4 Turbo, about $8 a month at roughly
    /plugin install earshot@earshot
    ```
 
-2. Run `/earshot:setup`. Claude asks you to choose Kokoro or ElevenLabs, then a voice.
-3. Kokoro: wait about 2 minutes while setup builds the helper and downloads the voice. ElevenLabs: copy your API key to the clipboard and tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
-4. Listen for the test line. When you hear it, the setup is complete.
-5. Claude asks if Earshot can update itself. Answer yes to get new versions automatically.
-6. Claude asks how much Earshot should say. Choose `quiet`, `normal`, or `all`.
-7. Claude asks for a style. Choose `plain`, `upbeat`, or `cheeky`.
-8. Run `/voice`. Hold Space to talk.
+2. Run `/earshot:setup`. Claude asks you to choose Kokoro or ElevenLabs, then a voice. If your Mac can't run Kokoro, Claude says why and offers ElevenLabs or the Mac's own voice.
+3. Claude asks a few more questions together: whether to send dictation when you release Space, whether Earshot can update itself (answer yes to get new versions automatically), how much it should say (`quiet`, `normal`, or `all`), and the style (`plain`, `upbeat`, or `cheeky`).
+4. Kokoro: wait while setup builds the helper (about 2 minutes) and downloads the voice. You can walk away. ElevenLabs: copy your API key to the clipboard and tell Claude when you copied it. The setup script reads the key from the clipboard, so the key does not go into the chat.
+5. Listen for the test line. When you hear it, the setup is complete.
+6. Run `/voice`. Hold Space to talk.
 
 ### Install with a terminal
 
@@ -265,6 +275,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 |---|---|
 | You hear no voice and no beep | Run `setup.sh --status`. Make sure that `/voice` is on. Make sure that the file `~/.config/earshot/mute` does not exist. |
 | You hear the Mac's own voice or a beep | Run `tail "$(getconf DARWIN_USER_TEMP_DIR)earshot/earshot.log"`. A `kokoro:` line says why Kokoro failed. To rebuild it, run `setup.sh --engine kokoro`. For ElevenLabs, error 401 means that the key is not correct, and error 404 means that the voice ID is not correct. |
+| Setup says Kokoro can't run here | Kokoro needs a Mac with Apple Silicon and macOS 15 or later. On such a Mac, install the Command Line Tools with `xcode-select --install`, then run setup again. Or use ElevenLabs. `setup.sh --status` shows what is missing on the `Kokoro on this Mac` line. |
 | Setup can't build the Kokoro helper | Run `xcode-select --install`, then setup again. The details are in `~/.config/earshot/kokoro-build.log`. Or use ElevenLabs: `setup.sh --engine elevenlabs`. |
 | The script says that your plan cannot use the voice | Choose a premade voice, or upgrade your ElevenLabs plan. ElevenLabs sells separate plans for ElevenCreative, ElevenAgents, and ElevenAPI. Make sure that your plan includes API access to Text to Speech. |
 | Claude Code shows `Unknown command: /voice` | Run `/login` and sign in with a Claude.ai account. Remove `ANTHROPIC_API_KEY` from your environment. |

@@ -108,6 +108,14 @@ kokoro_voices() {
 }
 say_voices() { say -v '?' | grep -E ' en_[A-Z]{2} ' | sed -E 's/ +en_[A-Z]{2} .*//'; }
 
+# kokoro_support: why Kokoro can't run on this Mac, or nothing when it can.
+# build-tts.sh checks the same things before it builds.
+kokoro_support() {
+  [ "$(uname -m)" = arm64 ] || { echo "no, it needs a Mac with Apple Silicon"; return; }
+  [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ] || { echo "no, it needs macOS 15 or later"; return; }
+  xcode-select -p >/dev/null 2>&1 || echo "not yet, it needs the Command Line Tools (run xcode-select --install)"
+}
+
 # Turns an ElevenLabs error into something a person can act on.
 explain() {
   local code=$1 status msg
@@ -193,11 +201,14 @@ fi
 
 if [ "$mode" = status ]; then
   echo "Config: $CONF"
-  say_ok "Engine: $ENGINE"
+  # No engine line and no key: the default, nothing chosen yet.
+  say_ok "Engine: $ENGINE$([ -z "$EARSHOT_ENGINE" ] && [ -z "$KEY" ] && echo " (not set up yet)")"
+  why=$(kokoro_support)
   case "$ENGINE" in
     kokoro)
       say_ok "Voice: ${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}"
-      if [ -e "$TTS.stale" ]; then say_ok "Kokoro helper: out of date, its rebuild after an update failed (run setup.sh --engine kokoro)"
+      if [ "${why%%,*}" = no ]; then say_ok "Kokoro helper: not available on this Mac. Earshot uses the Mac's own voice."
+      elif [ -e "$TTS.stale" ]; then say_ok "Kokoro helper: out of date, its rebuild after an update failed (run setup.sh --engine kokoro)"
       elif [ -x "$TTS" ]; then say_ok "Kokoro helper: built"
       else say_ok "Kokoro helper: not built (run setup.sh --engine kokoro). Until then Earshot uses the Mac's own voice."; fi
       pgrep -f "$TTS serve" >/dev/null && say_ok "Kokoro: loaded" || say_ok "Kokoro: not loaded (it loads with the next session or line)"
@@ -207,6 +218,7 @@ if [ "$mode" = status ]; then
       [ -n "$VOICE" ] && say_ok "Voice: $(voice_name "$VOICE") ($VOICE)" || say_ok "Voice: not chosen" ;;
     say) say_ok "Voice: ${EARSHOT_SAY_VOICE:-the system voice}" ;;
   esac
+  say_ok "Kokoro on this Mac: ${why:-yes}"
   if [ -e "$DIR/mic-in-use.stale" ]; then say_ok "Microphone check: out of date, so Earshot doesn't wait during calls (run setup again to rebuild it)"
   elif [ -x "$DIR/mic-in-use" ]; then say_ok "Microphone check: built"
   else say_ok "Microphone check: not built (Earshot won't stop when you talk or wait while you're on a call)"; fi
@@ -326,6 +338,8 @@ setup_kokoro() {
   if [ -z "$voice_arg" ] && [ -t 0 ]; then pick_kokoro_voice; fi
   ( umask 077; mkdir -p "$STATE_DIR" )
   if ! kokoro_current; then
+    local why; why=$(kokoro_support)
+    [ -z "$why" ] || die "Kokoro can't run on this Mac: ${why#*, }. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
     echo "Building the Kokoro helper. The first build takes about 2 minutes."
     # The same lock as the rebuild that hooks start after an update, so the
     # two never write the helper at once. This waits for that one to finish.
@@ -367,7 +381,17 @@ setup_say() {
 
 # In a terminal, ask for the engine unless a flag chose it.
 pick_engine() {
-  local choice
+  local choice why
+  why=$(kokoro_support)
+  if [ "${why%%,*}" = no ]; then
+    echo "Kokoro can't run on this Mac: ${why#*, }."
+    echo "Which voice should Earshot use?"
+    echo "  1) ElevenLabs: natural voices, needs an API key, about \$8 a month$([ "$ENGINE" = elevenlabs ] && echo "  (current)")"
+    echo "  2) The Mac's own voice: free and built in, but sounds robotic$([ "$ENGINE" = say ] && echo "  (current)")"
+    read -rp "1 or 2: " choice
+    case "$choice" in 2) ENGINE=say ;; *) ENGINE=elevenlabs ;; esac
+    return
+  fi
   echo "Which voice should Earshot use?"
   echo "  1) Kokoro: free, runs on this Mac, and your lines never leave it$([ "$ENGINE" = kokoro ] && echo "  (current)")"
   echo "  2) ElevenLabs: more expressive, needs an API key, about \$8 a month$([ "$ENGINE" = elevenlabs ] && echo "  (current)")"
