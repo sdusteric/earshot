@@ -24,6 +24,11 @@ talks back with an ElevenLabs voice.
 | Claude finishes | One short line Claude writes for you, e.g. "Fixed the rounding bug, though the refund test is still flaky." |
 | Your prompt arrives (level `all` only) | "On it." |
 
+With several sessions open, you hear which one is talking. The finished line
+starts with the project, like "billing service: Fixed the rounding bug." When two
+sessions are open in the same project, Earshot adds the session's name, the one
+you see in `/resume`: "Hey, billing service, refund rounding, needs your OK."
+
 Earshot only speaks while `/voice` is on. It stops talking when you start, plays
 repeated lines from a cache, and beeps if the voice fails. Reminders stop as soon
 as you answer, including when you press Esc.
@@ -132,7 +137,7 @@ Your key and voice stay the same.
 
 ## How it works
 
-The plugin adds hooks for these events: `UserPromptSubmit`, `PreToolUse` (for
+The plugin adds hooks for these events: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse` (for
 `AskUserQuestion` only), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
 `Stop`, `StopFailure`, and `Notification` (for `permission_prompt` and
 `idle_prompt`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
@@ -151,6 +156,13 @@ When a permission prompt or a question shows, Earshot starts a timer. The timer
 speaks the reminders. Each reminder first checks that the prompt still waits. If
 you answered, the timer stops.
 
+Earshot keeps a list of open sessions in `/tmp/earshot-live`. A session that
+closes, or that is quiet for 6 hours, leaves the list. When another session is
+open, the finished line starts with the project name. When another session is
+open in the same project, Earshot also says the session's name. It reads the
+name from the session transcript: a `/rename` name first, then the name that
+Claude Code made. A new session can have no name for its first minute.
+
 When `/voice` is on, the prompt hook tells Claude to end each reply with one line
 that starts with 🗣. When Claude stops, the `Stop` hook reads that line aloud.
 Earshot does not change your `CLAUDE.md` or your `settings.json`.
@@ -167,6 +179,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | Setting | Default | What it controls |
 |---|---|---|
 | `EARSHOT_LEVEL` | `normal` | How much Earshot says: `quiet`, `normal`, or `all` |
+| `EARSHOT_SESSION_NAME` | `auto` | When to say the session's name: `auto` (only when two sessions share a project), `always`, or `never`. `never` also removes the project name from the finished line. |
 | `EARSHOT_MODEL` | `eleven_v4_turbo` | The ElevenLabs model that makes the speech |
 | `EARSHOT_BEAT_SECS` | `180` | The number of seconds between "still on it" updates |
 | `EARSHOT_LOOP_REPEATS` | `3` | The number of repeats that causes a "might be stuck" warning |

@@ -3,7 +3,7 @@
 # Nothing is spoken: EARSHOT_DRYRUN collects the lines instead.
 # Needs a saved key and /voice on, because speak.sh exits early without them.
 S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
-OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT
+OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_LIVE_DIR=$(mktemp -d)
 P=$(mktemp -d)/billing-service; mkdir -p "$P"; git -C "$P" init -q
 pass=0; fail=0
 hook() { # hook <mode> <session> <json-extra>
@@ -53,5 +53,30 @@ for lvl in quiet normal all; do
   : > "$OUT"
 done
 
-rm -f "$OUT" /tmp/earshot-{hist,errs,warned,wait}-{s,l-}* /tmp/earshot-{s,l-}*
+echo "Which session is talking"
+export EARSHOT_LEVEL=normal EARSHOT_LIVE_DIR=$(mktemp -d)
+Q=$(dirname "$P")/invoice-api; mkdir -p "$Q"; git -C "$Q" init -q
+T=$(mktemp -d)
+echo '{"type":"ai-title","aiTitle":"Refund rounding fix for EU invoices and more","sessionId":"w1"}' > "$T/w1.jsonl"
+printf '%s\n' '{"type":"ai-title","aiTitle":"Old name","sessionId":"w2"}' '{"type":"custom-title","customTitle":"Tax export","sessionId":"w2"}' > "$T/w2.jsonl"
+open_session() { hook begin "$1" "$(jq -nc --arg t "$T/$1.jsonl" --arg c "${2:-$P}" '{transcript_path: $t, cwd: $c}')"; }
+finish() { hook stop "$1" "$(jq -nc --arg t "$T/$1.jsonl" '{transcript_path: $t, last_assistant_message: "Done.\n🗣 Fixed it."}')"; }
+ping() { hook notify "$1" "$(jq -nc --arg t "$T/$1.jsonl" '{transcript_path: $t, notification_type: "permission_prompt"}')"; }
+: > "$OUT"
+open_session w1; finish w1; ping w1
+check "one session: the summary has no name" 1 "^Fixed it.$"
+open_session w9 "$Q"; finish w1; ping w1
+check "two projects: the summary says the project" 1 "^billing service: Fixed it.$"
+check "two projects: no title needed" 0 "Refund"
+open_session w2; ping w1
+check "same project: the title, 6 words at most" 1 "^Hey, billing service, Refund rounding fix for EU invoices needs your OK"
+ping w2; finish w2
+check "same project: a /rename title wins" 2 "billing service, Tax export"
+EARSHOT_SESSION_NAME=never finish w2; EARSHOT_SESSION_NAME=never ping w2
+check "EARSHOT_SESSION_NAME=never: no names" 0 "Tax export\|billing service:"
+hook end w2 '{}'; hook end w9 '{}'; finish w1
+check "closed sessions stop counting" 1 "^Fixed it.$"
+
+rm -rf "$T" "$EARSHOT_LIVE_DIR"
+rm -f "$OUT" /tmp/earshot-{hist,errs,warned,wait}-{s,l-,w}* /tmp/earshot-{s,l-,w}*
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

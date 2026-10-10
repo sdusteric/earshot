@@ -1,6 +1,6 @@
 #!/bin/bash
 # Earshot: spoken updates for Claude Code via ElevenLabs.
-# Modes: start | tool | toolfail | ask | question | notify | idle | stop | fail (hooks),
+# Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end (hooks),
 # remind (internal timer), say "<text>" (manual test)
 CONF=~/.config/earshot/config
 [ -f "$CONF" ] && . "$CONF"
@@ -90,7 +90,7 @@ if [ "$1" = remind ]; then
     rm -f "$wf"; exit 0
   fi
   if [ "$4" = first ]; then
-    tell alert "Hey, $proj has a question for you."
+    tell alert "Hey, $who has a question for you."
   else
     tell alert "Still waiting on you in $proj, $4 minute$([ "$4" = 1 ] || echo s) now."
   fi
@@ -138,10 +138,46 @@ sid=$(jq -r '.session_id' <<<"$input")
 cwd=$(jq -r '.cwd // empty' <<<"$input")
 proj=$(basename "$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")" | tr '_-' '  ')
 state="/tmp/earshot-$sid"
+transcript=$(jq -r '.transcript_path // empty' <<<"$input")
+
+# --- Which session is talking ---------------------------------------------------
+# The folder name tells sessions in different projects apart. When another open
+# session would sound the same, the session's title is added, e.g. "billing
+# service, refund rounding". The title is the name in /resume and in the Mac
+# app's session list.
+LIVE=${EARSHOT_LIVE_DIR:-/tmp/earshot-live}   # one file per open session: name, title
+SESSION_NAME=${EARSHOT_SESSION_NAME:-auto}   # auto | always | never
+
+# The session's title, at most 6 words. A /rename title wins over the generated
+# one. The transcript format is internal, so the SessionStart title is the fallback.
+session_title() {
+  local t=""
+  if [ -f "$transcript" ]; then
+    t=$(grep -h '"type":"custom-title"' "$transcript" | tail -1 | jq -r '.customTitle // empty' 2>/dev/null)
+    [ -n "$t" ] || t=$(grep -h '"type":"ai-title"' "$transcript" | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null)
+  fi
+  [ -n "$t" ] || t=$(sed -n 2p "$LIVE/$sid" 2>/dev/null)
+  awk '{for (i = 1; i <= NF && i <= 6; i++) printf "%s%s", $i, (i < NF && i < 6 ? " " : "")}' <<<"$t"
+}
+
+mkdir -p "$LIVE"
+find "$LIVE" -type f -mmin +360 -delete 2>/dev/null   # sessions quiet for 6 hours count as closed
+started=$(sed -n 2p "$LIVE/$sid" 2>/dev/null)
+[ "$1" = begin ] && started=$(jq -r '.session_title // empty' <<<"$input")
+printf '%s\n%s\n' "$proj" "$started" > "$LIVE/$sid"
+others=0; twins=0
+for f in "$LIVE"/*; do
+  [ "$f" = "$LIVE/$sid" ] || [ ! -f "$f" ] && continue
+  others=$((others + 1)); [ "$(head -1 "$f")" = "$proj" ] && twins=$((twins + 1))
+done
+who=$proj
+if [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; then
+  t=$(session_title); [ -n "$t" ] && who="$proj, $t"
+fi
 clear_wait() { rm -f "$(wait_file "$sid")"; }
 new_wait() {
   token="$now-$$-$RANDOM"
-  printf '%s\n%s\n%s\n%s\n%s\n' "$token" "$1" "$proj" "$2" "$(jq -r '.transcript_path // empty' <<<"$input")" > "$(wait_file "$sid")"
+  printf '%s\n%s\n%s\n%s\n%s\n' "$token" "$1" "$who" "$2" "$transcript" > "$(wait_file "$sid")"
 }
 
 # --- Stuck detection ------------------------------------------------------------
@@ -181,11 +217,11 @@ step() {
   h=($(cat "$hist")); n=${#h[@]}
   if [ "$n" -ge "$LOOP_REPEATS" ]; then
     for ((i = n - LOOP_REPEATS; i < n; i++)); do [ "${h[i]}" = "${h[n-1]}" ] || same=0; done
-    [ "$same" = 1 ] && ! polling && warn_once loop "Heads up, $proj keeps running the same thing over and over. It might be stuck."
+    [ "$same" = 1 ] && ! polling && warn_once loop "Heads up, $who keeps running the same thing over and over. It might be stuck."
   fi
   if [ "$n" -eq 6 ] && [ "${h[0]}" != "${h[1]}" ] && [ "${h[0]}" = "${h[2]}" ] && [ "${h[2]}" = "${h[4]}" ] \
      && [ "${h[1]}" = "${h[3]}" ] && [ "${h[3]}" = "${h[5]}" ]; then
-    warn_once pingpong "Heads up, $proj keeps going back and forth between the same two steps. It might be stuck."
+    warn_once pingpong "Heads up, $who keeps going back and forth between the same two steps. It might be stuck."
   fi
 }
 
@@ -194,7 +230,7 @@ progress() {
   [ -f "$state" ] || echo "$now $now" > "$state"
   read -r start beat _ < "$state"
   if [ $((now - beat)) -ge "$BEAT_SECS" ]; then
-    line="Still on $proj, about $(( (now - start) / 60 )) minutes in."
+    line="Still on $who, about $(( (now - start) / 60 )) minutes in."
     desc=$(jq -r '.tool_input.description // empty' <<<"$input")
     [ -n "$desc" ] && line="$line Latest step: $(lower_first "$desc")."
     tell beat "$line"
@@ -204,6 +240,14 @@ progress() {
 }
 
 case "$1" in
+begin)
+  # SessionStart: registered above, nothing to say.
+  ;;
+end)
+  # SessionEnd: this session no longer counts as open.
+  clear_wait
+  rm -f "$LIVE/$sid" "$state" "$hist" "$errs" "$warned"
+  ;;
 start)
   clear_wait
   # Few fixed phrases, so all of them come from the cache after the first use.
@@ -237,7 +281,7 @@ toolfail)
     if [ ${#body} -ge 8 ]; then fp=$(printf '%s' "$err" | md5 -q); else fp=$(printf '%s %s' "$call" "$err" | md5 -q); fi
     echo "$fp" >> "$errs"
     [ "$(grep -cx "$fp" "$errs")" -ge "$LOOP_REPEATS" ] \
-      && warn_once error "Heads up, $proj keeps hitting the same error. It might be stuck."
+      && warn_once error "Heads up, $who keeps hitting the same error. It might be stuck."
   fi
   step "$(printf '%s %s' "$call" "$err" | md5 -q)"
   ;;
@@ -259,37 +303,37 @@ notify)
   # Notification permission_prompt: the prompt has waited about 6 seconds.
   { read -r _; read -r kind; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
   [ "$kind" = question ] && exit 0
-  if [ -n "$what" ]; then tell alert "Hey, $proj needs your OK $what."
-  else tell alert "Hey, $proj needs your OK before it keeps going."
+  if [ -n "$what" ]; then tell alert "Hey, $who needs your OK $what."
+  else tell alert "Hey, $who needs your OK before it keeps going."
   fi
   ;;
 idle)
   # Notification idle_prompt: 60s after a turn ended with no typing. Speak only
   # when the last reply asked the user something.
-  transcript=$(jq -r '.transcript_path // empty' <<<"$input")
   [ -f "$transcript" ] || exit 0
   last=$(jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last // empty' "$transcript" \
     | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
-  case "$last" in *'?') tell alert "Hey, $proj is still waiting on your answer." ;; esac
+  case "$last" in *'?') tell alert "Hey, $who is still waiting on your answer." ;; esac
   ;;
 stop)
   clear_wait
   rm -f "$state" "$hist" "$errs" "$warned"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then
-    transcript=$(jq -r '.transcript_path // empty' <<<"$input")
     [ -f "$transcript" ] && msg=$(jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last // empty' "$transcript")
   fi
   # Take the text after the last 🗣 (with or without the emoji variation
   # selector), and drop markdown marks so they are not read aloud.
   line=$(printf '%s\n' "$msg" | LC_ALL=C grep '🗣' | tail -1 \
     | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  # With other sessions open, say whose summary it is.
+  [ -n "$line" ] && [ "$SESSION_NAME" != never ] && { [ "$others" -gt 0 ] || [ "$SESSION_NAME" = always ]; } && line="$who: $line"
   [ -n "$line" ] && tell alert "$line"
   ;;
 fail)
   clear_wait
   rm -f "$state" "$hist" "$errs" "$warned"
-  tell alert "Something broke in $proj. Take a look when you can."
+  tell alert "Something broke in $who. Take a look when you can."
   ;;
 esac
 exit 0
