@@ -258,6 +258,30 @@ printed=$(jq -nc --arg cwd "$P" '{session_id: "m3", cwd: $cwd, mcp_server_name: 
 if [ -z "$printed" ]; then pass=$((pass + 1)); echo "  ok    the Elicitation hook prints nothing, so the dialog opens"; else fail=$((fail + 1)); echo "  FAIL  the Elicitation hook printed: $printed"; fi
 hook end m1 '{}'; hook end m0 '{}'; hook end m2 '{}'; hook end m3 '{}'; : > "$OUT"
 
+echo "Updates during one long command"
+pre() { hook pretool "$1" "$(jq -nc --arg id "$2" --argjson bg "${3:-false}" '{tool_name: "Bash", tool_use_id: $id, tool_input: {command: "npm test", description: "Run the invoice tests", run_in_background: $bg}}')"; }
+at_least() { # at_least <name> <min> <pattern>
+  local got; got=$(grep -c -- "$3" "$OUT")
+  if [ "$got" -ge "$2" ]; then pass=$((pass + 1)); echo "  ok    $1"; else fail=$((fail + 1)); echo "  FAIL  $1 (heard $got, expected at least $2)"; fi
+  : > "$OUT"
+}
+export EARSHOT_BEAT_SECS=1
+new lc1; pre lc1 t1; sleep 2.5
+at_least "a long command gets an update while it runs" 1 "Latest step: run the invoice tests"
+bash_ok lc1 "npm test" "ok"; : > "$OUT"; sleep 2
+check "after the command ends, the updates stop" 0 "Latest step: run the invoice tests"
+new lc2; pre lc2 t2 true; sleep 2
+check "a background command gets no updates" 0 "Latest step: run the invoice tests"
+new lc3; EARSHOT_LEVEL=quiet pre lc3 t3; sleep 2
+check "quiet level: no updates during a long command" 0 "Latest step"
+new lc4; bash_ok lc4 "npm test" "ok"; pre lc4 t4; hook stop lc4 '{}'; : > "$OUT"; sleep 2.5
+check "a timer that started after its command ended is stopped by stop" 0 "Latest step"
+export EARSHOT_BEAT_SECS=0
+new lc5; pre lc5 t5; sleep 2.5
+got=$(grep -c "Latest step" "$OUT")
+if [ "$got" -le 3 ]; then pass=$((pass + 1)); echo "  ok    EARSHOT_BEAT_SECS=0: at most one update a second"; else fail=$((fail + 1)); echo "  FAIL  EARSHOT_BEAT_SECS=0: $got updates in 2.5 s"; fi
+for s in lc1 lc2 lc3 lc4 lc5; do hook end "$s" '{}'; done; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

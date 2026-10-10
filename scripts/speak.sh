@@ -224,6 +224,37 @@ if [ "$1" = remind ]; then
   exit 0
 fi
 
+# longbeat <session> <token> <seconds>: one update while a long command runs.
+# It runs this script again, so the /voice and mute checks apply.
+if [ "$1" = longbeat ]; then
+  sid=$2
+  { read -r token; read -r on; read -r desc; } 2>/dev/null < "$STATE/running-$2" || exit 0
+  [ "$token" = "$3" ] || exit 0
+  line="Still on $on, about $(( $4 / 60 )) minutes in."
+  [ -n "$desc" ] && line="$line Latest step: $(lower_first "$desc")."
+  tell beat "$line"
+  exit 0
+fi
+
+# watch_command <session> <token>: while the same command runs, says an update
+# each time one is due, at most once a second. The command's PostToolUse
+# removes the running file and stops it.
+watch_command() {
+  local sid=$1 token=$2 self=$0
+  (
+    while :; do
+      read -r start beat _ < "$STATE/turn-$sid" 2>/dev/null || exit 0
+      wait=$((beat + BEAT_SECS - $(date +%s))); [ "$wait" -lt 1 ] && wait=1
+      sleep "$wait"
+      [ "$(head -1 "$STATE/running-$sid" 2>/dev/null)" = "$token" ] || exit 0
+      t=$(date +%s)
+      bash "$self" longbeat "$sid" "$token" $((t - start))
+      [ -f "$STATE/turn-$sid" ] && echo "$start $t" > "$STATE/turn-$sid"
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  echo $! >> "$STATE/running-$sid"   # line 4, so the end of the command can stop it
+}
+
 # start_timer <session> <token> [first]: speaks the reminders in the background.
 # With "first", it also speaks the opening line after a 6 second grace period.
 start_timer() {
@@ -364,6 +395,16 @@ new_wait() {
 # A slow command repeats nothing, and a changed error means progress, so
 # neither counts. Polling a long job repeats on purpose and is skipped.
 hist="$STATE/hist-$sid"; errs="$STATE/errs-$sid"; warned="$STATE/warned-$sid"
+running="$STATE/running-$sid"   # a long command in progress: token, name, step, timer PID
+
+# stop_watch: the command ended (or the turn did), so stop its update timer.
+stop_watch() {
+  local pid
+  [ -f "$running" ] || return 0
+  pid=$(sed -n 4p "$running")
+  [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -q '/speak\.sh pretool$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
+  rm -f "$running"
+}
 
 warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; tell alert "$2"; }
 
@@ -427,10 +468,12 @@ begin)
   ;;
 end)
   # SessionEnd: this session no longer counts as open.
+  stop_watch
   clear_wait
   rm -f "$LIVE/$sid" "$state" "$hist" "$errs" "$warned"
   ;;
 start)
+  stop_watch
   clear_wait
   # Few fixed phrases, so all of them come from the cache after the first use.
   acks=("Got it." "On it." "Okay, on it.")
@@ -453,6 +496,7 @@ The prompt was probably dictated: read misheard code terms as the closest name i
 EOF
   ;;
 tool)
+  stop_watch
   clear_wait
   progress
   # The end of the result is enough to tell results apart, and hashing less
@@ -461,6 +505,7 @@ tool)
   ;;
 toolfail)
   # PostToolUseFailure: a Bash command that exits non-zero lands here, not in tool.
+  stop_watch
   clear_wait
   [ "$(jq -r '.is_interrupt // false' <<<"$input")" = true ] && exit 0
   progress
@@ -507,6 +552,17 @@ inputnotify)
   { read -r _; read -r _; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
   tell need "Hey, $who needs your input${what:+ $what}."
   ;;
+pretool)
+  # PreToolUse for Bash (async): one long command fires no other hook until it
+  # ends, so a timer gives the "still on it" updates while it runs.
+  [ "$(jq -r '.tool_input.run_in_background // false' <<<"$input")" = true ] && exit 0
+  case "$LEVEL" in normal|all) ;; *) exit 0 ;; esac
+  stop_watch
+  [ -f "$state" ] || echo "$now $now" > "$state"
+  token=$(jq -r '.tool_use_id // empty' <<<"$input"); [ -n "$token" ] || token="$now-$$"
+  printf '%s\n%s\n%s\n' "$token" "$on" "$(jq -r '.tool_input.description // empty' <<<"$input")" > "$running"
+  watch_command "$sid" "$token"
+  ;;
 notify)
   # Notification permission_prompt: the prompt has waited about 6 seconds.
   { read -r _; read -r kind; read -r _; read -r what; } 2>/dev/null < "$(wait_file "$sid")"
@@ -524,6 +580,7 @@ idle)
   case "$last" in *'?') tell reply "Hey, $who is still waiting on your answer." ;; esac
   ;;
 stop)
+  stop_watch
   clear_wait
   # Your own cache is not cleared at restart like /tmp. Drop lines unused for a
   # month and downloads that never finished.
@@ -545,6 +602,7 @@ stop)
   [ -n "$line" ] && tell done "$line"
   ;;
 fail)
+  stop_watch
   clear_wait
   rm -f "$state" "$hist" "$errs" "$warned"
   tell alert "$(upper_first "$who") hit an error. Take a look when you can."
