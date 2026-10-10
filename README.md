@@ -172,7 +172,7 @@ When a permission prompt or a question shows, Earshot starts a timer. The timer
 speaks the reminders. Each reminder first checks that the prompt still waits. If
 you answered, the timer stops.
 
-Earshot keeps a list of open sessions in `/tmp/earshot-live`. A session that
+Earshot keeps a list of open sessions in its own folder. A session that
 closes, or that is quiet for 6 hours, leaves the list. When another session is
 open, the finished line starts with the project name. When another session is
 open in the same project, Earshot also says the session's name. It reads the
@@ -186,6 +186,10 @@ Earshot does not change your `CLAUDE.md` or your `settings.json`.
 Earshot keeps your key and voice in `~/.config/earshot/config`. Only your user
 account can read this file. If you also set `ELEVENLABS_API_KEY` for other tools,
 Earshot uses the key in its config file, not the environment variable.
+
+Everything else Earshot writes, such as the session list, reminder state, the log,
+and cached audio, goes in your own private macOS folders, not the shared `/tmp`.
+Other accounts on the Mac cannot read those files or plant files there.
 
 ## Settings
 
@@ -207,7 +211,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | Problem | What to do |
 |---|---|
 | You hear no voice and no beep | Run `setup.sh --status`. Make sure that `/voice` is on. Make sure that the file `~/.config/earshot/mute` does not exist. |
-| You hear a beep but no voice | Read `/tmp/earshot.log`. Error 401 means that the key is not correct. Error 404 means that the voice ID is not correct. |
+| You hear a beep but no voice | Run `tail "$(getconf DARWIN_USER_TEMP_DIR)earshot/earshot.log"`. Error 401 means that the key is not correct. Error 404 means that the voice ID is not correct. |
 | The script says that your plan cannot use the voice | Choose a premade voice, or upgrade your ElevenLabs plan. ElevenLabs sells separate plans for ElevenCreative, ElevenAgents, and ElevenAPI. Make sure that your plan includes API access to Text to Speech. |
 | Claude Code shows `Unknown command: /voice` | Run `/login` and sign in with a Claude.ai account. Remove `ANTHROPIC_API_KEY` from your environment. |
 | `/voice` does not record | Open System Settings > Privacy & Security > Microphone. Turn on access for your terminal app. |
@@ -217,7 +221,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - Hooks cannot tell if you typed or talked. When `/voice` is on, Earshot also speaks for prompts that you type.
 - Earshot gives "still on it" updates only after a tool call ends. During one long command, Earshot is silent.
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
-- All Claude Code sessions use the same speaker. A new line stops the line that plays.
+- All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
 
 ## FAQ

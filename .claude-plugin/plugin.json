@@ -1,6 +1,6 @@
 {
   "name": "earshot",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Voice notifications for Claude Code: hear when it needs your OK, gets stuck, or finishes, and what it got done. ElevenLabs text-to-speech, macOS.",
   "author": {
     "name": "Eric Lee"

@@ -116,11 +116,11 @@ if [ "$mode" = autoupdate ]; then
   jq --argjson on "$au" '
     .extraKnownMarketplaces.earshot.source //= {source: "github", repo: "sdusteric/earshot"}
     | .extraKnownMarketplaces.earshot.autoUpdate = $on' "$SETTINGS" > "$SETTINGS.earshot-tmp" \
-    && mv "$SETTINGS.earshot-tmp" "$SETTINGS"
+    && cat "$SETTINGS.earshot-tmp" > "$SETTINGS" && rm -f "$SETTINGS.earshot-tmp"
   # Claude Code's own record, which the /plugin toggle also writes.
   KNOWN="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins}/known_marketplaces.json"
   if jq -e '.earshot' "$KNOWN" >/dev/null 2>&1; then
-    jq --argjson on "$au" '.earshot.autoUpdate = $on' "$KNOWN" > "$KNOWN.earshot-tmp" && mv "$KNOWN.earshot-tmp" "$KNOWN"
+    jq --argjson on "$au" '.earshot.autoUpdate = $on' "$KNOWN" > "$KNOWN.earshot-tmp" && cat "$KNOWN.earshot-tmp" > "$KNOWN" && rm -f "$KNOWN.earshot-tmp"
   fi
   if [ "$au" = true ]; then
     echo "Auto-update is on. Claude Code now installs new Earshot versions by itself, a few minutes after a session starts."
@@ -173,7 +173,7 @@ if [ "$mode" = status ]; then
     && say_ok "/voice: on" || say_ok "/voice: off (Earshot stays quiet until you turn it on)"
   case "$(jq -r '.extraKnownMarketplaces.earshot | if . == null then "none" elif .source.source == "directory" then "local" else (.autoUpdate // false | tostring) end' "$SETTINGS" 2>/dev/null)" in
     true) say_ok "Auto-update: on" ;;
-    local) say_ok "Auto-update: not needed (Earshot loads from a local folder)" ;;
+    local) say_ok "Auto-update: local folder. Claude Code runs a copy, so after a change run: claude plugin marketplace update earshot && claude plugin update earshot@earshot" ;;
     *) say_ok "Auto-update: off (turn it on: setup.sh --auto-update)" ;;
   esac
   say_ok "Level: $(sed -n 's/^EARSHOT_LEVEL=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo normal)"

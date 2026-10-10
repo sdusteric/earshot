@@ -1,7 +1,8 @@
 #!/bin/bash
 # Earshot: spoken updates for Claude Code via ElevenLabs.
 # Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end (hooks),
-# remind (internal timer), say "<text>" (manual test)
+# remind (internal timer), play (internal, one line at a time), say "<text>" (manual test)
+umask 077   # every file Earshot writes is readable only by you
 CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewhere
 [ -f "$CONF" ] && . "$CONF"
 # The saved config wins, so a generic ELEVENLABS_API_KEY set for other tools
@@ -19,8 +20,13 @@ BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
 LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
 LEVEL=${EARSHOT_LEVEL:-normal}            # quiet | normal | all (see tell)
 STYLE=${EARSHOT_STYLE:-plain}             # plain | upbeat | cheeky: tone of the finished line
-CACHE=/tmp/earshot-cache
-LOG=/tmp/earshot.log
+# Per-user folders (mode 700) instead of /tmp, so other accounts on this Mac
+# cannot read the lines or plant files and links there.
+STATE=${EARSHOT_STATE_DIR:-$(getconf DARWIN_USER_TEMP_DIR)earshot}
+CACHE=${EARSHOT_CACHE_DIR:-$(getconf DARWIN_USER_CACHE_DIR)earshot}
+mkdir -p "$STATE" "$CACHE" 2>/dev/null
+[ -O "$STATE" ] && [ -O "$CACHE" ] || exit 0
+LOG=$STATE/earshot.log
 MIC=~/.config/earshot/mic-in-use
 
 mic_on() { [ -x "$MIC" ] && "$MIC"; }
@@ -38,37 +44,51 @@ tell() {
 say() {
   # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
   [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
-  # A new line stops the line that is still playing, in every session.
-  pkill -f "afplay $CACHE" 2>/dev/null
   (
-    mkdir -p "$CACHE"
+    asked=$(date +%s)
     out="$CACHE/$(printf '%s' "$MODEL $VOICE $1" | md5 -q).mp3"
     if [ ! -s "$out" ]; then
-      # The key goes in through stdin so it never shows up in the process list.
-      code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s -w '%{http_code}' -o "$out.part" \
+      # The key goes in through stdin and the text through a file, so neither
+      # shows up in the process list. A unique download file keeps two
+      # sessions from writing the same file.
+      dl=$(mktemp "$CACHE/dl.XXXXXX") && body=$(mktemp "$STATE/body.XXXXXX") || exit
+      jq -n --arg t "$1" --arg m "$MODEL" '{text: $t, model_id: $m}' > "$body"
+      code=$(printf 'xi-api-key: %s\n' "$KEY" | curl -s --connect-timeout 5 --max-time 20 -w '%{http_code}' -o "$dl" \
         "https://api.elevenlabs.io/v1/text-to-speech/$VOICE" \
-        -H @- -H 'Content-Type: application/json' \
-        -d "$(jq -n --arg t "$1" --arg m "$MODEL" '{text: $t, model_id: $m}')")
-      if [ "$code" != 200 ]; then
-        echo "$(date '+%F %T') HTTP $code: $(head -c 300 "$out.part" 2>/dev/null)" >> "$LOG"
-        rm -f "$out.part"
+        -H @- -H 'Content-Type: application/json' --data-binary @"$body")
+      ok=$?
+      rm -f "$body"
+      # A dropped connection can still report 200, so curl must succeed too.
+      if [ "$ok" != 0 ] || [ "$code" != 200 ]; then
+        echo "$(date '+%F %T') HTTP $code curl $ok: $(head -c 300 "$dl" 2>/dev/null)" >> "$LOG"
+        rm -f "$dl"
         afplay /System/Library/Sounds/Basso.aiff
         exit
       fi
-      mv "$out.part" "$out"
+      mv "$dl" "$out"
     fi
-    # Stop when you start talking. A mic that was already on (e.g. Voice
-    # Control listening for a wake word) does not count.
-    mic_on && mic_was_on=1
-    afplay "$out" & pid=$!
-    while kill -0 $pid 2>/dev/null; do
-      sleep 0.5
-      [ -z "$mic_was_on" ] && mic_on && kill $pid
-    done
+    # All sessions share one speaker, so lines take turns: a line waits for
+    # the one playing to finish, and is dropped after a minute in the queue.
+    lockf -s -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked"
   ) >/dev/null 2>&1 &
 }
 
+# play <file> <asked>: plays one line while it holds the speaker.
+play() {
+  # You talked over an earlier line, so the lines queued behind it are dropped too.
+  [ "$(stat -f %m "$STATE/hushed" 2>/dev/null || echo 0)" -ge "$2" ] && return
+  # Stop when you start talking. A mic that was already on (e.g. Voice
+  # Control listening for a wake word) does not count.
+  mic_on && mic_was_on=1
+  afplay "$1" & pid=$!
+  while kill -0 $pid 2>/dev/null; do
+    sleep 0.5
+    [ -z "$mic_was_on" ] && mic_on && { kill $pid; touch "$STATE/hushed"; }
+  done
+}
+
 [ "$1" = say ] && { say "$2"; exit 0; }
+[ "$1" = play ] && { play "$2" "$3"; exit 0; }
 
 # --- Waiting on you: permission prompts and questions -------------------------
 # A wait file per session holds: token, kind (permission|question), project,
@@ -76,7 +96,7 @@ say() {
 # it, which cancels reminders.
 REMIND_MINS=${EARSHOT_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
 UNIT=${EARSHOT_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
-wait_file() { echo "/tmp/earshot-wait-$1"; }
+wait_file() { echo "$STATE/wait-$1"; }
 
 # remind <session> <token> <step>: a timer step. It runs this script again, so
 # the /voice and mute checks above apply at the moment it speaks.
@@ -111,6 +131,7 @@ start_timer() {
       bash "$self" remind "$sid" "$token" "$m"
     done
   ) </dev/null >/dev/null 2>&1 &
+  echo $! >> "$(wait_file "$sid")"   # line 6, so an answer can stop the timer early
 }
 
 lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
@@ -118,7 +139,6 @@ lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1
 # Plain words for what a permission prompt asks for, e.g. "to run the invoice tests".
 asks_for() {
   local tool desc
-  tool=$(jq -r '.tool_name // empty' <<<"$input")
   case "$tool" in
     Bash)
       desc=$(jq -r '.tool_input.description // empty' <<<"$input" | tr '_' ' ' | awk '{for (i = 1; i <= NF && i <= 12; i++) printf "%s%s", $i, (i < NF && i < 12 ? " " : "")}' | sed 's/[.]*$//')
@@ -135,48 +155,71 @@ asks_for() {
 
 input=$(cat)
 now=$(date +%s)
-sid=$(jq -r '.session_id' <<<"$input")
-cwd=$(jq -r '.cwd // empty' <<<"$input")
+# One jq pass for the fields every hook needs. The separator is not whitespace,
+# so an empty field does not shift the others.
+IFS=$'\x1f' read -r sid cwd transcript tool < <(jq -r '[.session_id, .cwd, .transcript_path, .tool_name] | map(. // "" | tostring) | join("\u001f")' <<<"$input")
+# The session ID becomes part of file names: allow only safe characters.
+[[ $sid =~ ^[A-Za-z0-9_-]+$ ]] || exit 0
 proj=$(basename "$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")" | tr '_-' '  ')
-state="/tmp/earshot-$sid"
-transcript=$(jq -r '.transcript_path // empty' <<<"$input")
+state="$STATE/turn-$sid"
 
 # --- Which session is talking ---------------------------------------------------
 # The folder name tells sessions in different projects apart. When another open
 # session would sound the same, the session's title is added, e.g. "billing
 # service, refund rounding". The title is the name in /resume and in the Mac
 # app's session list.
-LIVE=${EARSHOT_LIVE_DIR:-/tmp/earshot-live}   # one file per open session: name, title
+LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}   # one file per open session: name, title
 SESSION_NAME=${EARSHOT_SESSION_NAME:-auto}   # auto | always | never
 
-# The session's title, at most 6 words. A /rename title wins over the generated
-# one. The transcript format is internal, so the SessionStart title is the fallback.
-session_title() {
-  local t=""
-  if [ -f "$transcript" ]; then
-    t=$(grep -h '"type":"custom-title"' "$transcript" | tail -1 | jq -r '.customTitle // empty' 2>/dev/null)
-    [ -n "$t" ] || t=$(grep -h '"type":"ai-title"' "$transcript" | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null)
-  fi
-  [ -n "$t" ] || t=$(sed -n 2p "$LIVE/$sid" 2>/dev/null)
-  awk '{for (i = 1; i <= NF && i <= 6; i++) printf "%s%s", $i, (i < NF && i < 6 ? " " : "")}' <<<"$t"
+# The newest title in the transcript, at most 6 words: a /rename title or the
+# one Claude Code made. Reading from the end stops at the first match. The
+# transcript format is internal, so a missing title is fine.
+transcript_title() {
+  [ -f "$transcript" ] || return
+  tail -r "$transcript" | LC_ALL=C grep -m1 -F -e '"type":"custom-title"' -e '"type":"ai-title"' \
+    | jq -r '.customTitle // .aiTitle // empty' 2>/dev/null \
+    | awk '{for (i = 1; i <= NF && i <= 6; i++) printf "%s%s", $i, (i < NF && i < 6 ? " " : "")}'
 }
 
 mkdir -p "$LIVE"
 find "$LIVE" -type f -mmin +360 -delete 2>/dev/null   # sessions quiet for 6 hours count as closed
-started=$(sed -n 2p "$LIVE/$sid" 2>/dev/null)
-[ "$1" = begin ] && started=$(jq -r '.session_title // empty' <<<"$input")
-printf '%s\n%s\n' "$proj" "$started" > "$LIVE/$sid"
+# Hooks that run on every tool call only mark the session as active. The title
+# is looked up when a session starts, once per prompt, and when a turn ends.
+title=$(sed -n 2p "$LIVE/$sid" 2>/dev/null)
+case "$1" in
+  begin) t=$(jq -r '.session_title // empty' <<<"$input"); [ -n "$t" ] && title=$t ;;
+  start|stop) t=$(transcript_title); [ -n "$t" ] && title=$t ;;
+esac
+case "$1" in
+  begin|start|stop) printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid" ;;
+  *) if [ -f "$LIVE/$sid" ]; then touch "$LIVE/$sid"; else printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid"; fi ;;
+esac
 others=0; twins=0
 for f in "$LIVE"/*; do
   [ "$f" = "$LIVE/$sid" ] || [ ! -f "$f" ] && continue
   others=$((others + 1)); [ "$(head -1 "$f")" = "$proj" ] && twins=$((twins + 1))
 done
-who=$proj
-if [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; then
-  t=$(session_title); [ -n "$t" ] && who="$proj, $t"
+# A session's title can appear after its first prompt. Alerts that need the
+# name and do not have it yet look it up; tool calls never do.
+if [ -z "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
+  case "$1" in
+    ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid" ;;
+  esac
 fi
-clear_wait() { rm -f "$(wait_file "$sid")"; }
+who=$proj
+if [ -n "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
+  who="$proj, $title"
+fi
+# clear_wait: you answered, so stop the reminder timer and forget the prompt.
+clear_wait() {
+  local wf pid; wf=$(wait_file "$sid")
+  [ -f "$wf" ] || return 0
+  pid=$(sed -n 6p "$wf")
+  [ -n "$pid" ] && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
+  rm -f "$wf"
+}
 new_wait() {
+  clear_wait
   token="$now-$$-$RANDOM"
   printf '%s\n%s\n%s\n%s\n%s\n' "$token" "$1" "$who" "$2" "$transcript" > "$(wait_file "$sid")"
 }
@@ -189,12 +232,12 @@ new_wait() {
 #   3. two steps alternating for 3 rounds (A B A B A B)
 # A slow command repeats nothing, and a changed error means progress, so
 # neither counts. Polling a long job repeats on purpose and is skipped.
-hist="/tmp/earshot-hist-$sid"; errs="/tmp/earshot-errs-$sid"; warned="/tmp/earshot-warned-$sid"
+hist="$STATE/hist-$sid"; errs="$STATE/errs-$sid"; warned="$STATE/warned-$sid"
 
 warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; tell alert "$2"; }
 
 polling() {
-  case "$(jq -r '.tool_name // empty' <<<"$input")" in BashOutput|TaskOutput|Monitor) return 0 ;; esac
+  case "$tool" in BashOutput|TaskOutput|Monitor) return 0 ;; esac
   jq -r '.tool_input.command // empty' <<<"$input" \
     | grep -Eq '(^|[^[:alnum:]_])(sleep|watch|wait|until)([^[:alnum:]_]|$)|gh run (view|watch)|gh pr checks|rollout status'
 }
@@ -224,6 +267,13 @@ step() {
      && [ "${h[1]}" = "${h[3]}" ] && [ "${h[3]}" = "${h[5]}" ]; then
     warn_once pingpong "Heads up, $who keeps going back and forth between the same two steps. It might be stuck."
   fi
+}
+
+# last_text: Claude's last text reply. Reads only the end of the transcript,
+# which can be tens of megabytes.
+last_text() {
+  tail -r "$transcript" | head -400 \
+    | jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | first // empty' 2>/dev/null
 }
 
 # progress: the "still on it" heartbeat.
@@ -274,7 +324,9 @@ EOF
 tool)
   clear_wait
   progress
-  step "$(jq -c '[.tool_name, .tool_input, .tool_response]' <<<"$input" | md5 -q)"
+  # The end of the result is enough to tell results apart, and hashing less
+  # keeps big Edit and Write payloads fast.
+  step "$(jq -c '[.tool_name, .tool_input, (.tool_response | tostring | .[-4000:])]' <<<"$input" | md5 -q)"
   ;;
 toolfail)
   # PostToolUseFailure: a Bash command that exits non-zero lands here, not in tool.
@@ -297,7 +349,7 @@ toolfail)
 ask)
   # PermissionRequest: fires as soon as the prompt shows. Record what it asks
   # and start the reminders; the Notification below speaks first, after ~6s.
-  if [ "$(jq -r '.tool_name' <<<"$input")" = AskUserQuestion ]; then
+  if [ "$tool" = AskUserQuestion ]; then
     grep -qx question <(sed -n 2p "$(wait_file "$sid")" 2>/dev/null) && exit 0
     new_wait question ""; start_timer "$sid" "$token" first
   else
@@ -320,21 +372,27 @@ idle)
   # Notification idle_prompt: 60s after a turn ended with no typing. Speak only
   # when the last reply asked the user something.
   [ -f "$transcript" ] || exit 0
-  last=$(jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last // empty' "$transcript" \
+  last=$(last_text \
     | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
   case "$last" in *'?') tell alert "Hey, $who is still waiting on your answer." ;; esac
   ;;
 stop)
   clear_wait
+  # Your own cache is not cleared at restart like /tmp. Drop lines unused for a
+  # month and downloads that never finished.
+  find "$CACHE" -type f \( -name '*.mp3' -mtime +30 -o -name 'dl.*' -mmin +10 \) -delete 2>/dev/null
   rm -f "$state" "$hist" "$errs" "$warned"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then
-    [ -f "$transcript" ] && msg=$(jq -rs '[.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | last // empty' "$transcript")
+    [ -f "$transcript" ] && msg=$(last_text)
   fi
   # Take the text after the last 🗣 (with or without the emoji variation
   # selector), and drop markdown marks so they are not read aloud.
-  line=$(printf '%s\n' "$msg" | LC_ALL=C grep '🗣' | tail -1 \
-    | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  # Only a line that starts with it counts, and at most 40 words are read, so
+  # quoted text cannot turn into a long or costly speech.
+  line=$(printf '%s\n' "$msg" | LC_ALL=C grep '^[[:space:]*_>]*🗣' | tail -1 \
+    | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | awk '{for (i = 1; i <= NF && i <= 40; i++) printf "%s%s", $i, (i < NF && i < 40 ? " " : "")}')
   # With other sessions open, say whose summary it is.
   [ -n "$line" ] && [ "$SESSION_NAME" != never ] && { [ "$others" -gt 0 ] || [ "$SESSION_NAME" = always ]; } && line="$who: $line"
   [ -n "$line" ] && tell alert "$line"
