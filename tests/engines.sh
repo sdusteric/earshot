@@ -87,5 +87,13 @@ conf 'EARSHOT_KEY=sk_x' 'EARSHOT_VOICE=v1'; : > "$CALLS"
 jq -nc --arg cwd "$T" '{session_id: "e2", cwd: $cwd}' | bash "$S" begin >/dev/null; sleep 0.5
 is "an ElevenLabs session does not" "$(grep -c serve "$CALLS")" 0
 
+echo "Setup"
+SETUP="$(dirname "$S")/setup.sh"
+conf 'EARSHOT_KEY=sk_x' 'EARSHOT_VOICE=v1' 'EARSHOT_LEVEL=quiet'
+st=$(bash "$SETUP" --status 2>&1)
+is "status names the engine" "$(grep -c 'Engine: elevenlabs' <<<"$st")" 1
+is "an unknown engine is refused" "$(bash "$SETUP" --engine loud 2>&1 | grep -c 'Engine must be')" 1
+is "kokoro voices are listed without a key" "$(bash "$SETUP" --engine kokoro --list-voices | grep -cx af_heart)" 1
+
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

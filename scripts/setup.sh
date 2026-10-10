@@ -1,12 +1,13 @@
 #!/bin/bash
-# Earshot setup: saves your ElevenLabs key and voice, builds the microphone
-# helper, and plays a test line. Safe to run again, e.g. to change the voice.
+# Earshot setup: chooses the engine and voice, builds the helpers, and plays a
+# test line. Safe to run again, e.g. to change the voice.
 #
-#   setup.sh                        ask for the key and voice (needs a terminal)
-#   setup.sh --key-from-clipboard   read the key from the clipboard
-#   setup.sh --key-file PATH        read the key from a file
-#   setup.sh --voice VOICE_ID       use this voice without asking
-#   setup.sh --list-voices          print voices you can use, then stop
+#   setup.sh                        set up the saved engine, or Kokoro the first time
+#   setup.sh --engine ENGINE        kokoro (on this Mac), elevenlabs or say
+#   setup.sh --voice VOICE          a Kokoro voice (af_heart), an ElevenLabs voice ID, or a say voice
+#   setup.sh --key-from-clipboard   ElevenLabs: read the key from the clipboard
+#   setup.sh --key-file PATH        ElevenLabs: read the key from a file
+#   setup.sh --list-voices          print the voices for the engine, then stop
 #   setup.sh --status               print what is set up, then stop
 #   setup.sh --auto-update          let Claude Code update Earshot by itself
 #   setup.sh --no-auto-update       turn that off again
@@ -15,7 +16,7 @@
 set -euo pipefail
 
 DIR=~/.config/earshot
-CONF=$DIR/config
+CONF=${EARSHOT_CONF:-$DIR/config}   # tests point this elsewhere
 SCRIPTS=$(cd "$(dirname "$0")" && pwd)
 DEFAULT_VOICE=CwhRBWXzGAHq8TQ4Fs17   # Roger, a premade voice that works on every plan
 TMP=$(mktemp -d)
@@ -28,27 +29,41 @@ for t in jq curl afplay; do
   command -v $t >/dev/null || die "Missing $t. Install it (jq: brew install jq) and run setup again."
 done
 
-EARSHOT_KEY= EARSHOT_VOICE= EARSHOT_MODEL=
+EARSHOT_KEY= EARSHOT_VOICE= EARSHOT_MODEL= EARSHOT_ENGINE= EARSHOT_KOKORO_VOICE= EARSHOT_SAY_VOICE=
 [ -f "$CONF" ] && . "$CONF"
 KEY=$EARSHOT_KEY VOICE=$EARSHOT_VOICE MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
+STATE_DIR=$(getconf DARWIN_USER_TEMP_DIR)earshot
+TTS=$DIR/kokoro/earshot-tts
+KOKORO_DEFAULT=af_heart
 
-key_src= voice_arg= mode=setup
+key_src= voice_arg= engine_arg= mode=setup
 while [ $# -gt 0 ]; do
   case "$1" in
+    --engine) engine_arg=${2:?--engine needs kokoro, elevenlabs or say}; shift ;;
     --key-from-clipboard) key_src=clipboard ;;
     --key-file) key_src=file; key_file=${2:?--key-file needs a path}; shift ;;
-    --voice) voice_arg=${2:?--voice needs a voice ID}; shift ;;
+    --voice) voice_arg=${2:?--voice needs a voice}; shift ;;
     --list-voices) mode=list ;;
     --status) mode=status ;;
     --level) mode=level; level=${2:?--level needs quiet, normal or all}; shift ;;
     --style) mode=style; style=${2:?--style needs plain, upbeat or cheeky}; shift ;;
     --auto-update) mode=autoupdate; au=true ;;
     --no-auto-update) mode=autoupdate; au=false ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
   shift
 done
+
+# The engine: the flag, else the saved one, else ElevenLabs for a config with a
+# key from before 0.9.0, else Kokoro. Giving a key means ElevenLabs.
+if [ -n "$engine_arg" ]; then ENGINE=$engine_arg
+elif [ -n "$key_src" ]; then ENGINE=elevenlabs
+elif [ -n "$EARSHOT_ENGINE" ]; then ENGINE=$EARSHOT_ENGINE
+elif [ -n "$KEY" ]; then ENGINE=elevenlabs
+else ENGINE=kokoro
+fi
+case "$ENGINE" in kokoro|elevenlabs|say) ;; *) die "Engine must be kokoro, elevenlabs or say." ;; esac
 
 # api METHOD PATH [JSON] -> prints the HTTP code, body in $TMP/body
 api() {
@@ -86,6 +101,12 @@ voice_name() {
   n=$(voices | awk -F'\t' -v id="$1" '$1 == id { print $3; exit }')
   printf '%s' "${n:-$1}"
 }
+
+# Kokoro voices: from the helper when it is built, else the four we suggest.
+kokoro_voices() {
+  if [ -x "$TTS" ]; then "$TTS" voices; else printf '%s\n' af_heart af_bella am_michael bm_george; fi
+}
+say_voices() { say -v '?' | grep -E ' en_[A-Z]{2} ' | sed -E 's/ +en_[A-Z]{2} .*//'; }
 
 # Turns an ElevenLabs error into something a person can act on.
 explain() {
@@ -130,16 +151,22 @@ if [ "$mode" = autoupdate ]; then
   exit 0
 fi
 
-# set_conf NAME VALUE: level and style are lines in the config file; other
-# lines stay as they are.
-set_conf() {
+# save_conf NAME VALUE [NAME VALUE ...]: sets these config lines. Every other
+# line stays as it is.
+save_conf() {
+  local a=("$@") names="" i
   mkdir -p "$DIR"
-  ( umask 077; touch "$CONF"; { grep -v "^$1=" "$CONF" || true; } > "$CONF.tmp"; echo "$1=$2" >> "$CONF.tmp"; mv "$CONF.tmp" "$CONF" )
+  for ((i = 0; i < ${#a[@]}; i += 2)); do names+="${a[i]}|"; done
+  ( umask 077
+    { for ((i = 0; i < ${#a[@]}; i += 2)); do printf '%s=%q\n' "${a[i]}" "${a[i+1]}"; done
+      grep -E '^EARSHOT_' "$CONF" 2>/dev/null | grep -vE "^(${names%|})=" || true
+    } > "$CONF.tmp"
+    mv "$CONF.tmp" "$CONF" )
 }
 
 if [ "$mode" = level ]; then
   case "$level" in quiet|normal|all) ;; *) die "Level must be quiet, normal or all." ;; esac
-  set_conf EARSHOT_LEVEL "$level"
+  save_conf EARSHOT_LEVEL "$level"
   case "$level" in
     quiet) echo "Level: quiet. Earshot speaks only when it needs you, when it might be stuck, when something fails, and when Claude finishes." ;;
     normal) echo "Level: normal. Quiet, plus a short progress update every few minutes." ;;
@@ -150,7 +177,7 @@ fi
 
 if [ "$mode" = style ]; then
   case "$style" in plain|upbeat|cheeky) ;; *) die "Style must be plain, upbeat or cheeky." ;; esac
-  set_conf EARSHOT_STYLE "$style"
+  save_conf EARSHOT_STYLE "$style"
   case "$style" in
     plain) echo "Style: plain. The finished line says what Claude did, nothing extra." ;;
     upbeat) echo "Style: upbeat. The finished line adds a little encouragement. Alerts stay plain." ;;
@@ -160,14 +187,25 @@ if [ "$mode" = style ]; then
 fi
 
 if [ "$mode" = list ]; then
-  voices
+  case "$ENGINE" in kokoro) kokoro_voices ;; elevenlabs) voices ;; say) say_voices ;; esac
   exit 0
 fi
 
 if [ "$mode" = status ]; then
   echo "Config: $CONF"
-  [ -n "$KEY" ] && say_ok "Key: saved" || say_ok "Key: missing"
-  [ -n "$VOICE" ] && say_ok "Voice: $(voice_name "$VOICE") ($VOICE)" || say_ok "Voice: not chosen"
+  say_ok "Engine: $ENGINE"
+  case "$ENGINE" in
+    kokoro)
+      say_ok "Voice: ${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}"
+      if [ -x "$TTS" ]; then say_ok "Kokoro helper: built"
+      else say_ok "Kokoro helper: not built (run setup.sh --engine kokoro). Until then Earshot uses the Mac's own voice."; fi
+      pgrep -f "$TTS serve" >/dev/null && say_ok "Kokoro: loaded" || say_ok "Kokoro: not loaded (it loads with the next session or line)"
+      [ -n "$KEY" ] && say_ok "ElevenLabs key: saved (setup.sh --engine elevenlabs switches back)" ;;
+    elevenlabs)
+      [ -n "$KEY" ] && say_ok "Key: saved" || say_ok "Key: missing"
+      [ -n "$VOICE" ] && say_ok "Voice: $(voice_name "$VOICE") ($VOICE)" || say_ok "Voice: not chosen" ;;
+    say) say_ok "Voice: ${EARSHOT_SAY_VOICE:-the system voice}" ;;
+  esac
   if [ -e "$DIR/mic-in-use.stale" ]; then say_ok "Microphone check: out of date, so Earshot doesn't wait during calls (run setup again to rebuild it)"
   elif [ -x "$DIR/mic-in-use" ]; then say_ok "Microphone check: built"
   else say_ok "Microphone check: not built (Earshot won't stop when you talk or wait while you're on a call)"; fi
@@ -184,25 +222,7 @@ if [ "$mode" = status ]; then
   exit 0
 fi
 
-# --- Key ---------------------------------------------------------------------
-case "$key_src" in
-  clipboard) KEY=$(pbpaste | tr -d '[:space:]') ;;
-  file) [ -r "$key_file" ] || die "Can't read $key_file."; KEY=$(tr -d '[:space:]' < "$key_file") ;;
-  *)
-    if [ -z "$KEY" ]; then
-      if [ -t 0 ]; then
-        read -rsp "ElevenLabs API key (hidden): " KEY; echo
-        KEY=$(printf '%s' "$KEY" | tr -d '[:space:]')
-      else
-        die "No ElevenLabs key yet, and there's no terminal to type one in.
-Copy your key, then run: bash \"$SCRIPTS/setup.sh\" --key-from-clipboard
-Or run this script in Terminal so it can ask for the key."
-      fi
-    fi ;;
-esac
-[[ "$KEY" == sk_* ]] || die "That doesn't look like an ElevenLabs API key (they start with sk_)."
-
-# --- Voice -------------------------------------------------------------------
+# --- ElevenLabs --------------------------------------------------------------
 pick_voice() {
   local list i=0 line id cat name def choice
   list=$(voices)
@@ -221,38 +241,98 @@ pick_voice() {
   fi
 }
 
-if [ -n "$voice_arg" ]; then VOICE=$voice_arg
-elif [ -t 0 ]; then pick_voice
-else VOICE=${VOICE:-$DEFAULT_VOICE}
-fi
+setup_elevenlabs() {
+  case "$key_src" in
+    clipboard) KEY=$(pbpaste | tr -d '[:space:]') ;;
+    file) [ -r "$key_file" ] || die "Can't read $key_file."; KEY=$(tr -d '[:space:]' < "$key_file") ;;
+    *)
+      if [ -z "$KEY" ]; then
+        if [ -t 0 ]; then
+          read -rsp "ElevenLabs API key (hidden): " KEY; echo
+          KEY=$(printf '%s' "$KEY" | tr -d '[:space:]')
+        else
+          die "No ElevenLabs key yet, and there's no terminal to type one in.
+Copy your key, then run: bash \"$SCRIPTS/setup.sh\" --engine elevenlabs --key-from-clipboard
+Or run this script in Terminal so it can ask for the key."
+        fi
+      fi ;;
+  esac
+  [[ "$KEY" == sk_* ]] || die "That doesn't look like an ElevenLabs API key (they start with sk_)."
 
-# --- Test the key and voice --------------------------------------------------
-test_line='{"text":"Earshot is set up. Talk to you soon.","model_id":"'"$MODEL"'"}'
-tries=0
-while :; do
-  code=$(api POST "/v1/text-to-speech/$VOICE" "$test_line")
-  [ "$code" = 200 ] && break
-  explain "$code" >&2
-  tries=$((tries + 1))
-  if [ -t 0 ] && [ -z "$voice_arg" ] && [ "$code" != 401 ] && [ $tries -lt 3 ]; then
-    pick_voice
-  else
-    die "Setup stopped. Nothing was saved."
+  if [ -n "$voice_arg" ]; then VOICE=$voice_arg
+  elif [ -t 0 ]; then pick_voice
+  else VOICE=${VOICE:-$DEFAULT_VOICE}
   fi
-done
-mv "$TMP/body" "$TMP/test.mp3"
 
-# --- Save --------------------------------------------------------------------
-mkdir -p "$DIR"
-( umask 077
-  { printf 'EARSHOT_KEY=%q\n' "$KEY"
-    printf 'EARSHOT_VOICE=%q\n' "$VOICE"
-    if [ -n "$EARSHOT_MODEL" ]; then printf 'EARSHOT_MODEL=%q\n' "$EARSHOT_MODEL"; fi
-    # Every other setting stays as it is.
-    grep -E '^EARSHOT_' "$CONF" 2>/dev/null | grep -vE '^EARSHOT_(KEY|VOICE|MODEL)=' || true
-  } > "$CONF.tmp"
-  mv "$CONF.tmp" "$CONF" )
-echo "Saved your key and voice to $CONF (only you can read it)."
+  # Test the key and voice.
+  local test_line tries=0 code
+  test_line='{"text":"Earshot is set up. Talk to you soon.","model_id":"'"$MODEL"'"}'
+  while :; do
+    code=$(api POST "/v1/text-to-speech/$VOICE" "$test_line")
+    [ "$code" = 200 ] && break
+    explain "$code" >&2
+    tries=$((tries + 1))
+    if [ -t 0 ] && [ -z "$voice_arg" ] && [ "$code" != 401 ] && [ $tries -lt 3 ]; then
+      pick_voice
+    else
+      die "Setup stopped. Nothing was saved."
+    fi
+  done
+  mv "$TMP/body" "$TMP/test.mp3"
+
+  save_conf EARSHOT_ENGINE elevenlabs EARSHOT_KEY "$KEY" EARSHOT_VOICE "$VOICE" \
+    ${EARSHOT_MODEL:+EARSHOT_MODEL "$EARSHOT_MODEL"}
+  echo "Saved your key and voice to $CONF (only you can read it)."
+  TEST=$TMP/test.mp3
+  DONE_MSG="Done. Voice: $(voice_name "$VOICE") (ElevenLabs)."
+}
+
+# --- Kokoro ------------------------------------------------------------------
+pick_kokoro_voice() {
+  local list i=0 v choice def=${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}
+  list=$(printf '%s\n' af_heart af_bella am_michael bm_george)
+  echo; echo "Kokoro voices (setup.sh --engine kokoro --list-voices shows all):"
+  while read -r v; do i=$((i + 1)); printf '  %d) %s%s\n' "$i" "$v" "$([ "$v" = "$def" ] && echo "  (current)")"; done <<<"$list"
+  read -rp "Number, a voice name, or Enter for $def: " choice
+  if [ -z "$choice" ]; then KVOICE=$def
+  elif [[ "$choice" =~ ^[1-4]$ ]]; then KVOICE=$(sed -n "${choice}p" <<<"$list")
+  else KVOICE=$choice
+  fi
+}
+
+setup_kokoro() {
+  KVOICE=${voice_arg:-${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}}
+  if [ -z "$voice_arg" ] && [ -t 0 ]; then pick_kokoro_voice; fi
+  echo "Building the Kokoro helper. The first build takes about 2 minutes."
+  bash "$SCRIPTS/build-tts.sh" >&2 \
+    || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
+  kokoro_voices | grep -qx -- "$KVOICE" \
+    || die "Kokoro has no voice called $KVOICE. To see the list, run: setup.sh --engine kokoro --list-voices"
+  ( umask 077; mkdir -p "$STATE_DIR" )
+  echo "Making a test line. The first time, this downloads the voice (about 120 MB)."
+  printf 'Earshot is set up. Talk to you soon.' \
+    | "$TTS" speak --socket "$STATE_DIR/kokoro.sock" --voice "$KVOICE" --out "$TMP/test.wav" --timeout 600 2>"$TMP/err" \
+    || die "Kokoro couldn't make the test line: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
+  save_conf EARSHOT_ENGINE kokoro EARSHOT_KOKORO_VOICE "$KVOICE"
+  TEST=$TMP/test.wav
+  DONE_MSG="Done. Voice: $KVOICE (Kokoro, on this Mac: free, and your lines stay on it)."
+}
+
+# --- The Mac's own voice -----------------------------------------------------
+setup_say() {
+  local v=${voice_arg:-$EARSHOT_SAY_VOICE}
+  printf 'Earshot is set up. Talk to you soon.' > "$TMP/line"
+  say ${v:+-v "$v"} -f "$TMP/line" -o "$TMP/test.aiff" || die "say couldn't make the test line. Nothing was saved."
+  save_conf EARSHOT_ENGINE say EARSHOT_SAY_VOICE "$v"
+  TEST=$TMP/test.aiff
+  DONE_MSG="Done. Voice: ${v:-the system voice} (the Mac's own voice)."
+}
+
+case "$ENGINE" in
+  kokoro) setup_kokoro ;;
+  elevenlabs) setup_elevenlabs ;;
+  say) setup_say ;;
+esac
 
 if command -v swiftc >/dev/null; then
   swiftc -O "$SCRIPTS/mic-in-use.swift" -o "$DIR/mic-in-use" 2>/dev/null \
@@ -263,5 +343,5 @@ else
   echo "swiftc not found (xcode-select --install), so Earshot won't stop when you talk. Everything else works."
 fi
 
-afplay "$TMP/test.mp3"
-echo "Done. Voice: $(voice_name "$VOICE"). In Claude Code, run /voice to turn it on."
+afplay "$TEST"
+echo "$DONE_MSG In Claude Code, run /voice to turn it on."
