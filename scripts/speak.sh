@@ -74,8 +74,9 @@ hold() {
   case "$1" in need|reply|alert|done) ;; *) return ;; esac
   printf '%s\037%s\037%s\037%s\n' "$(date +%s)" "$3" "$1" "$(printf '%s' "$2" | tr -d '\037\n')" \
     | lockf -k "$HELD.lock" sh -c 'cat >> "$1"' _ "$HELD"
-  # One watcher at a time: a second one gives up at once.
-  [ -n "$EARSHOT_DRYRUN" ] || ( lockf -t 0 -k "$STATE/release.lock" bash "$0" release ) </dev/null >/dev/null 2>&1 &
+  echo "$(date '+%F %T') held ($1): $2" >> "$LOG"
+  # One watcher at a time. Waiting 5 s covers a watcher that is just exiting.
+  [ -n "$EARSHOT_DRYRUN" ] || ( lockf -t 5 -k "$STATE/release.lock" bash "$0" release ) </dev/null >/dev/null 2>&1 &
 }
 
 # speak "<line>" <kind> <session>: holds the line while an app uses the mic,
@@ -149,8 +150,9 @@ still_waiting() {
   ! { [ -f "$tr" ] && [ "$(stat -f %m "$tr")" -gt $(( $(stat -f %m "$wf") + 2 )) ]; }
 }
 
-# catch_up: says the held lines. The newest line per session and kind;
-# lines that need you first, then alerts, then finished lines, oldest first.
+# catch_up: says the held lines: per session, the first "needs you" line (the
+# most specific one) and the newest line of every other kind; lines that need
+# you first, then alerts, then finished lines, oldest first.
 catch_up() {
   local batch now lines kept total n=0 t s kind text
   batch=$(mktemp "$STATE/batch.XXXXXX") || return
@@ -158,7 +160,7 @@ catch_up() {
   # when two catch-ups run at the same time.
   lockf -k "$HELD.lock" mv "$HELD" "$batch" 2>/dev/null || { rm -f "$batch"; return; }
   now=$(date +%s)
-  lines=$(awk -F'\037' -v min=$((now - HOLD_MAX)) '$1 >= min { last[$2 FS $3] = $0 }
+  lines=$(awk -F'\037' -v min=$((now - HOLD_MAX)) '$1 >= min { k = $2 FS $3; if ($3 != "need" || !(k in last)) last[k] = $0 }
       END { for (k in last) { split(last[k], f, FS); print (f[3] == "need" || f[3] == "reply" ? 0 : f[3] == "alert" ? 1 : 2), f[1], last[k] } }' "$batch" \
     | sort -k1,1n -k2,2n | cut -d' ' -f3-)
   rm -f "$batch"
@@ -166,7 +168,9 @@ catch_up() {
   # A prompt you answered without a hook firing (Esc) is not read.
   kept=""
   while IFS=$'\037' read -r -u 3 t s kind text; do
-    [ "$kind" = need ] && ! still_waiting "$s" && continue
+    if [ "$kind" = need ] && ! still_waiting "$s"; then
+      echo "$(date '+%F %T') skipped (answered): $text" >> "$LOG"; continue
+    fi
     kept="$kept$t"$'\037'"$s"$'\037'"$kind"$'\037'"$text"$'\n'
   done 3<<<"$lines"
   lines=${kept%$'\n'}
@@ -190,7 +194,12 @@ if [ "$1" = release ]; then
     if mic_state; then free=0; else free=$((free + 1)); fi
     [ "$free" -ge 2 ] && { catch_up; free=0; continue; }
     # A mic that stays busy for hours: stop watching and drop the queue.
-    [ $(( $(date +%s) - began )) -ge "$HOLD_MAX" ] && { rm -f "$HELD"; break; }
+    if [ $(( $(date +%s) - began )) -ge "$HOLD_MAX" ]; then
+      n=$(wc -l < "$HELD" | tr -d ' ')
+      lockf -k "$HELD.lock" rm -f "$HELD"
+      echo "$(date '+%F %T') dropped $n held line$([ "$n" = 1 ] || echo s) after $((HOLD_MAX / 3600)) hours" >> "$LOG"
+      break
+    fi
     sleep "$POLL"
   done
   exit 0

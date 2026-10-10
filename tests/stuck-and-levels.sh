@@ -173,7 +173,7 @@ release
 order_check "needs you first, then alerts, then finished lines" "Need C.|Stuck B.|Done A.|"
 waiting d; held_now d need "Waiting 2."; held_now d need "Waiting 5."; held_now d need "Waiting 10."
 release
-order_check "three reminders for one prompt become the newest one" "Waiting 10.|"
+order_check "three lines for one prompt keep the first, most specific one" "Waiting 2.|"
 held_add $(( $(date +%s) - 60 )) e done "Old enough."
 release
 order_check "a hold of 30 seconds or more gets the intro" "While you were on the mic:|Old enough.|"
@@ -281,6 +281,21 @@ new lc5; pre lc5 t5; sleep 2.5
 got=$(grep -c "Latest step" "$OUT")
 if [ "$got" -le 3 ]; then pass=$((pass + 1)); echo "  ok    EARSHOT_BEAT_SECS=0: at most one update a second"; else fail=$((fail + 1)); echo "  FAIL  EARSHOT_BEAT_SECS=0: $got updates in 2.5 s"; fi
 for s in lc1 lc2 lc3 lc4 lc5; do hook end "$s" '{}'; done; : > "$OUT"
+
+echo "The log"
+LOGF=$EARSHOT_STATE_DIR/earshot.log; rm -f "$LOGF" "$HELD"
+mic 0; done_line lg1 "Logged line."; mic 1
+log_check() { # log_check <name> <pattern>
+  if grep -q -- "$2" "$LOGF" 2>/dev/null; then pass=$((pass + 1)); echo "  ok    $1"; else fail=$((fail + 1)); echo "  FAIL  $1 (log: $(tail -2 "$LOGF" 2>/dev/null))"; fi
+}
+log_check "a held line is logged" "held (done): .*Logged line"
+rm -f "$HELD"; held_now lg2 need "Esc in the log."
+release
+log_check "a skipped answered prompt is logged" "skipped (answered): Esc in the log"
+mic 0; held_now lg3 done "Capped."
+EARSHOT_HOLD_MAX_SECS=1 release
+log_check "lines dropped at the cap are logged" "dropped 1 held line"
+mic 1; rm -f "$HELD"; : > "$OUT"
 
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
