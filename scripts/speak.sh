@@ -62,14 +62,15 @@ say() {
       if [ "$ok" != 0 ] || [ "$code" != 200 ]; then
         echo "$(date '+%F %T') HTTP $code curl $ok: $(head -c 300 "$dl" 2>/dev/null)" >> "$LOG"
         rm -f "$dl"
-        afplay /System/Library/Sounds/Basso.aiff
-        exit
+        out=/System/Library/Sounds/Basso.aiff   # the error tone waits its turn too
+      else
+        mv "$dl" "$out"
       fi
-      mv "$dl" "$out"
     fi
     # All sessions share one speaker, so lines take turns: a line waits for
     # the one playing to finish, and is dropped after a minute in the queue.
-    lockf -s -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked"
+    # -k keeps the lock file, so a new line cannot lock a fresh copy of it.
+    lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked"
   ) >/dev/null 2>&1 &
 }
 
@@ -215,7 +216,8 @@ clear_wait() {
   local wf pid; wf=$(wait_file "$sid")
   [ -f "$wf" ] || return 0
   pid=$(sed -n 6p "$wf")
-  [ -n "$pid" ] && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
+  # A timer that already finished may have its PID reused by another program.
+  [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -Eq '/speak\.sh (ask|question)$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
   rm -f "$wf"
 }
 new_wait() {
