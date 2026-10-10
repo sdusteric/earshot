@@ -37,7 +37,7 @@ Cost: about $8 a month with ElevenLabs v4 Turbo at roughly 100 spoken lines a da
 In Claude Code:
 
 ```
-/plugin marketplace add stardustxx/earshot
+/plugin marketplace add sdusteric/earshot
 /plugin install earshot@earshot
 /earshot:setup
 ```
