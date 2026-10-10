@@ -97,7 +97,7 @@ Cost: nothing with Kokoro. With ElevenLabs v4 Turbo, about $8 a month at roughly
 
 ### Install with a terminal
 
-You can also do the setup in a terminal. The script shows a numbered list of voices. For ElevenLabs, it also asks for the key.
+You can also do the setup in a terminal. The script asks whether to use Kokoro or ElevenLabs and shows a numbered list of voices. For ElevenLabs, it also asks for the key.
 
 1. Do step 1 of [Install](#install).
 2. In a terminal, run:

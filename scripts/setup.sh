@@ -32,8 +32,8 @@ done
 EARSHOT_KEY= EARSHOT_VOICE= EARSHOT_MODEL= EARSHOT_ENGINE= EARSHOT_KOKORO_VOICE= EARSHOT_SAY_VOICE=
 [ -f "$CONF" ] && . "$CONF"
 KEY=$EARSHOT_KEY VOICE=$EARSHOT_VOICE MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
-STATE_DIR=$(getconf DARWIN_USER_TEMP_DIR)earshot
-TTS=$DIR/kokoro/earshot-tts
+STATE_DIR=${EARSHOT_STATE_DIR:-$(getconf DARWIN_USER_TEMP_DIR)earshot}   # same folder as speak.sh
+TTS=${EARSHOT_KOKORO_DIR:-$DIR/kokoro}/earshot-tts   # build-tts.sh installs it there
 KOKORO_DEFAULT=af_heart
 
 key_src= voice_arg= engine_arg= mode=setup
@@ -288,11 +288,22 @@ Or run this script in Terminal so it can ask for the key."
 }
 
 # --- Kokoro ------------------------------------------------------------------
+# kokoro_label af_heart -> "American English, female": what the name's prefix means.
+kokoro_label() {
+  case "$1" in
+    af_*) echo "American English, female" ;; am_*) echo "American English, male" ;;
+    bf_*) echo "British English, female" ;; bm_*) echo "British English, male" ;;
+  esac
+}
+
 pick_kokoro_voice() {
   local list i=0 v choice def=${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}
   list=$(printf '%s\n' af_heart af_bella am_michael bm_george)
   echo; echo "Kokoro voices (setup.sh --engine kokoro --list-voices shows all):"
-  while read -r v; do i=$((i + 1)); printf '  %d) %s%s\n' "$i" "$v" "$([ "$v" = "$def" ] && echo "  (current)")"; done <<<"$list"
+  while read -r v; do
+    i=$((i + 1))
+    printf '  %d) %-11s %s%s\n' "$i" "$v" "$(kokoro_label "$v")" "$([ "$v" = "$def" ] && echo "  (current)")"
+  done <<<"$list"
   read -rp "Number, a voice name, or Enter for $def: " choice
   if [ -z "$choice" ]; then KVOICE=$def
   elif [[ "$choice" =~ ^[1-4]$ ]]; then KVOICE=$(sed -n "${choice}p" <<<"$list")
@@ -300,12 +311,20 @@ pick_kokoro_voice() {
   fi
 }
 
+# The helper is current when it is newer than its sources.
+kokoro_current() {
+  local src=$SCRIPTS/../tts
+  [ -x "$TTS" ] && [ "$TTS" -nt "$src/Sources/earshot-tts/main.swift" ] && [ "$TTS" -nt "$src/Package.swift" ]
+}
+
 setup_kokoro() {
   KVOICE=${voice_arg:-${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}}
   if [ -z "$voice_arg" ] && [ -t 0 ]; then pick_kokoro_voice; fi
-  echo "Building the Kokoro helper. The first build takes about 2 minutes."
-  bash "$SCRIPTS/build-tts.sh" >&2 \
-    || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
+  if ! kokoro_current; then
+    echo "Building the Kokoro helper. The first build takes about 2 minutes."
+    bash "$SCRIPTS/build-tts.sh" >&2 \
+      || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
+  fi
   kokoro_voices | grep -qx -- "$KVOICE" \
     || die "Kokoro has no voice called $KVOICE. To see the list, run: setup.sh --engine kokoro --list-voices"
   ( umask 077; mkdir -p "$STATE_DIR" )
@@ -327,6 +346,17 @@ setup_say() {
   TEST=$TMP/test.aiff
   DONE_MSG="Done. Voice: ${v:-the system voice} (the Mac's own voice)."
 }
+
+# In a terminal, ask for the engine unless a flag chose it.
+pick_engine() {
+  local choice
+  echo "Which voice should Earshot use?"
+  echo "  1) Kokoro: free, runs on this Mac, and your lines never leave it$([ "$ENGINE" = kokoro ] && echo "  (current)")"
+  echo "  2) ElevenLabs: more expressive, needs an API key, about \$8 a month$([ "$ENGINE" = elevenlabs ] && echo "  (current)")"
+  read -rp "1 or 2, or Enter for $ENGINE: " choice
+  case "$choice" in 1) ENGINE=kokoro ;; 2) ENGINE=elevenlabs ;; esac
+}
+if [ -z "$engine_arg" ] && [ -z "$key_src" ] && [ -t 0 ]; then pick_engine; fi
 
 case "$ENGINE" in
   kokoro) setup_kokoro ;;

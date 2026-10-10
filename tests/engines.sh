@@ -11,6 +11,7 @@ printf '#!/bin/bash\nexit 1\n' > "$EARSHOT_MIC"
 cat > "$EARSHOT_TTS" <<EOF
 #!/bin/bash
 echo "\$*" >> "$CALLS"
+[ "\$1" = voices ] && { printf "af_heart\\naf_bella\\n"; exit 0; }
 [ "\$1" = speak ] || exit 0
 [ -e "$T/tts-fail" ] && { echo "model exploded" >&2; exit 1; }
 while [ \$# -gt 0 ]; do case "\$1" in --out) out=\$2; shift ;; --voice) v=\$2; shift ;; esac; shift; done
@@ -94,6 +95,17 @@ st=$(bash "$SETUP" --status 2>&1)
 is "status names the engine" "$(grep -c 'Engine: elevenlabs' <<<"$st")" 1
 is "an unknown engine is refused" "$(bash "$SETUP" --engine loud 2>&1 | grep -c 'Engine must be')" 1
 is "kokoro voices are listed without a key" "$(bash "$SETUP" --engine kokoro --list-voices | grep -cx af_heart)" 1
+
+# A full setup run against a fake home and a fake, current Kokoro helper.
+K=$T/kokoro; mkdir -p "$K" "$T/bin" "$T/home"; cp "$EARSHOT_TTS" "$K/earshot-tts"
+printf '#!/bin/bash\nexit 0\n' > "$T/bin/afplay"; chmod +x "$T/bin/afplay"
+setup_run() { HOME=$T/home PATH=$T/bin:$PATH EARSHOT_KOKORO_DIR=$K bash "$SETUP" "$@" </dev/null 2>&1; }
+conf
+out=$(setup_run --engine kokoro --voice af_bella)
+is "a current helper is not rebuilt" "$(grep -c 'Building' <<<"$out")" 0
+is "the Kokoro voice is saved" "$(grep -c '^EARSHOT_KOKORO_VOICE=af_bella$' "$EARSHOT_CONF")" 1
+out=$(setup_run --engine kokoro --voice af_nobody); code=$?
+is "an unknown voice fails without a build" "$code $(grep -c 'Building' <<<"$out") $(grep -c 'no voice called af_nobody' <<<"$out")" "1 0 1"
 
 rm -rf "$T"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
