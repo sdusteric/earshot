@@ -124,6 +124,49 @@ play() {
 [ "$1" = say ] && { say "$2"; exit 0; }
 [ "$1" = play ] && { play "$2" "$3" "$4" "$5" "$6"; exit 0; }
 
+# --- After the call: the catch-up -------------------------------------------------
+POLL=${EARSHOT_POLL_SECS:-2}            # seconds between mic checks
+HOLD_MAX=${EARSHOT_HOLD_MAX_SECS:-14400}   # held lines older than 4 hours are dropped
+
+# catch_up: says the held lines. The newest line per session and kind;
+# lines that need you first, then alerts, then finished lines, oldest first.
+catch_up() {
+  local batch now lines total n=0 t s kind text
+  batch=$(mktemp "$STATE/batch.XXXXXX") || return
+  # Taking the whole queue under the lock means a line is spoken once, even
+  # when two catch-ups run at the same time.
+  lockf -k "$HELD.lock" mv "$HELD" "$batch" 2>/dev/null || { rm -f "$batch"; return; }
+  now=$(date +%s)
+  lines=$(awk -F'\037' -v min=$((now - HOLD_MAX)) '$1 >= min { last[$2 FS $3] = $0 }
+      END { for (k in last) { split(last[k], f, FS); print (f[3] == "need" ? 0 : f[3] == "alert" ? 1 : 2), f[1], last[k] } }' "$batch" \
+    | sort -k1,1n -k2,2n | cut -d' ' -f3-)
+  rm -f "$batch"
+  [ -n "$lines" ] || return
+  total=$(printf '%s\n' "$lines" | wc -l | tr -d ' ')
+  [ $((now - $(printf '%s\n' "$lines" | cut -d$'\037' -f1 | sort -n | head -1))) -ge 30 ] && speak "While you were on the mic:" intro
+  # Read from fd 3, so nothing that speak runs can eat the list.
+  while IFS=$'\037' read -r -u 3 t s kind text; do
+    n=$((n + 1))
+    [ "$n" -gt 4 ] && { speak "And $((total - 4)) more." intro; break; }
+    speak "$text" "$kind" "$s"
+  done 3<<<"$lines"
+}
+
+# release: the watcher. The first held line starts it. It checks the mic every
+# few seconds and says the catch-up once the mic is free on two checks in a
+# row, so a short pause in a call does not count as the end.
+if [ "$1" = release ]; then
+  began=$(date +%s); free=0
+  while [ -s "$HELD" ]; do
+    if mic_state; then free=0; else free=$((free + 1)); fi
+    [ "$free" -ge 2 ] && { catch_up; free=0; continue; }
+    # A mic that stays busy for hours: stop watching and drop the queue.
+    [ $(( $(date +%s) - began )) -ge "$HOLD_MAX" ] && { rm -f "$HELD"; break; }
+    sleep "$POLL"
+  done
+  exit 0
+fi
+
 # --- Waiting on you: permission prompts and questions -------------------------
 # A wait file per session holds: token, kind (permission|question), project,
 # what is being asked, and the transcript path. Any later hook activity deletes

@@ -156,6 +156,46 @@ mic 0; EARSHOT_HOLD_ON_MIC=off done_line h6 "Hold is off."
 check "EARSHOT_HOLD_ON_MIC=off: spoken while the mic is busy" 1 "Hold is off"
 mic 1; rm -f "$HELD"; : > "$OUT"
 
+echo "Catch-up after the call"
+held_add() { printf '%s\037%s\037%s\037%s\n' "$1" "$2" "$3" "$4" >> "$HELD"; }
+held_now() { held_add "$(date +%s)" "$@"; }   # held just now: no intro
+release() { bash "$S" release </dev/null; }
+order_check() { # order_check <name> <expected lines joined by |>
+  local got; got=$(tr '\n' '|' < "$OUT")
+  if [ "$got" = "$2" ]; then pass=$((pass + 1)); echo "  ok    $1"; else fail=$((fail + 1)); echo "  FAIL  $1 (heard: $got)"; fi
+  : > "$OUT"
+}
+rm -f "$HELD"; mic 1
+held_now a done "Done A."; held_now b alert "Stuck B."; held_now c need "Need C."
+release
+order_check "needs you first, then alerts, then finished lines" "Need C.|Stuck B.|Done A.|"
+held_now d need "Waiting 2."; held_now d need "Waiting 5."; held_now d need "Waiting 10."
+release
+order_check "three reminders for one prompt become the newest one" "Waiting 10.|"
+held_add $(( $(date +%s) - 60 )) e done "Old enough."
+release
+order_check "a hold of 30 seconds or more gets the intro" "While you were on the mic:|Old enough.|"
+held_add $(( $(date +%s) - 20000 )) f done "Too old."; held_now g done "Fresh."
+release
+order_check "lines older than 4 hours are dropped" "Fresh.|"
+for s in 1 2 3 4 5 6; do held_now "x$s" done "Line $s."; done
+release
+order_check "at most 4 lines, then how many more" "Line 1.|Line 2.|Line 3.|Line 4.|And 2 more.|"
+held_now q done "It's \"done\" & 50% \$HOME \\o/"
+release
+order_check "quotes, \$ and backslashes survive the queue" "It's \"done\" & 50% \$HOME \\o/|"
+mic 0; done_line r1 "Round trip."; mic 1
+release
+check "a held finished line is spoken after the call" 1 "Round trip."
+held_now k done "Once K."; held_now l done "Once L."
+release & release; wait
+check "two catch-ups at once: each line is spoken once" 2 "Once [KL]\."
+mic 0; held_now m done "Never free."
+EARSHOT_HOLD_MAX_SECS=1 release
+if [ ! -s "$HELD" ]; then pass=$((pass + 1)); echo "  ok    a mic that never frees up: the watcher gives up"; else fail=$((fail + 1)); echo "  FAIL  the queue is still there after the cap"; fi
+check "a mic that never frees up: nothing is spoken" 0 "Never free"
+mic 1; rm -f "$HELD"; : > "$OUT"
+
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
