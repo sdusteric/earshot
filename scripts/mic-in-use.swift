@@ -8,7 +8,10 @@
 import CoreAudio
 import Foundation
 
-let ignored = ["com.apple.corespeechd", "com.apple.SpeechRecognitionCore", "com.apple.speech."]
+// Voice Control listens through the dictation input method (ironwood) and
+// the speech recognizer, both all day. macOS dictation uses ironwood too.
+let ignored = ["com.apple.corespeechd", "com.apple.SpeechRecognitionCore", "com.apple.speech.",
+               "com.apple.inputmethod.ironwood"]
 let list = CommandLine.arguments.contains("--list")
 let system = AudioObjectID(kAudioObjectSystemObject)
 

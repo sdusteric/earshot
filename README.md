@@ -235,7 +235,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - If you ask Claude to run the same failing command several times on purpose, Earshot can say that Claude might be stuck.
 - All Claude Code sessions use the same speaker, so lines play one at a time. A line waits for the one that plays to finish. A line that waits more than a minute is dropped.
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
-- Earshot cannot tell a call from other apps that use the microphone, such as a voice recorder. It waits for any of them. Siri and Voice Control do not count.
+- Earshot cannot tell a call from other apps that use the microphone, such as a voice recorder. It waits for any of them. Siri and Voice Control do not count, and neither does macOS dictation (Fn Fn), because Voice Control uses the same process. Claude Code's `/voice` does count.
 - A line held for more than 4 hours is dropped.
 - Per-app microphone checks need macOS 14.2 or later. On older versions, Earshot does not wait during calls.
 - After an update, Earshot rebuilds its microphone check in the background. If the build fails, for example because Xcode needs attention, Earshot does not wait during calls until you run `/earshot:setup` again. `setup.sh --status` shows when this happens.
