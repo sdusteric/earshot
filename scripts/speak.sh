@@ -4,6 +4,8 @@
 # elicit | answered | inputnotify | pretool (hooks),
 # remind (internal timer), play (internal, one line at a time), say "<text>" (manual test)
 umask 077   # every file Earshot writes is readable only by you
+# Shortcuts and other launchers run scripts with a short PATH; jq is usually here.
+PATH=$PATH:/opt/homebrew/bin:/usr/local/bin
 CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewhere
 [ -f "$CONF" ] && . "$CONF"
 # The saved config wins, so a generic ELEVENLABS_API_KEY set for other tools
@@ -13,8 +15,12 @@ VOICE=${EARSHOT_VOICE:-$ELEVENLABS_VOICE_ID}
 [ -n "$KEY" ] && [ -n "$VOICE" ] || exit 0
 # Talks only while /voice is on. Hooks get no signal that a prompt was
 # dictated, so typed prompts get spoken updates too.
-[ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] || exit 0
-[ -e ~/.config/earshot/mute ] && exit 0
+# A roll call is something you asked for, so it plays even when muted or with
+# /voice off. ($4 is the kind when play runs a line.)
+if [ "$1" != rollcall ] && ! { [ "$1" = play ] && [ "$4" = roll ]; }; then
+  [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] || exit 0
+  [ -e ~/.config/earshot/mute ] && exit 0
+fi
 
 MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
 BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
@@ -83,7 +89,7 @@ hold() {
 # or plays it. It returns when the line has played.
 speak() {
   local asked out dl body code ok
-  if [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
+  if [ "$2" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
   # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
   [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
   asked=$(date +%s)
@@ -120,7 +126,7 @@ play() {
   [ "$(stat -f %m "$STATE/hushed" 2>/dev/null || echo 0)" -ge "$2" ] && return
   # A call started while this line waited for the speaker: keep it for later.
   # Its audio is cached, so the catch-up does not download it again.
-  if [ "$HOLD" = on ] && mic_state; then hold "$3" "$4" "$5"; return; fi
+  if [ "$3" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$3" "$4" "$5"; return; fi
   # Stop when you start talking. A mic that was already on (an app the helper
   # cannot name, or holding is off) does not count.
   mic_busy && mic_was_on=1
@@ -245,6 +251,54 @@ if [ "$1" = longbeat ]; then
   exit 0
 fi
 
+# --- Roll call --------------------------------------------------------------------
+# rollcall [--print]: says what every open session is doing, the ones that need
+# you first. From a hotkey or /earshot:rollcall; --print also prints the line.
+count_words=(No One Two Three Four Five Six Seven Eight Nine)
+if [ "$1" = rollcall ]; then
+  LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}
+  find "$LIVE" -type f -mmin +360 -delete 2>/dev/null
+  now=$(date +%s); rows=""
+  for f in "$LIVE"/*; do
+    [ -f "$f" ] || continue
+    s=${f##*/}
+    st=open; since=0; name=""; detail=""
+    { read -r st; read -r since; read -r name; read -r detail; } 2>/dev/null < "$STATE/status-$s"
+    [ -n "$name" ] || name=$(head -1 "$f")
+    Name=$(upper_first "$name")
+    case "$st" in
+      needs) r=0; text="$Name $detail." ;;
+      reply) r=0; text="$Name is waiting on your answer." ;;
+      stuck) r=1; text="$Name might be stuck." ;;
+      failed) r=1; text="$Name hit an error." ;;
+      working)
+        r=2; start=$since; read -r start _ 2>/dev/null < "$STATE/turn-$s"
+        m=$(( (now - start) / 60 ))
+        case "$m" in 0) text="$Name is working, just started." ;; 1) text="$Name is working, 1 minute in." ;; *) text="$Name is working, $m minutes in." ;; esac ;;
+      done)
+        r=3
+        if [ -n "$detail" ]; then
+          case "$detail" in *[.!?]) ;; *) detail="$detail." ;; esac
+          text="$Name finished: $(lower_first "$detail")"
+        else text="$Name finished."
+        fi ;;
+      *) r=4; text="$Name is open." ;;
+    esac
+    rows="$rows$r ${since:-0} $text"$'\n'
+  done
+  total=$(printf '%s' "$rows" | grep -c .)
+  if [ "$total" = 0 ]; then line="No Claude sessions are open."
+  else
+    if [ "$total" -le 9 ]; then line="${count_words[$total]} session$([ "$total" = 1 ] || echo s)."
+    else line="$total sessions."; fi
+    line="$line $(printf '%s' "$rows" | sort -k1,1n -k2,2n | head -6 | cut -d' ' -f3- | tr '\n' ' ' | sed 's/ $//')"
+    [ "$total" -gt 6 ] && line="$line And $((total - 6)) more."
+  fi
+  [ "$2" = --print ] && { echo "$line"; say "$line" roll ""; exit 0; }
+  if [ -n "$EARSHOT_DRYRUN" ]; then speak "$line" roll ""; else speak "$line" roll "" </dev/null >/dev/null 2>&1; fi
+  exit 0
+fi
+
 # watch_command <session> <token>: while the same command runs, says an update
 # each time one is due, at most once a second. The command's PostToolUse
 # removes the running file and stops it.
@@ -282,7 +336,7 @@ start_timer() {
 
 # Plain words for what a permission prompt asks for, e.g. "to run the invoice tests".
 asks_for() {
-  local tool desc
+  local desc   # $tool comes from the hook input, read once above
   case "$tool" in
     Bash)
       desc=$(jq -r '.tool_input.description // empty' <<<"$input" | tr '_' ' ' | awk '{for (i = 1; i <= NF && i <= 12; i++) printf "%s%s", $i, (i < NF && i < 12 ? " " : "")}' | sed 's/[.]*$//')
@@ -393,6 +447,11 @@ new_wait() {
   clear_wait
   token="$now-$$-$RANDOM"
   printf '%s\n%s\n%s\n%s\n%s\n' "$token" "$1" "$who" "$2" "$transcript" > "$(wait_file "$sid")"
+  case "$1" in
+    permission) set_status needs "needs your OK${2:+ $2}" ;;
+    question) set_status needs "has a question for you" ;;
+    input) set_status needs "needs your input${2:+ $2}" ;;
+  esac
 }
 
 # --- Stuck detection ------------------------------------------------------------
@@ -405,6 +464,10 @@ new_wait() {
 # neither counts. Polling a long job repeats on purpose and is skipped.
 hist="$STATE/hist-$sid"; errs="$STATE/errs-$sid"; warned="$STATE/warned-$sid"
 running="$STATE/running-$sid"   # a long command in progress: token, name, step, timer PID
+status="$STATE/status-$sid"     # for the roll call: state, since, spoken name, detail
+
+# set_status <state> [detail]: what this session is doing, for the roll call.
+set_status() { printf '%s\n%s\n%s\n%s\n' "$1" "$now" "$who" "$2" > "$status"; }
 
 # stop_watch: the command ended (or the turn did), so stop its update timer.
 stop_watch() {
@@ -415,7 +478,7 @@ stop_watch() {
   rm -f "$running"
 }
 
-warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; tell alert "$2"; }
+warn_once() { [ -s "$warned" ] && return; echo "$1" > "$warned"; set_status stuck; tell alert "$2"; }
 
 polling() {
   case "$tool" in BashOutput|TaskOutput|Monitor) return 0 ;; esac
@@ -474,16 +537,20 @@ progress() {
 case "$1" in
 begin)
   # SessionStart: registered above, nothing to say.
+  set_status open
   ;;
 end)
   # SessionEnd: this session no longer counts as open.
   stop_watch
   clear_wait
-  rm -f "$LIVE/$sid" "$state" "$hist" "$errs" "$warned"
+  rm -f "$LIVE/$sid" "$state" "$hist" "$errs" "$warned" "$status"
   ;;
 start)
   stop_watch
+  # /earshot:rollcall speaks for itself, so this turn gets no 🗣 line.
+  case "$(jq -r '.prompt // empty' <<<"$input")" in /earshot:rollcall*) exit 0 ;; esac
   clear_wait
+  set_status working
   # Few fixed phrases, so all of them come from the cache after the first use.
   acks=("Got it." "On it." "Okay, on it.")
   tell ack "${acks[RANDOM % 3]}"
@@ -507,6 +574,7 @@ EOF
 tool)
   stop_watch
   clear_wait
+  [ "$(head -1 "$status" 2>/dev/null)" = needs ] && set_status working
   progress
   # The end of the result is enough to tell results apart, and hashing less
   # keeps big Edit and Write payloads fast.
@@ -516,6 +584,7 @@ toolfail)
   # PostToolUseFailure: a Bash command that exits non-zero lands here, not in tool.
   stop_watch
   clear_wait
+  [ "$(head -1 "$status" 2>/dev/null)" = needs ] && set_status working
   [ "$(jq -r '.is_interrupt // false' <<<"$input")" = true ] && exit 0
   progress
   call=$(jq -c '[.tool_name, .tool_input]' <<<"$input")
@@ -586,7 +655,7 @@ idle)
   [ -f "$transcript" ] || exit 0
   last=$(last_text \
     | sed -e 's/[[:space:]]*$//' | grep -v '^$' | tail -1)
-  case "$last" in *'?') tell reply "Hey, $who is still waiting on your answer." ;; esac
+  case "$last" in *'?') set_status reply; tell reply "Hey, $who is still waiting on your answer." ;; esac
   ;;
 stop)
   stop_watch
@@ -606,6 +675,11 @@ stop)
   line=$(printf '%s\n' "$msg" | LC_ALL=C grep '^[[:space:]*_>]*🗣' | tail -1 \
     | LC_ALL=C sed -e 's/.*🗣//' -e $'s/^\xef\xb8\x8f//' -e 's/[*_`]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
     | awk '{for (i = 1; i <= NF && i <= 40; i++) printf "%s%s", $i, (i < NF && i < 40 ? " " : "")}')
+  # The roll call keeps the line, at most 15 words. A turn with no line ends a
+  # working session but keeps a finished session's last line.
+  if [ -n "$line" ]; then set_status done "$(awk '{for (i = 1; i <= NF && i <= 15; i++) printf "%s%s", $i, (i < NF && i < 15 ? " " : "")}' <<<"$line")"
+  else case "$(head -1 "$status" 2>/dev/null)" in done|open|reply) ;; *) set_status done ;; esac
+  fi
   # With other sessions open, say whose summary it is.
   [ -n "$line" ] && [ "$SESSION_NAME" != never ] && { [ "$others" -gt 0 ] || [ "$SESSION_NAME" = always ]; } && line="From $who: $line"
   [ -n "$line" ] && tell done "$line"
@@ -614,6 +688,7 @@ fail)
   stop_watch
   clear_wait
   rm -f "$state" "$hist" "$errs" "$warned"
+  set_status failed
   tell alert "$(upper_first "$who") hit an error. Take a look when you can."
   ;;
 esac

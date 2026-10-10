@@ -90,6 +90,12 @@ R=$(dirname "$P")/invoiceApi_v2; mkdir -p "$R"
 hook fail w9 "$(jq -nc --arg c "$R" '{cwd: $c}')"; hook end w9 '{}'
 check "folder names are said as words" 1 "^Invoice Api v2 hit an error."
 
+echo "Permission prompts say what they ask for"
+hook ask pp1 '{"tool_name":"Bash","tool_input":{"command":"x","description":"Run the invoice tests"}}'
+hook notify pp1 '{"notification_type":"permission_prompt"}'
+check "a permission line names the command" 1 "needs your OK to run the invoice tests\.$"
+hook end pp1 '{}'
+
 echo "Question reminder"
 printf '%s\n' tok question "billing service" "" "" > "$EARSHOT_STATE_DIR/wait-q1"
 bash "$S" remind q1 tok first </dev/null
@@ -296,6 +302,45 @@ mic 0; held_now lg3 done "Capped."
 EARSHOT_HOLD_MAX_SECS=1 release
 log_check "lines dropped at the cap are logged" "dropped 1 held line"
 mic 1; rm -f "$HELD"; : > "$OUT"
+
+echo "Roll call"
+export EARSHOT_LIVE_DIR=$EARSHOT_STATE_DIR/live-roll; mkdir -p "$EARSHOT_LIVE_DIR"
+R=$(dirname "$P")/docs-site; mkdir -p "$R"; git -C "$R" init -q
+G=$(dirname "$P")/api-gateway; mkdir -p "$G"; git -C "$G" init -q
+at() { # at <mode> <session> <cwd> <json-extra>
+  jq -nc --arg sid "$2" --arg cwd "$3" --argjson x "$4" '{session_id: $sid, cwd: $cwd} + $x' | bash "$S" "$1" >/dev/null
+}
+roll() { bash "$S" rollcall </dev/null; }
+at start r1 "$P" '{}'; at ask r1 "$P" '{"tool_name":"Bash","tool_input":{"command":"x","description":"Run the database migration"}}'
+at start r2 "$Q" '{}'
+at start r3 "$R" '{}'; at stop r3 "$R" '{"last_assistant_message":"Done.\n🗣 Fixed the broken links."}'
+at start r4 "$G" '{}'; for i in 1 2 3; do at toolfail r4 "$G" '{"tool_name":"Bash","tool_input":{"command":"make"},"error":"Exit code 2\nmake: *** [all] Error 2"}'; done
+: > "$OUT"; roll
+order_check "roll call: needs you, stuck, working, finished" "Four sessions. Billing service needs your OK to run the database migration. Api gateway might be stuck. Invoice api is working, just started. Docs site finished: fixed the broken links.|"
+at tool r1 "$P" '{"tool_name":"Bash","tool_input":{"command":"x"},"tool_response":{}}'
+st=$(head -1 "$EARSHOT_STATE_DIR/status-r1")
+if [ "$st" = working ]; then pass=$((pass + 1)); echo "  ok    answering a prompt sets the session back to working"; else fail=$((fail + 1)); echo "  FAIL  status after answering: $st"; fi
+at stop r2 "$Q" '{"last_assistant_message":"No voice line here."}'
+at start r3 "$R" '{"prompt":"/earshot:rollcall"}'; at stop r3 "$R" '{"last_assistant_message":"Here it is."}'
+: > "$OUT"; roll
+order_check "no 🗣 line: working becomes done, done keeps its line" "Four sessions. Api gateway might be stuck. Billing service is working, just started. Docs site finished: fixed the broken links. Invoice api finished.|"
+printf '%s\n%s\n' "old project" "" > "$EARSHOT_LIVE_DIR/r5"
+: > "$OUT"; roll
+at_least "a session without a status file is open" 1 "Old project is open\."
+mic 0; : > "$OUT"; roll; mic 1
+at_least "roll call plays while the mic is busy" 1 "^Five sessions"
+held_check "roll call is never held" 0 "sessions"
+printed=$(bash "$S" rollcall --print </dev/null)
+case "$printed" in "Five sessions."*) pass=$((pass + 1)); echo "  ok    --print prints the roll call" ;; *) fail=$((fail + 1)); echo "  FAIL  --print printed: $printed" ;; esac
+out=$(jq -nc --arg cwd "$P" '{session_id: "r1", cwd: $cwd, prompt: "/earshot:rollcall"}' | bash "$S" start)
+case "$out" in *🗣*) fail=$((fail + 1)); echo "  FAIL  /earshot:rollcall still asks for a 🗣 line" ;; *) pass=$((pass + 1)); echo "  ok    /earshot:rollcall does not ask for a 🗣 line" ;; esac
+for s in r1 r2 r3 r4 r5; do at end "$s" "$P" '{}'; done; rm -f "$EARSHOT_LIVE_DIR"/*
+: > "$OUT"; roll
+order_check "no sessions" "No Claude sessions are open.|"
+for i in 1 2 3 4 5 6 7; do printf '%s\n%s\n' "project $i" "" > "$EARSHOT_LIVE_DIR/c$i"; printf '%s\n%s\n%s\n%s\n' done "$i" "project $i" "" > "$EARSHOT_STATE_DIR/status-c$i"; done
+: > "$OUT"; roll
+order_check "seven sessions: six, then how many more" "Seven sessions. Project 1 finished. Project 2 finished. Project 3 finished. Project 4 finished. Project 5 finished. Project 6 finished. And 1 more.|"
+rm -f "$EARSHOT_LIVE_DIR"/* "$EARSHOT_STATE_DIR"/status-c*; unset EARSHOT_LIVE_DIR; : > "$OUT"
 
 rm -rf "$T" "$EARSHOT_STATE_DIR"
 rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
