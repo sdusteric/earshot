@@ -79,3 +79,15 @@ The blocker is gone. A menu bar app can:
 
 The plugin still provides the events, and `agents --json` already covers much of
 roll call.
+
+## Follow-up probe: does `priority: "now"` interrupt? (2026-10-11)
+
+No. A background session running `ping -c 40 127.0.0.1` got a `now` message
+asking it to stop. The command ran to the end (about 40 seconds). The message
+was delivered at the next step boundary, and Claude obeyed it: it replied
+"STOPPED" and skipped its planned final reply. So `now` means "before anything
+else, after the current tool call", not an interrupt.
+
+Consequence for Stop: send a `now` message and say "Billing service will stop
+after its current step." For background sessions, `claude stop <id>` stops at
+once and the session can be resumed.

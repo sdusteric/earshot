@@ -206,11 +206,12 @@ receipt within 5 seconds, it says "Billing service didn't pick it up."
 **Status.** "What's everyone doing?" plays the roll call, the sessions that need
 you first. "What's billing doing?" says that session's state and latest step.
 
-**Stop.** Not verified yet. The plan's first step checks whether a
-`priority: "now"` message interrupts a busy turn. If it does, Earshot sends
-"Stop what you're doing and wait for the user." If it does not, background
-sessions are stopped with `claude stop <id>`, and for terminal and desktop
-sessions Earshot says "I can't stop that session yet." Sending a signal to the
+**Stop.** A `priority: "now"` message does not interrupt a running tool call
+(probe on 2026-10-11, see the spike notes). It is delivered before anything else
+at the next step, and Claude obeys it. So Earshot sends "Stop what you're doing
+and wait for the user." with priority `now` and says "Billing service will stop
+after its current step." "Stop it now" on a background session runs `claude
+stop <id>`, which stops at once and can be resumed. Sending a signal to the
 process is not allowed: a second Ctrl-C quits the session.
 
 **Start.** Earshot finds the project folder among the folders Claude Code knows
@@ -435,8 +436,7 @@ The plan starts with the three items that could change the design:
 
 1. Measure the wake word spotter's power use. If it is over budget, switch to a
    dedicated wake word model.
-2. Check whether a `priority: "now"` message interrupts a busy session (decides
-   how Stop works).
+2. Done on 2026-10-11: `now` does not interrupt (see Stop above).
 3. Prototype ducking with a process tap on Music, a browser and AirPods.
 
 Then:
