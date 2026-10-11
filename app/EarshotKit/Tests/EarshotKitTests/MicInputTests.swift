@@ -28,6 +28,13 @@ import Testing
         #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods], outputIsBluetooth: true) == nil)
     }
 
+    /// A desktop Mac with AirPods and a USB mic must not open the AirPods mic.
+    @Test func bluetoothOutputWithoutABuiltInMicUsesAnotherWiredMic() {
+        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, usb], outputIsBluetooth: true) == "USB-1")
+        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, usb, builtIn], outputIsBluetooth: true)
+                == "BuiltInMicrophoneDevice")
+    }
+
     /// Needs the mic and its permission: EARSHOT_TEST_MIC=1.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["EARSHOT_TEST_MIC"] == "1"))
     func recordsAboutOneSecond() async throws {

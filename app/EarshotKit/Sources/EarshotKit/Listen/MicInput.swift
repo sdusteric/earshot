@@ -12,13 +12,15 @@ public enum AudioDevices {
         public let isBuiltIn: Bool
     }
 
-    /// The mic to open. The setting, when that device is here; else the
-    /// built-in mic when the output is Bluetooth (opening a Bluetooth mic
-    /// switches the headset to call quality); else nil, the system default.
+    /// The mic to open. The setting, when that device is here; else, when the
+    /// output is Bluetooth (opening a Bluetooth mic switches the headset to call
+    /// quality), the built-in mic, or any mic that is not Bluetooth; else nil,
+    /// the system default.
     public static func chooseInput(setting: String?, inputs: [Device], outputIsBluetooth: Bool) -> String? {
         if let setting, inputs.contains(where: { $0.uid == setting && $0.hasInput }) { return setting }
-        if outputIsBluetooth, let b = inputs.first(where: { $0.isBuiltIn && $0.hasInput }) { return b.uid }
-        return nil
+        guard outputIsBluetooth else { return nil }
+        if let b = inputs.first(where: { $0.isBuiltIn && $0.hasInput }) { return b.uid }
+        return inputs.first(where: { !$0.isBluetooth && $0.hasInput })?.uid
     }
 
     public static func all() -> [Device] { allIDs().compactMap(device) }

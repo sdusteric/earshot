@@ -178,7 +178,7 @@ private struct ListeningTab: View {
                     Text("Automatic").tag("")
                     ForEach(inputs, id: \.uid) { Text($0.name).tag($0.uid) }
                 }
-                Text("Automatic uses the built-in mic while your output is a Bluetooth headset, so the headset keeps its full sound quality.")
+                Text("Automatic uses a mic that isn't Bluetooth (the built-in one first) while your output is a Bluetooth headset, so the headset keeps its full sound quality.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !model.micAllowed {
                     Button("Allow the Microphone…") { Task { await model.requestMic() } }
