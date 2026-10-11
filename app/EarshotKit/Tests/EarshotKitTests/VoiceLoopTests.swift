@@ -159,6 +159,35 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await r.book.current.count == 1)
     }
 
+    /// The wake phrase before the answer is not part of it.
+    @Test func heyEarshotYesInTheWindowApproves() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("Hey Earshot, yes.", .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == ["Approved."] })
+        #expect(FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+    }
+
+    @Test func heyEarshotAloneInTheWindowDoesNothing() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        r.heard.yield(said("Hey Earshot.", .followUp(.approval(id: "1-1-1"))))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await r.player.played.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+        #expect(await r.book.current.count == 1)
+    }
+
+    @Test func heyEarshotBeforeTheAnswerToAQuestionIsIgnored() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await followUps.calls == [.reply] })
+        r.heard.yield(said("Hey Earshot, Invoice export.", .followUp(.reply)))
+        #expect(await eventually { await transport.sent.map(\.pid) == [11] })
+    }
+
     @Test func aHotkeyYesApproves() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())

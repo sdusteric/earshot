@@ -112,10 +112,12 @@ public actor VoiceLoop: ListenObserver {
     }
 
     private func respond(to u: Listener.Utterance) async {
+        // In a window the wake phrase may come first ("Hey Earshot, yes"); it is not part of the answer.
+        let answer = Listener.stripWake(u.text) ?? u.text
         switch u.trigger {
         case .followUp(.approval(let id)):
             // Only a clear yes or no. Anything else leaves the prompt as it is.
-            if let allow = Grammar.approvalWord(u.text) {
+            if let allow = Grammar.approvalWord(answer) {
                 switch await approvals.answer(id, allow: allow) {
                 case .written:
                     await chimes.play(.confirm)
@@ -126,9 +128,9 @@ public actor VoiceLoop: ListenObserver {
                 await events.add("command answer")
             }
         case .followUp(.reply):
-            if let p = pending {
+            if let p = pending, !answer.isEmpty {
                 pending = nil
-                await apply(await dispatcher.reply(u.text, to: p), after: u)
+                await apply(await dispatcher.reply(answer, to: p), after: u)
             }
         case .wake, .hotkey:
             pending = nil

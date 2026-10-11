@@ -93,7 +93,7 @@ bash scripts/send-integration.sh
 | End of speech | Say a wake command, then stop talking | About 770 ms of silence ends it (the VAD's chunking; the spec's 600 ms was ruled to 770 ms) |
 | Clients that hang up early | While the app runs, run `bash tests/app-handoff.sh` | The app is still running afterwards |
 | A Mac locked while a prompt is open | A session asks for an OK; lock the screen before Earshot's line ends | No window opens and the mic stays closed |
-| "Hey Earshot, yes" | With a prompt open, say "Hey Earshot, yes" | Earshot says "Hold the hotkey to answer it."; the prompt stays open |
+| "Hey Earshot, yes" | With a prompt open, say "Hey Earshot, yes" after the approval window closed; then inside the window (just after Earshot says the prompt) | After the window closed: Earshot says "Hold the hotkey to answer it." and the prompt stays open. Inside the window: it approves |
 | A long hotkey command | Hold the hotkey and talk for more than 10 s | The closed chime at about 10 s, then "That was too long for me. Try a shorter command."; nothing is sent; letting go does nothing |
 | A session named earshot | Run a session in a folder named earshot, with the wake word on; let it ask for an OK | Its "Hey, earshot needs your OK" alert never wakes Earshot; the approval window opens after the line |
 | Upgrade onboarding | Start the app as a user who finished the 0.11 onboarding | Only the mic and wake word, hotkey, models and try it steps, once |
