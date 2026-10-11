@@ -196,6 +196,11 @@ public actor Listener {
 
     public func hotkeyDown() async {
         guard !refused, !hotkeyHeld else { return }
+        if let c = capture, c.trigger == .hotkey, c.released {
+            // A press inside the release tail: what was said is done, so the tail
+            // ends now and this press starts the next command.
+            Task { await self.finishReleased(c.id) }
+        }
         hotkeyHeld = true
         pressID += 1
         let press = pressID
