@@ -172,12 +172,12 @@ final class Box<T>: @unchecked Sendable {
 
     @Test func takesAnApprovalOnlyWhenItCanListen() async throws {
         let dir = NSTemporaryDirectory() + "ek-ap-\(UUID().uuidString.prefix(6))"
-        let now = Date().timeIntervalSince1970 * 1000
         for (canListen, expected) in [(true, #"{"ok":true}"#), (false, #"{"ok":false,"reason":"not listening"}"#)] {
             let p = path()
             let book = ApprovalBook(stateDir: dir, isAlive: { _ in true })
             let c = core(p, canListen: canListen, book: book)
             try await c.start()
+            let now = Date().timeIntervalSince1970 * 1000
             #expect(try send(p, approvalJSON(dir, sent: now)) == expected)
             try await Task.sleep(for: .milliseconds(100))
             #expect(await book.current.count == (canListen ? 1 : 0))
