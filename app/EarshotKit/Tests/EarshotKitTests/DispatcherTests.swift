@@ -17,7 +17,6 @@ actor FakeTransport: SessionTransport {
     let store = SessionStore()
     let transport = FakeTransport()
     let said = Collected<String>()
-    let suite = "ek-dispatch-\(UUID().uuidString)"
     let approvalsDir: String = {
         let d = NSTemporaryDirectory() + "ek-d-\(UUID().uuidString.prefix(6))"
         try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
@@ -25,14 +24,14 @@ actor FakeTransport: SessionTransport {
     }()
     let secret = "0123456789abcdef0123456789abcdef"
 
-    func make(_ agents: [AgentEntry], claudeJSON: String = "/nonexistent") -> (Dispatcher, FakeRunner, ApprovalBook) {
+    func make(_ agents: [AgentEntry], claudeJSON: String = "/nonexistent", poll: Duration = .seconds(1)) -> (Dispatcher, FakeRunner, ApprovalBook) {
         let runner = FakeRunner(agents)
         let directory = SessionDirectory(runner: runner, store: store, labeler: Labeler(model: nil, liveDir: NSTemporaryDirectory()),
                                          claudeJSON: claudeJSON)
         let book = ApprovalBook(stateDir: approvalsDir, isAlive: { _ in true })
         let said = self.said
         let d = Dispatcher(directory: directory, store: store, transport: transport, runner: runner, approvals: book,
-                           say: { await said.add($0) }, receiptTimeout: .milliseconds(200), defaultsSuite: suite)
+                           say: { await said.add($0) }, receiptTimeout: .milliseconds(200), pollInterval: poll)
         return (d, runner, book)
     }
 
@@ -136,6 +135,77 @@ actor FakeTransport: SessionTransport {
         let (d, _, _) = make([agent("a", "billing-service")])
         #expect(await d.run(.unknown).line == "Sorry, I didn't get that.")
         #expect(await transport.sent.isEmpty)
+    }
+
+    // MARK: Receipts and the broken mark
+
+    @Test func missReceiptMissDoesNotMarkBroken() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        _ = await d.run(.send(target: "billing", prompt: "1"))
+        #expect(await eventually { await said.items.count == 1 })
+        _ = await d.run(.send(target: "billing", prompt: "2"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(350))
+        _ = await d.run(.send(target: "billing", prompt: "3"))
+        #expect(await eventually { await said.items.count == 2 })
+        #expect(await said.items.last == "Billing service didn't pick it up.")
+        _ = await d.run(.send(target: "billing", prompt: "4"))
+        #expect(await transport.sent.count == 4)
+    }
+
+    @Test func busyAtAPollCountsEvenIfIdleAtTheDeadline() async {
+        let (d, runner, _) = make([agent("a", "billing-service")], poll: .milliseconds(50))
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await runner.setAgents([agent("a", "billing-service", status: "busy")])
+        try? await Task.sleep(for: .milliseconds(120))
+        await runner.setAgents([agent("a", "billing-service")])
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func aWindowWhereClaudeNeverAnsweredIsNotAMiss() async {
+        let (d, runner, _) = make([agent("a", "billing-service")], poll: .milliseconds(50))
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await runner.setFail(true)
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func afterTwoMissesTheSocketIsSkippedAndTheBrokenLineIsSaidOnce() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        _ = await d.run(.send(target: "billing", prompt: "1"))
+        _ = await d.run(.send(target: "billing", prompt: "2"))
+        #expect(await eventually { await said.items.count == 2 })
+        _ = await d.run(.send(target: "billing", prompt: "3"))
+        try? await Task.sleep(for: .milliseconds(350))
+        #expect(await transport.sent.count == 2)
+        #expect(await said.items.filter { $0.hasPrefix("Sending to sessions stopped") }.count == 1)
+        #expect(await said.items.count == 2)
+    }
+
+    @Test func stoppingWhenSendingIsBrokenSaysSo() async {
+        let (d, _, _) = make([agent("a", "billing-service"), agent("b", "blog", status: "busy")])
+        _ = await d.run(.send(target: "billing", prompt: "1"))
+        _ = await d.run(.send(target: "billing", prompt: "2"))
+        #expect(await eventually { await said.items.count == 2 })
+        #expect(await d.run(.stop(target: "blog", now: false)).line == "Sending to blog doesn't work with this Claude Code version yet.")
+    }
+
+    @Test func aSessionWaitingOnYourAnswerIsIdleForSendAndStop() async {
+        await store.apply(.init(session: "a", state: .reply, detail: "asked something", name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service")])
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Sent to billing service.")
+        #expect(await d.run(.stop(target: "billing", now: false)).line == "Billing service isn't doing anything.")
+    }
+
+    @Test func aLateApprovalChoiceSaysNothing() async {
+        let (d, _, book) = make([agent("s1", "billing-service"), agent("s2", "docs")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        await book.apply(approval("s2", "2-2-2", "docs"))
+        guard let p = await d.run(.answer(allow: true, target: nil)).pending else { Issue.record("no question"); return }
+        _ = await book.answer("1-1-1", allow: true)
+        _ = await book.answer("2-2-2", allow: true)
+        #expect(await d.reply("docs", to: p) == Dispatcher.Outcome())
     }
 
     // MARK: Status, stop, start

@@ -36,16 +36,19 @@ public actor Dispatcher {
     private let approvals: ApprovalBook
     private let say: @Sendable (String) async -> Void
     private let receiptTimeout: Duration
-    private let defaults: UserDefaults
+    private let pollInterval: Duration
     private var misses = 0
+    /// Claude Code versions whose sockets did not work, for this run only.
+    private var brokenVersions: Set<String> = []
+    private var loggedNoVersion = false
     private let log = Logger(subsystem: "com.earshot.app", category: "dispatch")
 
     public init(directory: SessionDirectory, store: SessionStore, transport: any SessionTransport, runner: any ClaudeRunner,
                 approvals: ApprovalBook, say: @escaping @Sendable (String) async -> Void,
-                receiptTimeout: Duration = .seconds(5), defaultsSuite: String? = nil) {
+                receiptTimeout: Duration = .seconds(5), pollInterval: Duration = .seconds(1)) {
         self.directory = directory; self.store = store; self.transport = transport; self.runner = runner
         self.approvals = approvals; self.say = say; self.receiptTimeout = receiptTimeout
-        defaults = defaultsSuite.flatMap(UserDefaults.init(suiteName:)) ?? .standard
+        self.pollInterval = pollInterval
     }
 
     public func run(_ c: Command) async -> Outcome {
@@ -82,6 +85,7 @@ public actor Dispatcher {
             return prompt.isEmpty ? Outcome(line: Self.didntGetIt) : await launch(p, prompt)
         case .chooseApproval(let allow, let ids):
             let open = await approvals.current.filter { ids.contains($0.id) }
+            if open.isEmpty { return Outcome() }
             let hits = open.filter { NameMatch.score(text, $0.name) >= SessionDirectory.threshold }
             guard hits.count == 1 else { return Outcome(line: "I didn't catch which one.") }
             return await write(hits[0], allow: allow)
@@ -127,7 +131,7 @@ public actor Dispatcher {
         guard await transport.send(pid: pid, sessionID: s.id, text: prompt, priority: .next) else {
             return Outcome(line: "\(Self.upper(s.name)) has closed.")
         }
-        if s.waiting || s.state == .needs || s.state == .reply {
+        if s.waiting || s.state == .needs {
             return Outcome(line: "Queued. \(Self.upper(s.name)) is still waiting on your OK.", spokeAbout: s.id)
         }
         if s.busy || s.state == .working {
@@ -145,25 +149,45 @@ public actor Dispatcher {
     }
 
     /// An idle session that got the prompt starts working: the plugin's
-    /// status says so, or Claude Code lists it as busy.
+    /// status says so, or Claude Code lists it as busy or waiting at a poll.
+    /// The plugin is silent while Earshot is muted, so Claude Code is asked too.
     private func watchReceipt(_ s: LiveSession, sentAt: Date) async {
-        let deadline = ContinuousClock.now + receiptTimeout
-        while ContinuousClock.now < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now + receiptTimeout
+        var nextPoll = clock.now + pollInterval
+        var answered = false
+        while clock.now < deadline {
             if await received(s.id, after: sentAt) { misses = 0; return }
-            try? await Task.sleep(for: .milliseconds(50))
+            if clock.now >= nextPoll {
+                nextPoll = clock.now + pollInterval
+                await directory.refresh()
+                if await directory.lastRefreshSucceeded {
+                    answered = true
+                    if let now = await directory.session(s.id), now.busy || now.waiting { misses = 0; return }
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(20))
         }
         await directory.refresh()
-        let busyNow = await directory.session(s.id)?.busy == true
-        let reported = await received(s.id, after: sentAt)
-        if busyNow || reported { misses = 0; return }
+        if await directory.lastRefreshSucceeded {
+            answered = true
+            if let now = await directory.session(s.id), now.busy || now.waiting { misses = 0; return }
+        }
+        if await received(s.id, after: sentAt) { misses = 0; return }
+        // Claude Code never answered: no evidence either way.
+        guard answered else { return }
         misses += 1
         log.info("no receipt from a session (\(self.misses, privacy: .public) in a row)")
         if misses >= 2 {
-            if let key = await brokenKey() { defaults.set(true, forKey: key) }
-            await say("Sending to sessions stopped working with this Claude Code version. Background sessions still work.")
-        } else {
-            await say("\(Self.upper(s.name)) didn't pick it up.")
+            if let version = await runner.version() {
+                if brokenVersions.insert(version).inserted {
+                    await say("Sending to sessions stopped working with this Claude Code version. Background sessions still work.")
+                }
+                return
+            }
+            if !loggedNoVersion { loggedNoVersion = true; log.info("no Claude Code version, so sending is never marked broken") }
         }
+        await say("\(Self.upper(s.name)) didn't pick it up.")
     }
 
     private func received(_ id: String, after: Date) async -> Bool {
@@ -171,11 +195,9 @@ public actor Dispatcher {
         return info.updated >= after && info.state != .open && info.state != .done
     }
 
-    private func brokenKey() async -> String? { await runner.version().map { "socketBroken-\($0)" } }
-
     private func sendingBroken() async -> Bool {
-        guard let key = await brokenKey() else { return false }
-        return defaults.bool(forKey: key)
+        guard let v = await runner.version() else { return false }
+        return brokenVersions.contains(v)
     }
 
     private func stop(_ s: LiveSession, now: Bool) async -> Outcome {
@@ -184,10 +206,11 @@ public actor Dispatcher {
             let r = await runner.run(["stop", s.id], cwd: nil, timeout: .seconds(10))
             return Outcome(line: r.status == 0 ? "Stopped \(s.name)." : "Couldn't stop \(s.name).", spokeAbout: s.id)
         }
-        let active = s.busy || s.waiting || [.working, .needs, .reply, .stuck].contains(s.state)
+        let active = s.busy || s.waiting || [.working, .needs, .stuck].contains(s.state)
         guard active else { return Outcome(line: "\(name) isn't doing anything.", spokeAbout: s.id) }
         guard let pid = s.pid, !(await sendingBroken()) else {
             if s.isBackground { return await stop(s, now: true) }
+            if await sendingBroken() { return Outcome(line: "Sending to \(s.name) doesn't work with this Claude Code version yet.") }
             return Outcome(line: "I can't reach \(s.name).")
         }
         guard await transport.send(pid: pid, sessionID: s.id, text: Self.stopText, priority: .now) else {

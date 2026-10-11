@@ -88,6 +88,8 @@ public actor SessionDirectory {
     private var list: [LiveSession] = []
     private var lastSpoke: (id: String, at: Date)?
     private var refreshedAt: Date?
+    /// False when the last `claude agents` check did not answer.
+    public private(set) var lastRefreshSucceeded = true
     private var inflight: Task<Void, Never>?
     private let readFile: @Sendable (String) -> Data?
     private var claudeCache: (stamp: FileStamp, projects: [(path: String, trusted: Bool)])?
@@ -128,6 +130,7 @@ public actor SessionDirectory {
         let r = await runner.run(["agents", "--json"], cwd: nil, timeout: .seconds(3))
         let succeeded = r.status == 0 && !r.timedOut
             && (try? JSONSerialization.jsonObject(with: r.stdout)) is [Any]
+        lastRefreshSucceeded = succeeded
         let agents = succeeded ? AgentEntry.decodeList(r.stdout) : []
         let previous = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let reported = Dictionary(await store.sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
