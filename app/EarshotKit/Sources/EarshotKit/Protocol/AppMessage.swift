@@ -68,11 +68,14 @@ public enum AppMessage: Sendable, Equatable {
         public var name: String?
         public var project: String?
         public var title: String?
+        /// When the plugin sent it, in epoch milliseconds: statuses are sent in
+        /// the background and can arrive out of order.
+        public var sent: Double?
 
         public init(session: String, state: SessionState, detail: String? = nil, name: String? = nil,
-                    project: String? = nil, title: String? = nil) {
+                    project: String? = nil, title: String? = nil, sent: Double? = nil) {
             self.session = session; self.state = state; self.detail = detail
-            self.name = name; self.project = project; self.title = title
+            self.name = name; self.project = project; self.title = title; self.sent = sent
         }
     }
 

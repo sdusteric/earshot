@@ -8,6 +8,7 @@ import os
 public actor KokoroEngine: SpeechEngine {
     public nonisolated let voice: String
     private var v3: KokoroAneManager?
+    private var loading: Task<KokoroAneManager, Error>?
     private var legacy: KokoroAneManager?
     private var legacyFailed = false
     private var idleTask: Task<Void, Never>?
@@ -68,10 +69,25 @@ public actor KokoroEngine: SpeechEngine {
         idleTask = nil
     }
 
+    /// How many times the model was loaded, for tests.
+    private(set) var loads = 0
+
+    /// The model, loading it once: callers that arrive during a load wait for
+    /// that load instead of starting another (the launch warm-up and the first
+    /// line often overlap).
     private func loaded() async throws -> KokoroAneManager {
         if let v3 { return v3 }
-        let m = KokoroAneManager(version: .v3)
-        try await m.initialize(preloadVoices: [voice])
+        if let loading { return try await loading.value }
+        let voice = self.voice
+        let task = Task<KokoroAneManager, Error> {
+            let m = KokoroAneManager(version: .v3)
+            try await m.initialize(preloadVoices: [voice])
+            return m
+        }
+        loading = task
+        loads += 1
+        defer { loading = nil }
+        let m = try await task.value
         v3 = m
         watchMemory()
         log.info("loaded Kokoro")

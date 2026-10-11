@@ -79,6 +79,19 @@ struct FakeEngine: SpeechEngine {
         await engine.unload()
     }
 
+    /// The launch warm-up and the first line can ask for Kokoro at the same
+    /// time; it loads once. Real model, so EARSHOT_TEST_KOKORO=1 only.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["EARSHOT_TEST_KOKORO"] == "1"))
+    func kokoroLoadsOnceWhenAskedTwiceAtOnce() async throws {
+        let engine = KokoroEngine(voice: "af_heart")
+        let url = tempDir().appending(path: "k2.wav")
+        async let warm: Void = engine.prepare()
+        async let line: Void = engine.render("First line.", to: url)
+        _ = try await (warm, line)
+        #expect(await engine.loads == 1)
+        await engine.unload()
+    }
+
     @Test func sayRendersAFile() async throws {
         let url = tempDir().appending(path: "t.aiff")
         try await SayEngine(voice: nil).render("Test.", to: url)

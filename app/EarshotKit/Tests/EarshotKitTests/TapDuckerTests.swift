@@ -33,17 +33,52 @@ final class FakeBackend: DuckBackend, @unchecked Sendable {
         return (d, { box.fire() })
     }
 
-    @Test func rampReachesTheTargetInTheFadeTime() {
-        let r = TapDucker.gainRamp(from: 1, to: 0.3, frames: 9600, sampleRate: 48_000, fade: 0.2)
-        #expect(abs(r[0] - 1) < 0.01)
-        #expect(abs(r[9599] - 0.3) < 0.01)
-        #expect(abs(r[4800] - 0.65) < 0.02)
+    @Test func theGainFadesToTheTargetInTheFadeTime() {
+        let gain = GainState()
+        gain.reset(sampleRate: 1000, fade: 0.2)   // 200 frames to fade
+        gain.setTarget(0.5)
+        let ones = [Float](repeating: 1, count: 300)
+        let out = render(ones, inChannels: 1, outChannels: 1, outFrames: 300, gain: gain)
+        #expect(abs(out[0] - 1) < 0.01)
+        #expect(abs(out[100] - 0.75) < 0.02)
+        #expect(abs(out[250] - 0.5) < 0.001)
+    }
+
+    /// A device-change callback from a tap that is already gone must not
+    /// remove the tap that replaced it.
+    @Test func anOldTapsCallbackLeavesTheNewTapAlone() async throws {
+        let backends = [FakeBackend(), FakeBackend()]
+        let made = Counter()
+        let callbacks = CallbackList()
+        let d = TapDucker(settings: { (true, 0.3) }, maxDuck: .seconds(45)) { change in
+            callbacks.append(change)
+            let i = callbacks.count - 1
+            Task { await made.bump() }
+            return backends[min(i, 1)]
+        }
+        await d.begin()
+        callbacks.fire(0)                      // the output changed: tap 1 goes
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await d.isActive == false)
+        await d.begin()                        // tap 2
+        callbacks.fire(0)                      // a late callback from tap 1
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await d.isActive)
+        #expect(backends[1].stops == 0)
+        await d.end()
+    }
+
+    @Test func ourOwnProcessIsFound() {
+        #expect(CoreAudioTap.ownProcessObject() != nil)
     }
 
     /// Runs GainState.render on one interleaved input and output buffer.
-    func render(_ input: [Float], inChannels: Int, outChannels: Int, outFrames: Int) -> [Float] {
-        let gain = GainState()
-        gain.reset(sampleRate: 48_000, fade: 0.2)
+    func render(_ input: [Float], inChannels: Int, outChannels: Int, outFrames: Int, gain: GainState? = nil) -> [Float] {
+        let gain = gain ?? {
+            let g = GainState()
+            g.reset(sampleRate: 48_000, fade: 0.2)
+            return g
+        }()
         var inData = input
         var outData = [Float](repeating: 99, count: outFrames * outChannels)
         let inList = AudioBufferList.allocate(maximumBuffers: 1)
@@ -168,6 +203,15 @@ final class FakeBackend: DuckBackend, @unchecked Sendable {
         #expect(await d.isActive == false)
         afplay.waitUntilExit()
     }
+}
+
+/// Every device-change callback the ducker handed out, in order.
+final class CallbackList: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [@Sendable () -> Void] = []
+    var count: Int { lock.withLock { list.count } }
+    func append(_ c: @escaping @Sendable () -> Void) { lock.withLock { list.append(c) } }
+    func fire(_ i: Int) { lock.withLock { list[i] }() }
 }
 
 /// Holds the device-change callback the ducker hands its backend.

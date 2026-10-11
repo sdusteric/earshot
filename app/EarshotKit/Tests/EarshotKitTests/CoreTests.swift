@@ -2,6 +2,16 @@ import Foundation
 import Testing
 @testable import EarshotKit
 
+final class Box<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: T
+    init(_ v: T) { _value = v }
+    var value: T {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
+    }
+}
+
 @Suite(.serialized) struct CoreTests {
     func path() -> String { "/tmp/ek-core-\(UUID().uuidString.prefix(6)).sock" }
     func send(_ path: String, _ json: String) throws -> String {
@@ -16,6 +26,28 @@ import Testing
         #expect(await store.sessions.map { $0.id } == ["b", "a", "c"])
         await store.apply(.init(session: "a", state: .closed))
         #expect(await store.sessions.map { $0.id } == ["b", "c"])
+    }
+
+    /// Status messages are sent in the background, so they can arrive out of
+    /// order: an older one must not overwrite a newer one.
+    @Test func anOlderStatusDoesNotOverwriteANewerOne() async {
+        let store = SessionStore()
+        await store.apply(.init(session: "a", state: .needs, name: "blog", sent: 2000))
+        await store.apply(.init(session: "a", state: .working, name: "blog", sent: 1000))
+        #expect(await store.sessions.first?.state == .needs)
+        await store.apply(.init(session: "a", state: .closed, sent: 1500))
+        #expect(await store.sessions.isEmpty)   // closed always wins
+    }
+
+    /// A session that never says it closed (a crash, a closed terminal) goes
+    /// after 6 quiet hours, as the plugin's own files do.
+    @Test func quietSessionsExpireAfterSixHours() async {
+        let now = Box(Date(timeIntervalSince1970: 1_000_000))
+        let store = SessionStore(clock: { now.value })
+        await store.apply(.init(session: "a", state: .working, name: "blog"))
+        now.value = now.value.addingTimeInterval(6 * 3600 + 1)
+        await store.apply(.init(session: "b", state: .working, name: "docs"))
+        #expect(await store.sessions.map { $0.id } == ["b"])
     }
 
     @Test func eventLogKeepsTheLastFifty() async {

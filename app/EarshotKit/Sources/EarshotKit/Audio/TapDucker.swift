@@ -31,6 +31,7 @@ public actor TapDucker: Ducking {
     private let makeBackend: @Sendable (@escaping @Sendable () -> Void) -> any DuckBackend
     private let log = Logger(subsystem: "com.earshot.app", category: "duck")
     private var backend: (any DuckBackend)?
+    private var backendToken: UUID?
     private var generation = 0
     public private(set) var lastError: OSStatus?
     /// Core Audio calls run here, never on the actor, so one that hangs
@@ -58,10 +59,14 @@ public actor TapDucker: Ducking {
         let s = settings()
         guard s.enabled else { return }
         if backend == nil {
-            let b = makeBackend { [weak self] in Task { await self?.outputChanged() } }
+            // The token ties a device-change callback to this tap, so a late
+            // callback from an earlier tap cannot remove this one.
+            let token = UUID()
+            let b = makeBackend { [weak self] in Task { await self?.outputChanged(token) } }
             switch await start(b) {
             case .started:
                 backend = b
+                backendToken = token
                 lastError = nil
                 log.info("ducking on")
             case .failed(let status):
@@ -129,8 +134,8 @@ public actor TapDucker: Ducking {
         log.info("ducking off (quit)")
     }
 
-    private func outputChanged() {
-        guard backend != nil else { return }
+    private func outputChanged(_ token: UUID) {
+        guard backend != nil, token == backendToken else { return }
         teardown("ducking off: the output device changed")
     }
 
@@ -151,19 +156,10 @@ public actor TapDucker: Ducking {
     private func teardown(_ message: String) {
         guard let b = backend else { return }
         backend = nil
+        backendToken = nil
         let held = b
         Self.audioQueue.async { held.stop() }
         log.info("\(message, privacy: .public)")
-    }
-
-    /// Gain for each frame: a straight line from `from` to `to` over `fade` seconds.
-    static func gainRamp(from: Float, to: Float, frames: Int, sampleRate: Double, fade: Double) -> [Float] {
-        let step = (to - from) / Float(max(1, sampleRate * fade))
-        var g = from
-        return (0..<frames).map { _ in
-            defer { g = step < 0 ? max(to, g + step) : min(to, g + step) }
-            return g
-        }
     }
 }
 
@@ -185,15 +181,25 @@ final class CoreAudioTap: DuckBackend, @unchecked Sendable {
 
     var callbacks: Int { gain.callbacks }
 
-    func start() throws {
-        let system = AudioObjectID(kAudioObjectSystemObject)
+    /// Earshot's own Core Audio process object, to leave out of the tap.
+    static func ownProcessObject() -> AudioObjectID? {
         var pid = getpid()
         var me = AudioObjectID(0)
         var addr = MicMonitor.address(kAudioHardwarePropertyTranslatePIDToProcessObject)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        _ = AudioObjectGetPropertyData(system, &addr, UInt32(MemoryLayout<pid_t>.size), &pid, &size, &me)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                                UInt32(MemoryLayout<pid_t>.size), &pid, &size, &me)
+        return status == noErr && me != 0 ? me : nil
+    }
 
-        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: me == 0 ? [] : [me])
+    func start() throws {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        // Without it the tap would include Earshot's own voice and lower it too.
+        guard let me = Self.ownProcessObject() else { throw DuckError(step: "own process", status: -1) }
+        var addr = MicMonitor.address(kAudioHardwarePropertyDefaultOutputDevice)
+        var size = UInt32(0)
+
+        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: [me])
         desc.uuid = UUID()
         desc.muteBehavior = .mutedWhenTapped
         desc.isPrivate = true
