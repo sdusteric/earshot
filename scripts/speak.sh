@@ -73,6 +73,8 @@ app_up() { [ -n "$APP_SOCK" ] && [ -S "$APP_SOCK" ]; }
 # app_send '<json>': hands one message to the app. 0 only when the app took it.
 # It waits at most 0.2 s, so a hung app costs a hook little.
 app_send() { app_up && /bin/zsh -f "$APP_SEND" "$APP_SOCK" "$1"; }
+# Voice answers need the app: without it, a permission prompt costs no more.
+[ "$1" = decide ] && ! app_up && exit 0
 
 # mic_state: the helper's answer. 0 an app is capturing (a call, or you
 # dictating), 1 free, 2 the device runs but the app is unknown (macOS before 14.2).
@@ -626,7 +628,7 @@ names
 # name and do not have it yet look it up; tool calls never do.
 if [ -z "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
   case "$1" in
-    ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && { write_live; names; } ;;
+    ask|decide|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && { write_live; names; } ;;
   esac
 fi
 # drop_held: you answered, so this session's held "needs you" and "waiting on
@@ -641,12 +643,15 @@ clear_wait() {
   local wf pid; wf=$(wait_file "$sid")
   [ -s "$HELD" ] && drop_held
   [ -e "$STATE/cmd-$sid" ] && rm -f "$STATE/cmd-$sid"
+  [ -e "$STATE/prompt-$sid" ] && rm -f "$STATE/prompt-$sid"
   [ -f "$wf" ] || return 0
   pid=$(sed -n 6p "$wf")
   # A timer that already finished may have its PID reused by another program.
   [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null | grep -Eq '/speak\.sh (ask|question|elicit)$' && { pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; }
   rm -f "$wf"
 }
+# prompt_key: which permission prompt this is: its tool and input.
+prompt_key() { jq -c '[.tool_name, .tool_input]' <<<"$input" | md5 -q; }
 new_wait() {
   clear_wait
   token="$now-$$-$RANDOM"
@@ -865,6 +870,9 @@ ask)
   else
     new_wait permission "$(asks_for)"; start_timer "$sid" "$token"
     [ "$tool" = Bash ] && record_cmd
+    # For decide, which starts at the same moment: this wait file is for this
+    # prompt, not one an earlier Esc left behind.
+    echo "$(prompt_key) $now" > "$STATE/prompt-$sid"
   fi
   ;;
 decide)
@@ -872,14 +880,18 @@ decide)
   # voice. The dialog stays on screen meanwhile; the first answer wins. Without
   # the app, or when it can't listen now, this ends at once.
   [ "$tool" = AskUserQuestion ] && exit 0
-  app_up || exit 0
-  # ask starts at the same moment and writes the wait file.
-  wf=$(wait_file "$sid")
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -f "$wf" ] && break; sleep 0.2; done
-  read -r token 2>/dev/null < "$wf" || exit 0
+  # ask starts at the same moment: wait until it has written the wait file for
+  # this prompt (an Esc earlier can leave an old one behind).
+  wf=$(wait_file "$sid"); key=$(prompt_key)
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    read -r k t 2>/dev/null < "$STATE/prompt-$sid" && [ "$k" = "$key" ] && [ "${t:-0}" -ge $((now - 5)) ] && break
+    k=; sleep 0.2
+  done
+  [ -n "$k" ] && read -r token 2>/dev/null < "$wf" || exit 0
+  # The app gets a secret with the prompt and must write it back with the
+  # answer, so a file in the state folder is not enough to approve anything.
   id="$now-$$-$RANDOM"; ans="$STATE/answer-$sid-$id"
-  app_send "$(jq -nc --arg s "$sid" --arg i "$id" --arg n "$who" --arg w "$(asks_for)" --arg a "$ans" \
-    '{v: 1, type: "approval", session: $s, id: $i, name: $n, what: $w, answer: $a}')" || exit 0
+  secret=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
   # closed <by>: the app stops listening for this prompt. In the background,
   # and away from stdout, which carries the decision.
   closed_msg() { jq -nc --arg s "$sid" --arg i "$id" --arg b "$1" '{v: 1, type: "approval", session: $s, id: $i, state: "closed", by: $b}'; }
@@ -887,14 +899,23 @@ decide)
   # Esc on the dialog: Claude Code stops this hook. Tell the app before going,
   # in the foreground, since the whole process group may be stopping.
   trap 'app_send "$(closed_msg screen)" </dev/null >/dev/null 2>&1; exit 0' TERM INT HUP
+  app_send "$(jq -nc --arg s "$sid" --arg i "$id" --arg n "$who" --arg w "$(asks_for)" --arg a "$ans" --arg k "$secret" --argjson p $$ \
+    '{v: 1, type: "approval", session: $s, id: $i, name: $n, what: $w, answer: $a, secret: $k, pid: $p}')"
+  case $? in
+    0) ;;
+    1) closed unclaimed; exit 0 ;;   # it may have got it, too late or saying no
+    *) exit 0 ;;
+  esac
   deadline=$((now + DECIDE_SECS)); n=0
   while :; do
     if [ -e "$ans" ] || [ -L "$ans" ]; then
-      # Trusted only as a plain file of yours that nobody else can write.
-      a=
+      # Trusted only as a plain file of yours that nobody else can write,
+      # holding the answer and this prompt's secret.
+      a=; s=
       [ -f "$ans" ] && [ ! -L "$ans" ] && [ -O "$ans" ] && [ $((0$(stat -f %Lp "$ans") & 022)) = 0 ] \
-        && a=$(head -c 16 "$ans" | tr -d '[:space:]')
+        && read -r a s < "$ans"
       rm -f "$ans"
+      [ "$s" = "$secret" ] || a=
       if [ "$a" = allow ] || [ "$a" = deny ]; then
         # After a deny no tool runs, so nothing else would stop the reminders.
         clear_wait
@@ -980,7 +1001,8 @@ stop)
   # Lines said with the Mac's voice after an engine failed, left by a crash.
   find "$STATE" -maxdepth 1 -type f -name 'fallback.*' -mmin +10 -delete 2>/dev/null
   # Sessions that quit without SessionEnd leave files; 6 hours quiet means gone.
-  find "$STATE" -maxdepth 1 -type f \( -name 'status-*' -o -name 'running-*' -o -name 'wait-*' -o -name 'cmd-*' \) -mmin +360 -delete 2>/dev/null
+  find "$STATE" -maxdepth 1 -type f \( -name 'status-*' -o -name 'running-*' -o -name 'wait-*' -o -name 'cmd-*' \
+    -o -name 'prompt-*' -o -name 'answer-*' \) -mmin +360 -delete 2>/dev/null
   rm -f "$state" "$hist" "$errs" "$warned"
   msg=$(jq -r '.last_assistant_message // empty' <<<"$input")
   if [ -z "$msg" ]; then

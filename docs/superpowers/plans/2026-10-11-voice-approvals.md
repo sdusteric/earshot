@@ -59,6 +59,6 @@
 **Files:**
 - Modify: `README.md` (How it works, Limits)
 
-- [ ] **Step 1: Live check in a real session** (tmux, Haiku, manual mode) with a 30-line fake app (`tests/fake-app.zsh ok`) and the worktree's hooks loaded through `--settings`: a prompt shows, the test writes `allow`, the command runs; a second prompt answered on screen ends `decide` within 2 s; a third with `deny` gets Claude's "said no" path and no reminder 2 minutes later (use `EARSHOT_REMIND` short values if available).
+- [ ] **Step 1: Live check in a real session** (tmux, Haiku, manual mode) with a 30-line fake app (`tests/fake-app.pl ok`) and the worktree's hooks loaded through `--settings`: a prompt shows, the test writes `allow`, the command runs; a second prompt answered on screen ends `decide` within 2 s; a third with `deny` gets Claude's "said no" path and no reminder 2 minutes later (use `EARSHOT_REMIND` short values if available).
 - [ ] **Step 2: README.** One paragraph under "How it works" and one line under Limits.
 - [ ] **Step 3: Commit.**

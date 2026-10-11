@@ -62,15 +62,22 @@ A second command in the `PermissionRequest` entry of `hooks/hooks.json`, with
 `"timeout": 3600`. It runs next to `ask`.
 
 1. AskUserQuestion: exit. A question is not an approval.
-2. The app is not up (`app_up` fails): exit. Same cost as other hooks.
-3. Wait up to 3 seconds for `ask` to write the wait file (they start together),
-   and read its token. No wait file: exit.
-4. Send `approval` to the app. If the app does not answer `{"ok":true}` within
-   0.2 s, exit. Today's app answers `{"ok":false}` to unknown types, so until
-   the Listener ships nothing changes.
+2. The app is not up (`app_up` fails): exit before anything else runs, so a
+   prompt costs nothing extra without the app.
+3. Wait up to 3 seconds for `ask` (they start together). `ask` writes
+   `prompt-<session>`: a hash of the tool name and input, and the time. Only
+   when that matches this prompt is the wait file's token read. A wait file an
+   earlier Esc left behind is never mistaken for this prompt's. No match: exit.
+4. Make a random 128-bit secret and send `approval` to the app. If the app does
+   not answer `{"ok":true}` within 0.2 s, exit; if it was reached at all (a
+   late or negative answer), send `closed` with `by: "unclaimed"` first.
+   Today's app answers `{"ok":false}` to unknown types, so until the Listener
+   ships nothing changes.
 5. Every 0.5 s, check in this order:
-   - `answer-<session>-<id>` exists: read it, delete it. `allow` or `deny`
-     prints the decision and the hook exits. Anything else is ignored. Before
+   - `answer-<session>-<id>` exists: read it, delete it. It counts only as a
+     plain file you own that group and others cannot write, holding `allow`
+     or `deny`, a space, and the secret. Then the hook prints the decision and
+     exits. Anything else is ignored. Before
      it exits it clears the wait (stops the reminders, drops held "needs you"
      lines) and sets the status to `working`, because after a deny no tool
      runs and nothing else would.
@@ -81,7 +88,10 @@ A second command in the `PermissionRequest` entry of `hooks/hooks.json`, with
      clicked Yes on a long command).
    - The deadline (`EARSHOT_DECIDE_SECS`, default 3500 s) has passed.
 6. On every exit after step 4, send `approval` with `state: "closed"` and
-   `by` (`voice`, `screen` or `timeout`), so the app stops listening for it.
+   `by` (`voice`, `screen`, `timeout` or `unclaimed`), so the app stops
+   listening for it. Esc or No on the dialog makes Claude Code stop the hook
+   (SIGTERM, found in the live test), so a trap, set before the first message,
+   sends `closed` with `by: "screen"` in the foreground before the hook exits.
 
 The decision printed:
 
@@ -98,14 +108,19 @@ rule). Earshot never adds allow rules ("always allow" stays a click).
 Plugin to app:
 
 ```
-{"v":1,"type":"approval","session":"<id>","id":"<prompt id>","name":"billing service","what":"to run the migration","answer":"<path>"}
-{"v":1,"type":"approval","session":"<id>","id":"<prompt id>","state":"closed","by":"voice|screen|timeout"}
+{"v":1,"type":"approval","session":"<id>","id":"<prompt id>","name":"billing service","what":"to run the migration","answer":"<path>","secret":"<32 hex>","pid":12345}
+{"v":1,"type":"approval","session":"<id>","id":"<prompt id>","state":"closed","by":"voice|screen|timeout|unclaimed"}
 ```
 
 - `id` is unique per prompt (time, PID and a random number).
 - `answer` is the file the app writes: `$STATE/answer-<session>-<id>`. The app
-  writes `allow` or `deny` to a temporary file in the same folder and renames
-  it, so the plugin never reads half a file.
+  writes `allow <secret>` or `deny <secret>` with mode 0600 to a temporary file
+  in the same folder and renames it, so the plugin never reads half a file.
+- `secret` is only ever in this socket message (the socket is 0600 in the
+  app's own folder), never in a file name, so listing the state folder is not
+  enough to approve a prompt.
+- `pid` is the waiting hook. If `closed` never arrives (the hook was killed
+  with SIGKILL), the app can check it with `kill(pid, 0)` before it listens.
 - The app answers `{"ok":true}` to the first message only when it can listen
   now: mic permission granted, listening not switched off. Otherwise
   `{"ok":false}` and the plugin stops waiting.
@@ -136,8 +151,9 @@ Plugin to app:
   hotkey. The wake word is not needed for approvals but does not approve on
   its own.
 - The answer file lives in Earshot's state folder (`DARWIN_USER_TEMP_DIR`,
-  readable only by you). A program running as you could write it, but such a
-  program could already run commands as you.
+  readable only by you) and must carry the prompt's secret, which only the app
+  gets. A program running as you would have to talk to the app's socket to
+  learn it.
 - Voice cannot approve a prompt Earshot did not announce, unless you name the
   session after the hotkey.
 
@@ -152,7 +168,7 @@ Plugin to app:
 
 ## Testing (plugin side, `tests/voice-approvals.sh`)
 
-With the fake app from `tests/fake-app.zsh` and `EARSHOT_DRYRUN`:
+With the fake app from `tests/fake-app.pl` and `EARSHOT_DRYRUN`:
 
 - No app: `decide` exits in under 1 s, prints nothing, sends nothing.
 - App rejects: exits at once, prints nothing.
@@ -162,7 +178,11 @@ With the fake app from `tests/fake-app.zsh` and `EARSHOT_DRYRUN`:
 - After a voice answer the wait file is gone, the reminder timer is stopped,
   and the status is `working`.
 - Garbage in the answer file is ignored and removed; a later `allow` works.
-- Answer file for another id: ignored.
+- Answer file for another id, without the secret, with a wrong secret, as a
+  symlink, or writable by others: ignored.
+- A wait file left by an earlier Esc: decide still waits for this prompt.
+- An app that answers after 0.2 s: decide ends and sends `closed unclaimed`.
+- SIGTERM (Esc): `closed` with `by: screen`, nothing printed.
 - Wait file removed (tool ran) or replaced (new token): exits silently,
   `closed` with `by: screen`.
 - Transcript moved on (Esc): exits silently.

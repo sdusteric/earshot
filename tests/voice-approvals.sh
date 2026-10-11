@@ -21,7 +21,7 @@ bad() { fail=$((fail + 1)); echo "  FAIL  $1"; }
 expect() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', expected '$3')"; fi; }
 input() { jq -nc --arg sid "$1" --arg cwd "$P" --argjson x "$2" '{session_id: $sid, cwd: $cwd} + $x'; }
 hook() { input "$2" "$3" | bash "$S" "$1" >/dev/null; }
-fake() { pkill -f "fake-app.zsh $SOCK" 2>/dev/null; sleep 0.1; ( zsh -f "$ROOT/tests/fake-app.zsh" "$SOCK" "$APPLOG" "$1" & ); sleep 0.3; }
+fake() { pkill -f "fake-app.pl $SOCK" 2>/dev/null; sleep 0.1; ( /usr/bin/perl "$ROOT/tests/fake-app.pl" "$SOCK" "$APPLOG" "$1" & ); sleep 0.3; }
 took() { grep -c -- "$1" "$APPLOG"; }
 BASH_PROMPT='{"tool_name":"Bash","tool_input":{"command":"pnpm run db:migrate --env staging","description":"Run the migration"}}'
 
@@ -35,14 +35,14 @@ prompt() {
 }
 # answer <session> <word>: the app writes the answer file it was given.
 answer() {
-  local f; f=$(grep -- "\"session\":\"$1\"" "$APPLOG" | grep '"answer"' | tail -1 | jq -r .answer)
+  local m f; m=$(grep -- "\"session\":\"$1\"" "$APPLOG" | grep '"answer"' | tail -1); f=$(jq -r .answer <<<"$m")
   [ -n "$f" ] || { echo "no answer path for $1" >&2; return 1; }
-  ( umask 077; printf '%s\n' "$2" > "$f.tmp" ) && mv "$f.tmp" "$f"
+  ( umask 077; printf '%s %s\n' "$2" "$(jq -r .secret <<<"$m")" > "$f.tmp" ) && mv "$f.tmp" "$f"
 }
 # done_within <session> <seconds>: decide ended in time.
 done_within() { local i; for ((i = 0; i < $2 * 10; i++)); do [ -f "$D/rc-$1" ] && return 0; sleep 0.1; done; return 1; }
 decision() { jq -r '.hookSpecificOutput.decision.behavior // empty' "$D/out-$1" 2>/dev/null; }
-alive() { pgrep -f "speak.sh decide" >/dev/null; }
+alive() { [ ! -f "$D/rc-$1" ]; }   # this prompt's decide still runs
 fakerun() { bash -c "true; eval \"$1\"" >/dev/null 2>&1 & fakecmd=$!; disown "$fakecmd"; sleep 0.3; }
 
 export EARSHOT_APP_SOCK=$SOCK
@@ -64,8 +64,10 @@ m=$(grep '"type":"approval"' "$APPLOG" | grep '"session":"v1"' | head -1)
 expect "the approval names the session" "$(jq -r .name <<<"$m")" "billing service"
 expect "the approval says what it asks" "$(jq -r .what <<<"$m")" "to run the migration"
 [ -n "$(jq -r '.id // empty' <<<"$m")" ] && ok "the approval has an id" || bad "the approval has an id"
+[ "$(jq -r '.secret // "" | length' <<<"$m")" -ge 16 ] && ok "the approval has a secret" || bad "the approval has a secret"
+expect "the approval has decide's pid" "$(jq -r '.pid' <<<"$m")" "$(pgrep -f "$S decide" | head -1)"
 case "$(jq -r .answer <<<"$m")" in "$EARSHOT_STATE_DIR"/answer-v1-*) ok "the answer file is in Earshot's state folder" ;; *) bad "the answer file is in Earshot's state folder" ;; esac
-alive && ok "decide waits while nobody answered" || bad "decide waits while nobody answered"
+alive v1 && ok "decide waits while nobody answered" || bad "decide waits while nobody answered"
 answer v1 allow; done_within v1 2 && ok "allow ends decide" || bad "allow ends decide"
 expect "allow prints the allow decision" "$(decision v1)" allow
 expect "the output is one JSON object" "$(jq -s length "$D/out-v1" 2>/dev/null)" 1
@@ -83,18 +85,34 @@ expect "a voice no stops the reminders" "$(took 'still waiting on you')" 0
 
 : > "$APPLOG"; prompt v3
 answer v3 maybe; sleep 1
-alive && ok "other words are ignored" || bad "other words are ignored"
+alive v3 && ok "other words are ignored" || bad "other words are ignored"
 expect "and the odd answer file is removed" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^answer-v3')" 0
 f=$(grep '"session":"v3"' "$APPLOG" | grep '"answer"' | tail -1 | jq -r .answer)
+[ -n "$f" ] && ok "the answer path is known" || bad "the answer path is known"
+printf 'allow\n' > "$f"; sleep 1
+alive v3 && ok "allow without the secret is ignored" || bad "allow without the secret is ignored"
+printf 'allow wrongsecret\n' > "$f"; sleep 1
+alive v3 && ok "allow with a wrong secret is ignored" || bad "allow with a wrong secret is ignored"
 printf 'allow\n' > "${f%-*}-999-1-1"; sleep 1
-alive && ok "an answer for another prompt id is ignored" || bad "an answer for another prompt id is ignored"
+alive v3 && ok "an answer for another prompt id is ignored" || bad "an answer for another prompt id is ignored"
 rm -f "${f%-*}-999-1-1"
 printf 'allow\n' > "$D/elsewhere"; ln -s "$D/elsewhere" "$f"; sleep 1
-alive && ok "an answer file that is a link is ignored" || bad "an answer file that is a link is ignored"
+alive v3 && ok "an answer file that is a link is ignored" || bad "an answer file that is a link is ignored"
 expect "and removed" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^answer-v3')" 0
 rm -f "$f"; printf 'allow\n' > "$f.tmp"; chmod 666 "$f.tmp"; mv "$f.tmp" "$f"; sleep 1
-alive && ok "an answer file others can write is ignored" || bad "an answer file others can write is ignored"
+alive v3 && ok "an answer file others can write is ignored" || bad "an answer file others can write is ignored"
 answer v3 allow; done_within v3 2; expect "a later allow still works" "$(decision v3)" allow
+
+: > "$APPLOG"
+printf 'old-token\npermission\nbilling service\nto run something else\n\n' > "$EARSHOT_STATE_DIR/wait-st1"
+prompt st1; sleep 0.5
+alive st1 && ok "a wait file left by an earlier Esc: decide still waits" || bad "a wait file left by an earlier Esc: decide still waits"
+answer st1 allow; done_within st1 2; expect "and takes the answer" "$(decision st1)" allow
+
+fake late; : > "$APPLOG"; prompt sl1
+done_within sl1 3 && ok "an app that answers too late: decide ends" || bad "an app that answers too late: decide ends"
+sleep 1; expect "and tells it the prompt is not waiting on it" "$(took '"session":"sl1".*"state":"closed".*"by":"unclaimed"')" 1
+fake ok
 
 echo "Answered some other way"
 : > "$APPLOG"; prompt s1
@@ -106,7 +124,7 @@ sleep 0.3; expect "the app hears it closed on screen" "$(took '"session":"s1".*"
 hook ask s2 '{"tool_name":"Edit","tool_input":{"file_path":"/x/a.py"}}'
 done_within s2 2 && ok "a newer prompt replaces it: decide ends" || bad "a newer prompt replaces it: decide ends"
 expect "and prints nothing" "$(wc -c < "$D/out-s2" | tr -d ' ')" 0
-pkill -f "speak.sh decide"; sleep 0.2
+pkill -f "$S decide"; sleep 0.2
 
 T=$(mktemp); : > "$APPLOG"
 prompt s3 "$(jq -nc --arg t "$T" --argjson b "$BASH_PROMPT" '$b + {transcript_path: $t}')"
@@ -121,7 +139,7 @@ expect "and prints nothing" "$(wc -c < "$D/out-s4" | tr -d ' ')" 0
 kill "$fakecmd" 2>/dev/null
 
 : > "$APPLOG"; prompt s6
-pkill -TERM -f "speak.sh decide"; done_within s6 2
+pkill -TERM -f "$S decide"; done_within s6 2
 sleep 0.3; expect "Claude Code stops the hook (Esc): the app hears it closed" "$(took '"session":"s6".*"state":"closed".*"by":"screen"')" 1
 expect "and it prints nothing" "$(wc -c < "$D/out-s6" | tr -d ' ')" 0
 
@@ -139,6 +157,6 @@ hook notify l1 '{"notification_type":"permission_prompt"}'; sleep 0.3
 expect "the needs your OK line is still said once" "$(took 'billing service needs your OK to run the migration')" 1
 answer l1 allow; done_within l1 2
 
-pkill -f "speak.sh decide"; pkill -f "fake-app.zsh $SOCK"
+pkill -f "$S decide"; pkill -f "fake-app.pl $SOCK"
 rm -rf "$D" "$EARSHOT_STATE_DIR"; rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
