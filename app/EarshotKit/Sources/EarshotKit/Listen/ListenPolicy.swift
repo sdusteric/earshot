@@ -38,7 +38,7 @@ public enum ListenPolicy {
     public static func wakeBlock(_ i: ListenInputs) -> ListenBlock? {
         if let b = commonBlock(i) { return b }
         if !i.wakeWord { return .wakeOff }
-        if i.battery != .always, i.lowPower { return .lowPower }
+        if i.battery == .lowpower, i.lowPower { return .lowPower }
         if i.battery == .power, i.onBattery { return .battery }
         if i.liveSessions == 0 { return .noSessions }
         return nil

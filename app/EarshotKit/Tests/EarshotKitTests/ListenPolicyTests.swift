@@ -59,6 +59,12 @@ import Testing
         #expect(ListenPolicy.wakeBlock(i) == .lowPower)
         i.battery = .always
         #expect(ListenPolicy.wakeBlock(i) == nil)
+        // "Only on power" ignores Low Power Mode: it is the battery rule that counts.
+        i.battery = .power
+        i.onBattery = false
+        #expect(ListenPolicy.wakeBlock(i) == nil)
+        i.onBattery = true
+        #expect(ListenPolicy.wakeBlock(i) == .battery)
     }
 
     /// The hotkey and voice answers do not follow the wake word's rules, but
