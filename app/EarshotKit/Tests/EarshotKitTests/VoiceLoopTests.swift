@@ -26,7 +26,9 @@ actor CountingSpeaker: LineSpeaker {
     func beginListening() async { begins += 1; await inner.beginListening() }
     func endListening() async { ends += 1; await inner.endListening() }
     func lineEvents() async -> AsyncStream<SpeechOut.LineEvent> { await inner.lineEvents() }
-    func holdAfter(_ id: UUID) async { await inner.holdAfter(id) }
+    /// Lines the loop held the queue after: the .started handler has run for them.
+    private(set) var holds: [UUID] = []
+    func holdAfter(_ id: UUID) async { holds.append(id); await inner.holdAfter(id) }
     func releaseHold() async { await inner.releaseHold() }
 }
 
@@ -237,6 +239,8 @@ actor CountingSpeaker: LineSpeaker {
         await r.speech.enqueue(SpokenLine(text: "Hey, billing service needs your OK to run the migration.", kind: .need, session: "s1"))
         let player = r.player
         #expect(await eventually { await player.isPlaying })
+        let c = r.counter
+        #expect(await eventually { await c.holds.count == 1 })   // the line's prompt is noted
         await r.book.apply(.init(session: "s1", id: "1-1-1", state: "closed", by: "screen"))
         await r.book.apply(approval("2-2-2"))
         await player.finish()
@@ -255,6 +259,8 @@ actor CountingSpeaker: LineSpeaker {
         let player = r.player
         await followUps.slow(.milliseconds(300))
         #expect(await eventually { await player.isPlaying })
+        let c = r.counter
+        #expect(await eventually { await c.holds.count == 1 })   // the hold is set before the line finishes
         await player.finish()
         #expect(await eventually { await followUps.calls == [.approval(id: "1-1-1")] })
         try? await Task.sleep(for: .milliseconds(150))
