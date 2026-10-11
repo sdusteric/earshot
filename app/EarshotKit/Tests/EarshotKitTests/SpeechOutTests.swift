@@ -249,4 +249,110 @@ actor FakeDucker: Ducking {
         await eventually { await player.played == ["held"] }
         #expect(await player.played == ["held"])
     }
+
+    @Test func listeningStopsTheLineAndDropsIt() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        await s.enqueue(line("first")); await s.enqueue(line("second"))
+        await eventually { await player.isPlaying }
+        await s.beginListening()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await player.played == ["first"])   // second waits while you talk
+        #expect(await s.state != .holding)            // first is not kept for later
+        await player.unblock()
+        await s.endListening()
+        await eventually { await player.played == ["first", "second"] }
+        #expect(await player.played == ["first", "second"])
+    }
+
+    @Test func linesWaitWhileListening() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        await s.beginListening()
+        await s.enqueue(line("later"))
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await player.played.isEmpty)
+        await s.endListening()
+        await s.waitUntilIdle()
+        #expect(await player.played == ["later"])
+    }
+
+    /// Other audio stays low from the wake word to the end of the answer, and
+    /// comes back once.
+    @Test func duckingSpansListeningAndTheAnswer() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        await s.beginListening()
+        #expect(await ducker.begins == 1)
+        await s.enqueue(line("Sent to blog.", .confirm, ""))
+        await s.endListening()
+        await s.waitUntilIdle()
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func listeningAloneEndsTheDucking() async {
+        let s = await make(FakePlayer())
+        await s.beginListening()
+        await s.endListening()
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func nestedListeningPausesUntilTheLastEnd() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        await s.beginListening()
+        await s.beginListening()
+        await s.enqueue(line("later"))
+        await s.endListening()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await player.played.isEmpty)
+        await s.endListening()
+        await s.waitUntilIdle()
+        #expect(await player.played == ["later"])
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func confirmationsGoFirst() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        await s.enqueue(line("x")); await s.enqueue(line("y"))
+        await eventually { await player.isPlaying }
+        await s.enqueue(line("Sent.", .confirm, ""))
+        await s.enqueue(line("Queued.", .confirm, ""))
+        await player.unblock()
+        await s.waitUntilIdle()
+        #expect(await player.played == ["x", "Sent.", "Queued.", "y"])
+    }
+
+    @Test func confirmationsAreDroppedDuringACall() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        mic.set(true)
+        await s.enqueue(line("Sent.", .confirm, ""))
+        #expect(await s.state == .idle)
+        mic.set(false)
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(await player.played.isEmpty)
+    }
+
+    @Test func lineEventsSayWhatWasHeard() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        let events = Collected<SpeechOut.LineEvent>()
+        let stream = await s.lineEvents()
+        Task { for await e in stream { await events.add(e) } }
+        let a = line("heard", .need), b = line("cut off", .need)
+        await s.enqueue(a); await s.enqueue(b)
+        await eventually { await player.isPlaying }
+        await player.finish()
+        await eventually {
+            let n = await player.played.count
+            let playing = await player.isPlaying
+            return n == 2 && playing
+        }
+        await s.beginListening()
+        await s.endListening()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await events.items == [.started(a), .finished(a), .started(b)])
+    }
 }

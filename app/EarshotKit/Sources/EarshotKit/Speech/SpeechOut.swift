@@ -42,6 +42,7 @@ final class Once: @unchecked Sendable {
 /// app uses the mic, and are said in a catch-up afterwards.
 public actor SpeechOut {
     public enum State: Sendable, Equatable { case idle, speaking, holding }
+    public enum LineEvent: Sendable, Equatable { case started(SpokenLine), finished(SpokenLine) }
 
     public static let errorTone = URL(fileURLWithPath: "/System/Library/Sounds/Basso.aiff")
     private let log = Logger(subsystem: "com.earshot.app", category: "speech")
@@ -65,6 +66,12 @@ public actor SpeechOut {
     /// The line being started or played; a call that begins now interrupts it.
     private var currentLine: UUID?
     private var interrupted = false
+    /// How many captures are open (the wake word and the hotkey can overlap).
+    /// While above 0, nothing plays and other audio stays low.
+    private var listening = 0
+    /// The playing line was stopped because you started talking: it is dropped.
+    private var bargedIn = false
+    private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
     private var lastMicBusy = false
     private var catchUpGeneration = 0
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
@@ -106,10 +113,16 @@ public actor SpeechOut {
 
     public func enqueue(_ line: SpokenLine) async {
         if line.kind != .roll, await micBusy() {
-            hold(line)
+            hold(line)   // a confirm line is not held: it is stale after a call
             return
         }
-        queue.append(line)
+        if line.kind == .confirm {
+            // Your answer comes before older lines, after earlier answers.
+            let at = queue.firstIndex { $0.kind != .confirm } ?? queue.endIndex
+            queue.insert(line, at: at)
+        } else {
+            queue.append(line)
+        }
         runIfNeeded()
     }
 
@@ -118,6 +131,39 @@ public actor SpeechOut {
         held.dropAnswered(session: session)
         updateState()
     }
+
+    /// You started talking (the wake word, the hotkey, a follow-up). The line
+    /// that is playing stops and is not said again; the rest waits.
+    public func beginListening() async {
+        listening += 1
+        if let id = currentLine {
+            bargedIn = true
+            await player.stop(id)
+        }
+        let ducker = self.ducker
+        await bounded(callTimeout, ()) { await ducker.begin() }
+    }
+
+    public func endListening() async {
+        guard listening > 0 else { return }
+        listening -= 1
+        guard listening == 0 else { return }
+        if !running, queue.isEmpty {
+            let ducker = self.ducker
+            await bounded(callTimeout, ()) { await ducker.end() }
+        }
+        runIfNeeded()
+    }
+
+    public func lineEvents() -> AsyncStream<LineEvent> {
+        let (stream, cont) = AsyncStream<LineEvent>.makeStream()
+        let id = UUID()
+        lineConts[id] = cont
+        cont.onTermination = { [weak self] _ in Task { await self?.removeLineCont(id) } }
+        return stream
+    }
+    private func removeLineCont(_ id: UUID) { lineConts[id] = nil }
+    private func emit(_ e: LineEvent) { lineConts.values.forEach { $0.yield(e) } }
 
     /// Returns when nothing is queued or playing.
     public func waitUntilIdle() async {
@@ -144,7 +190,7 @@ public actor SpeechOut {
 
     private func run() async {
         var ducked = false
-        while !queue.isEmpty {
+        while !queue.isEmpty, listening == 0 {
             let line = queue.removeFirst()
             if clock().timeIntervalSince(line.received) > maxWait {
                 log.info("dropped a line that waited over \(Int(self.maxWait)) s")
@@ -159,14 +205,16 @@ public actor SpeechOut {
             // From here a call that starts interrupts this line.
             currentLine = line.id
             interrupted = false
+            bargedIn = false
             state = .speaking
             // Every line renews the ducking, so its safety cap never cuts a long run short.
             let ducker = self.ducker
             await bounded(callTimeout, ()) { await ducker.begin() }
             ducked = true
+            emit(.started(line))
             let finished: Bool
-            if interrupted {
-                finished = false   // the call began while the ducking started
+            if interrupted || bargedIn {
+                finished = false   // a call or your voice began while the ducking started
             } else if let done = await playWithTimeout(url, id: line.id) {
                 finished = done
             } else {
@@ -178,14 +226,16 @@ public actor SpeechOut {
                 finished = true
             }
             currentLine = nil
+            if finished, made != nil { emit(.finished(line)) }
             if !finished && interrupted {
                 // A call started: say this line and the rest later.
                 hold(line)
                 for rest in queue where rest.kind != .roll { hold(rest) }
                 queue.removeAll { $0.kind != .roll }
             }
+            // Stopped because you talked: the line is dropped; the queue waits for endListening.
         }
-        if ducked {
+        if ducked, listening == 0 {
             let ducker = self.ducker
             await bounded(callTimeout, ()) { await ducker.end() }
         }
