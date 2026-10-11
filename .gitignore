@@ -7,5 +7,6 @@ plugin/tts/.build/
 app/EarshotKit/.build/
 app/EarshotKit/.swiftpm/
 app/build/
+app/.build/
 app/Earshot.xcodeproj/
 tests/eval/listener/
