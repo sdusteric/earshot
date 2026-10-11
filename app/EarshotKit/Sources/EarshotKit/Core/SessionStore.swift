@@ -6,6 +6,8 @@ public struct SessionInfo: Sendable, Equatable, Identifiable {
     public var state: SessionState
     public var detail: String?
     public var updated: Date
+    public var project: String?
+    public var title: String?
 }
 
 /// Open sessions, from the plugin's status messages. Sessions that need you
@@ -35,8 +37,10 @@ public actor SessionStore {
         } else {
             let name = [status.name, status.project, byID[status.session]?.name]
                 .compactMap { $0 }.first { !$0.isEmpty } ?? "a session"
+            let old = byID[status.session]
             byID[status.session] = SessionInfo(id: status.session, name: name, state: status.state,
-                                               detail: status.detail, updated: clock())
+                                               detail: status.detail, updated: clock(),
+                                               project: status.project ?? old?.project, title: status.title ?? old?.title)
         }
         prune()
         let list = sessions
