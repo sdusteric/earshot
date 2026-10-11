@@ -228,6 +228,8 @@ public actor SpeechOut {
     // MARK: -
 
     private func hold(_ line: SpokenLine) {
+        // A held line that is said again gets its hold anew when it starts.
+        holdIDs.remove(line.id)
         if line.kind.isHeld { log.info("held \(line.kind.rawValue, privacy: .public)") }
         held.hold(line)
         updateState()

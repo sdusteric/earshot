@@ -209,10 +209,17 @@ public actor VoiceLoop: ListenObserver {
                 await followUps.listenFollowUp(.approval(id: id), within: nil)
             }
             await speech.releaseHold(line.id)
-        case .ended:
+        case .ended(let line):
+            // A line that did not finish keeps no window or prompt.
+            afterLine[line.id] = nil
+            needPrompt[line.id] = nil
+            commandEnded[line.id] = nil
             await followUps.setSpeaking(nil)
         }
     }
+
+    /// Lines with a window or prompt waiting (tests).
+    var lineEntries: Int { afterLine.count + needPrompt.count }
 
     static func kind(_ c: Command) -> String {
         switch c {

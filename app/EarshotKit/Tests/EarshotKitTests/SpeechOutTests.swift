@@ -182,6 +182,21 @@ actor SlowEndDucker: Ducking {
         #expect(await player.played == ["one", "one", "two"])   // no hold between them
     }
 
+    /// A confirm line dropped by a call leaves no hold behind.
+    @Test func aConfirmLineDroppedByACallLeavesNoHold() async {
+        let player = FakePlayer()
+        let s = await makeHolding(player, holdTimeout: .seconds(30))
+        let one = SpokenLine(text: "one", kind: .confirm, session: "")
+        await s.holdAfter(one.id)
+        mic.set(true)
+        await s.enqueue(one)   // held for the call, and a confirm line is not kept
+        mic.set(false)
+        await s.enqueue(one)   // the same id again, now said
+        await s.enqueue(line("two"))
+        await eventually { await player.played == ["one", "two"] }   // no hold between them
+        #expect(await player.played == ["one", "two"])
+    }
+
     @Test func theHoldReleasesItselfAfterTheTimeout() async {
         let player = FakePlayer()
         let s = await makeHolding(player, holdTimeout: .milliseconds(80))

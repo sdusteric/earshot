@@ -343,6 +343,20 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await followUps.completions == 1)
     }
 
+    /// A line stopped before it finished leaves no window or prompt behind.
+    @Test func aLineThatNeverFinishedLeavesNoEntries() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)], blocking: true)
+        let player = r.player
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await player.isPlaying })
+        #expect(await r.loop.lineEntries == 1)   // the question's window
+        await r.speech.beginListening()   // you talk over it: it is dropped
+        #expect(await eventually { await r.loop.lineEntries == 0 })
+        await r.speech.endListening()
+        #expect(await followUps.calls.isEmpty)
+    }
+
     @Test func heyEarshotAloneInAReplyWindowDoesNothing() async {
         let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
                            agent("b", "billing-service", name: "Invoice export", pid: 11)])
