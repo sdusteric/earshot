@@ -6,6 +6,7 @@ T=$(mktemp -d)
 export EARSHOT_STATE_DIR=$T/state EARSHOT_CACHE_DIR=$T/cache EARSHOT_CONF=$T/config
 export EARSHOT_TTS=$T/tts EARSHOT_SAY=$T/say EARSHOT_PLAYER=$T/player EARSHOT_MIC=$T/mic
 export EARSHOT_APP_SOCK=   # never hand test lines to a running Earshot for Mac
+export EARSHOT_MUTE=$T/mute   # your own mute file does not mute the tests
 PLAYED=$T/played; CALLS=$T/calls
 printf '#!/bin/bash\nexit 1\n' > "$EARSHOT_MIC"
 # Fake helper: "speak" writes KOKORO(voice):text to --out, or fails when $T/tts-fail exists.

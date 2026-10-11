@@ -34,12 +34,18 @@ fake reject; : > "$OUT"; : > "$APPLOG"
 hook start a2 '{}'; hook stop a2 '{"last_assistant_message":"🗣 Rejected line."}'
 expect "a rejected line is said by the plugin" "$(said 'Rejected line')" 1
 
+now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time * 1000'; }
+# The same hook with no app at all, for comparison.
+hook start a0 '{}'; t0=$(now_ms)
+EARSHOT_APP_SOCK=$D/none.sock hook stop a0 '{"last_assistant_message":"🗣 Baseline line."}'
+base=$(( $(now_ms) - t0 ))
 fake silent; : > "$OUT"
-hook start a3 '{}'; t0=$(perl -MTime::HiRes=time -e 'print time')
+hook start a3 '{}'; t0=$(now_ms)
 hook stop a3 '{"last_assistant_message":"🗣 Slow app line."}'
-t1=$(perl -MTime::HiRes=time -e 'print time')
+slow=$(( $(now_ms) - t0 ))
 expect "a silent app: the plugin says it, once" "$(said 'Slow app line')" 1
-awk -v a="$t0" -v b="$t1" 'BEGIN { exit !(b - a < 1.5) }' && ok "a silent app costs under 1.5 s per hook" || bad "a silent app costs under 1.5 s per hook"
+[ $(( slow - base )) -lt 450 ] && ok "a silent app adds about the 0.2 s wait (${base} ms without, ${slow} ms with)" \
+  || bad "a silent app adds about the 0.2 s wait (${base} ms without, ${slow} ms with)"
 
 pkill -9 -f "fake-app.zsh $SOCK"; sleep 0.2; : > "$OUT"
 [ -S "$SOCK" ] && ok "a crashed app leaves its socket file (test setup)" || bad "a crashed app leaves its socket file (test setup)"

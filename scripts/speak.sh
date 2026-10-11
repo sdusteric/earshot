@@ -374,53 +374,54 @@ fi
 LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}   # one file per open session: project, title, [app label]
 SESSION_NAME=${EARSHOT_SESSION_NAME:-auto}   # auto | always | never
 
-# short_label "<title>": 1 to 3 words for a session title, to say it often.
-# Drops a leading verb and "a", "an", "the", and stops at the first of "for",
-# "with", "and", "to", "in", "on", "of", "vs": "Create guest confirmation
-# email with event details" becomes "guest confirmation email".
-short_label() {
-  tr '_/-' '   ' <<<"$1" | sed 's/ [Ss]ession$//' | awk '{
-    n = 0; out = ""
-    for (i = 1; i <= NF; i++) {
-      w = $i; lw = tolower(w)
-      if (i == 1 && NF > 1 && lw ~ /^(fix|add|create|make|update|build|write|check|debug|refactor|implement)$/) continue
-      if (lw ~ /^(a|an|the)$/) continue
-      if (n > 0 && lw ~ /^(for|with|and|to|in|on|of|vs)$/) break
-      out = out (n ? " " : "") w
-      if (++n == 3) break
-    }
-    print out }'
-}
+# label(title): 1 to 3 words for a session title, to say it often. A title of
+# 3 words or fewer is used as it is. A longer one drops a leading verb and "a",
+# "an", "the", and stops at the first of "for", "with", "and", "to", "in",
+# "on", "of", "vs": "Create guest confirmation email with event details"
+# becomes "guest confirmation email". Nothing left: the first 3 words.
+LABEL_AWK='
+function label(t,   w, n, i, out, lw, cnt) {
+  gsub(/[_\/-]/, " ", t); sub(/ [Ss]ession$/, "", t)
+  cnt = split(t, w, " ")
+  if (cnt <= 3) { out = ""; for (i = 1; i <= cnt; i++) out = out (i > 1 ? " " : "") w[i]; return out }
+  n = 0; out = ""
+  for (i = 1; i <= cnt; i++) {
+    lw = tolower(w[i])
+    if (i == 1 && lw ~ /^(fix|add|create|make|update|build|write|check|debug|refactor|implement)$/) continue
+    if (lw ~ /^(a|an|the)$/) continue
+    if (n > 0 && lw ~ /^(for|with|and|to|in|on|of|vs)$/) break
+    out = out (n ? " " : "") w[i]
+    if (++n == 3) break
+  }
+  if (out == "") out = w[1] " " w[2] " " w[3]
+  return out
+}'
+short_label() { printf '%s\n' "$1" | awk "$LABEL_AWK"' { print label($0) }'; }
 
-# label_of <live file>: the app's label for the session (line 3), or short_label of its title.
-label_of() {
-  local l; l=$(sed -n 3p "$1" 2>/dev/null)
-  [ -n "$l" ] || l=$(short_label "$(sed -n 2p "$1" 2>/dev/null)")
-  printf '%s' "$l"
-}
-
-# name_for <session>: how lines name the session, as two lines: who ("the tax
-# export session") and on ("tax export"). The shortest name that is unique:
-# the project; else the label, when no other open session has the same label;
-# else the label and the project.
-name_for() {
-  local f="$LIVE/$1" p t g twins=0 label clash=0 lc
-  { read -r p; read -r t; } < "$f" 2>/dev/null
-  for g in "$LIVE"/*; do
-    [ "$g" = "$f" ] || [ ! -f "$g" ] && continue
-    [ "$(head -1 "$g")" = "$p" ] && twins=$((twins + 1))
-  done
-  if [ -z "$t" ] || [ "$SESSION_NAME" = never ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" = 0 ]; }; then
-    printf '%s\n%s\n' "$p" "$p"; return
-  fi
-  label=$(label_of "$f"); lc=$(tr '[:upper:]' '[:lower:]' <<<"$label")
-  for g in "$LIVE"/*; do
-    [ "$g" = "$f" ] || [ ! -f "$g" ] && continue
-    [ "$(label_of "$g" | tr '[:upper:]' '[:lower:]')" = "$lc" ] && clash=1
-  done
-  if [ "$SESSION_NAME" = auto ] && [ "$clash" = 0 ]; then printf 'the %s session\n%s\n' "$label" "$label"
-  else printf 'the %s session in %s\n%s in %s\n' "$label" "$p" "$label" "$p"
-  fi
+# session_names <session>: how lines name the session, in one pass over the
+# open sessions: who ("the tax export session"), on ("tax export"), how many
+# other sessions are open, and how many of them share its project. The
+# shortest name that is unique: the project; else the label, when no other
+# open session has the same label; else the label and the project. The label
+# is the app's (live file line 3), or label() of the title.
+session_names() {
+  awk -v me="$LIVE/$1" -v mode="$SESSION_NAME" "$LABEL_AWK"'
+    FNR == 1 { files[++nf] = FILENAME; proj[FILENAME] = $0 }
+    FNR == 2 { title[FILENAME] = $0 }
+    FNR == 3 { app[FILENAME] = $0 }
+    function lab(f) { return app[f] != "" ? app[f] : label(title[f]) }
+    END {
+      p = proj[me]; t = title[me]; others = 0; twins = 0
+      for (i = 1; i <= nf; i++) if (files[i] != me) { others++; if (proj[files[i]] == p) twins++ }
+      if (t == "" || mode == "never" || (mode == "auto" && twins == 0)) { who = p; on = p }
+      else {
+        l = lab(me); clash = 0
+        for (i = 1; i <= nf; i++) if (files[i] != me && tolower(lab(files[i])) == tolower(l)) clash = 1
+        if (mode == "auto" && !clash) { who = "the " l " session"; on = l }
+        else { who = l " in " p; on = l " in " p }
+      }
+      print who; print on; print others; print twins
+    }' "$LIVE"/* 2>/dev/null
 }
 
 [ "$1" = label ] && { short_label "$EARSHOT_LABEL_TEST"; exit 0; }
@@ -440,7 +441,7 @@ if [ "$1" = rollcall ]; then
     [ "$st" = needs ] && approved "$s" && st=working
     # The name as the alerts say it, worked out now, so a second session in
     # the same project is told apart by its label.
-    name=$(name_for "$s" | head -1)
+    name=$(session_names "$s" | head -1)
     Name=$(upper_first "$name")
     case "$st" in
       needs) r=0; text="$Name $detail." ;;
@@ -614,23 +615,19 @@ case "$1" in
   begin|start|stop) write_live ;;
   *) if [ -f "$LIVE/$sid" ]; then touch "$LIVE/$sid"; else write_live; fi ;;
 esac
-others=0; twins=0
-for f in "$LIVE"/*; do
-  [ "$f" = "$LIVE/$sid" ] || [ ! -f "$f" ] && continue
-  others=$((others + 1)); [ "$(head -1 "$f")" = "$proj" ] && twins=$((twins + 1))
-done
+# who names the session as a speaker ("the tax export session needs your OK"),
+# on names the work ("still on tax export"). Without a title, both are the
+# project. See session_names: one awk over the open sessions, however many.
+who=$proj; on=$proj; others=0; twins=0
+names() { [ -f "$LIVE/$sid" ] && { read -r who; read -r on; read -r others; read -r twins; } < <(session_names "$sid"); }
+names
 # A session's title can appear after its first prompt. Alerts that need the
 # name and do not have it yet look it up; tool calls never do.
 if [ -z "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
   case "$1" in
-    ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && write_live ;;
+    ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && { write_live; names; } ;;
   esac
 fi
-# who names the session as a speaker ("the tax export session needs your OK"),
-# on names the work ("still on tax export"). Without a title, both are the
-# project. See name_for.
-who=$proj; on=$proj
-[ -f "$LIVE/$sid" ] && { read -r who; read -r on; } < <(name_for "$sid")
 # drop_held: you answered, so this session's held "needs you" and "waiting on
 # your answer" lines are stale.
 drop_held() {

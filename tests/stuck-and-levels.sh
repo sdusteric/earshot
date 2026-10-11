@@ -6,6 +6,7 @@
 S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
 OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_STATE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
 printf 'EARSHOT_ENGINE=elevenlabs\nEARSHOT_KEY=sk_test\nEARSHOT_VOICE=test\n' > "$EARSHOT_CONF"
+export EARSHOT_MUTE=$EARSHOT_STATE_DIR/mute   # your own mute file does not mute the tests
 # A fake mic helper, so a real call on this Mac cannot change the results.
 # mic 0 = an app is capturing, mic 1 = free, mic 2 = busy but the app is unknown.
 MICST=$(mktemp); echo 1 > "$MICST"
@@ -95,7 +96,11 @@ for pair in "Create guest confirmation email with event details|guest confirmati
             "Fix the flaky refund test|flaky refund test" \
             "Tax export|Tax export" \
             "Plugin vs Mac app architecture|Plugin" \
-            "Refactor|Refactor"; do
+            "Refactor|Refactor" \
+            "Fix auth|Fix auth" \
+            "Fix the login|Fix the login" \
+            "fix_auth-flow session|fix auth flow" \
+            "The a an the|The a an"; do
   got=$(EARSHOT_LABEL_TEST="${pair%%|*}" bash "$S" label)
   if [ "$got" = "${pair#*|}" ]; then pass=$((pass + 1)); echo "  ok    label: ${pair%%|*}"
   else fail=$((fail + 1)); echo "  FAIL  label: ${pair%%|*} (got '$got')"; fi
@@ -104,10 +109,26 @@ done
 # api: the label alone would be ambiguous, so the project is added.
 for s in c1 c2 c3; do printf '%s\n' "{\"type\":\"custom-title\",\"customTitle\":\"Tax export\",\"sessionId\":\"$s\"}" > "$T/$s.jsonl"; done
 open_session c1; open_session c2; open_session c3 "$Q"
-finish c2; finish c3; : > "$OUT"   # a finished turn records each session's title
+finish c2   # a finished turn records each session's title
+hook stop c3 "$(jq -nc --arg t "$T/c3.jsonl" --arg c "$Q" '{transcript_path: $t, cwd: $c, last_assistant_message: "Done."}')"; : > "$OUT"
 ping c1
-check "clashing labels: the project is added" 1 "the Tax export session in billing service needs your OK"
+check "clashing labels: the project is added (spec: label in project)" 1 "^Hey, Tax export in billing service needs your OK"
+EARSHOT_SESSION_NAME=always hook notify c3 "$(jq -nc --arg t "$T/c3.jsonl" --arg c "$Q" '{transcript_path: $t, cwd: $c, notification_type: "permission_prompt"}')"
+check "EARSHOT_SESSION_NAME=always: label and project" 1 "^Hey, Tax export in invoice api needs your OK"
 for s in c1 c2 c3; do hook end "$s" '{}'; done
+# Naming stays cheap with many open sessions: a tool call with eight sessions
+# in one project costs about what it costs with one.
+for i in 1 2 3 4 5 6 7 8; do printf '%s\n' "{\"type\":\"custom-title\",\"customTitle\":\"Task number $i of the big refactor\",\"sessionId\":\"m$i\"}" > "$T/m$i.jsonl"; open_session "m$i"; finish "m$i"; done
+tool_ms() { local t0 t1; t0=$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000')
+  for i in 1 2 3 4 5; do hook tool m1 '{"tool_name":"Read","tool_input":{"file_path":"/x"},"tool_response":{}}'; done
+  t1=$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000'); echo $(( (t1 - t0) / 5 )); }
+many=$(tool_ms)
+for i in 2 3 4 5 6 7 8; do hook end "m$i" '{}'; done
+one=$(tool_ms)
+hook end m1 '{}'
+if [ $(( many - one )) -lt 60 ]; then pass=$((pass + 1)); echo "  ok    eight sessions add under 60 ms per tool call ($one ms alone, $many ms with eight)"
+else fail=$((fail + 1)); echo "  FAIL  eight sessions add under 60 ms per tool call ($one ms alone, $many ms with eight)"; fi
+: > "$OUT"
 
 echo "Permission prompts say what they ask for"
 hook ask pp1 '{"tool_name":"Bash","tool_input":{"command":"x","description":"Run the invoice tests"}}'
