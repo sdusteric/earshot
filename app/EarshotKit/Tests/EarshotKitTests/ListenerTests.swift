@@ -71,6 +71,30 @@ actor SlowInput: AudioInput {
     func release() { waiters.forEach { $0.resume() }; waiters = [] }
 }
 
+/// A mic whose start() and stop() both wait until the test releases them.
+actor GatedInput: AudioInput {
+    private var cont: AsyncStream<[Float]>.Continuation?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var stopWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var starts = 0
+    var startsWaiting: Int { startWaiters.count }
+    var stopsWaiting: Int { stopWaiters.count }
+    var isOpen: Bool { cont != nil }
+    func start() async throws -> AsyncStream<[Float]> {
+        starts += 1
+        await withCheckedContinuation { startWaiters.append($0) }
+        let (s, c) = AsyncStream<[Float]>.makeStream()
+        cont = c
+        return s
+    }
+    func stop() async {
+        await withCheckedContinuation { stopWaiters.append($0) }
+        cont?.finish(); cont = nil
+    }
+    func releaseStarts() { startWaiters.forEach { $0.resume() }; startWaiters = [] }
+    func releaseStops() { stopWaiters.forEach { $0.resume() }; stopWaiters = [] }
+}
+
 /// Reads like FakeTranscriber, records the clips, can say a fixed text, and
 /// can hold its first answer until released.
 actor ScriptTranscriber: Transcriber {
@@ -424,20 +448,39 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         await l.hotkeyUp()
     }
 
-    @Test func aTapDuringASlowMicOpenNeverChimes() async {
+    @Test func aSecondPressDoesNotConfirmTheFirstOnesHold() async {
         let slow = SlowInput()
-        let l = await make(input: slow)
+        let timing = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150),
+                                     minHold: .milliseconds(100))
+        let l = await make(timing, input: slow)
         await l.hotkeyDown()
-        #expect(await eventually { await slow.waiting == 1 })
-        try? await Task.sleep(for: .milliseconds(60))   // the first press is confirmed and waiting on the mic
+        #expect(await eventually { await slow.waiting == 1 })   // the first press is confirmed and waiting on the mic
         await l.hotkeyUp()
-        await l.hotkeyDown()   // a second press, still within its minHold
+        await l.hotkeyDown()   // a second press, still inside its own minHold
         await slow.release()
-        await l.hotkeyUp()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .milliseconds(30))
         #expect(await chimes.played.isEmpty)
         #expect(await observer.events.isEmpty)
-        #expect(await eventually { await !slow.isOpen })
+        await l.hotkeyUp()
+    }
+
+    @Test func armingDuringAGiveUpStopStillOpensTheMic() async {
+        let gated = GatedInput()
+        let l = await make(input: gated)
+        let arming = Task { await l.setWakeArmed(true) }
+        #expect(await eventually { await gated.startsWaiting == 1 })
+        await l.setWakeArmed(false)
+        await gated.releaseStarts()
+        #expect(await eventually { await gated.stopsWaiting == 1 })   // giving up, stop in flight
+        let rearming = Task { await l.setWakeArmed(true) }
+        try? await Task.sleep(for: .milliseconds(30))
+        await gated.releaseStops()
+        #expect(await eventually { await gated.startsWaiting == 1 })
+        await gated.releaseStarts()
+        await arming.value
+        await rearming.value
+        #expect(await eventually { await gated.isOpen })
+        #expect(await gated.starts == 2)
     }
 
     @Test func theMicReopensAfterACall() async {

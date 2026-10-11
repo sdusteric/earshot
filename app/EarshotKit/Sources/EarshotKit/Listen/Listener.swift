@@ -85,7 +85,8 @@ public actor Listener {
     private var hotkeyHeld = false
     private var holdTask: Task<Void, Never>?
     private var pressID = 0
-    private var openTask: Task<Void, Never>?
+    private var openTask: Task<Bool, Never>?
+    private var stopTask: Task<Void, Never>?
     /// Callers that are opening the mic to start a capture of their own.
     private var pendingOpens = 0
 
@@ -193,8 +194,10 @@ public actor Listener {
     /// Listens once without the wake word, for a few seconds.
     public func listenFollowUp(_ f: FollowUp, within: Duration? = nil) async {
         guard !micBusy, capture == nil, !hotkeyHeld else { return }
-        await openMic(counted: true)
+        pendingOpens += 1
+        await openMic()
         await gate.reset()
+        pendingOpens -= 1
         guard micOpen, !micBusy, capture == nil, !hotkeyHeld else {
             await closeMicIfIdle()
             settlePhase()
@@ -226,18 +229,23 @@ public actor Listener {
     // MARK: - Audio
 
     /// Opens the mic. Opens are serialised: a caller that arrives while one
-    /// is in flight waits for it. `counted` marks a caller that will start a
-    /// capture once the mic is open, so the mic is wanted even if nothing else needs it.
-    private func openMic(counted: Bool = false) async {
-        if counted { pendingOpens += 1 }
-        defer { if counted { pendingOpens -= 1 } }
-        guard !micOpen, !micBusy else { return }
-        if openTask == nil { openTask = Task { await self.performOpen() } }
-        await openTask?.value
+    /// is in flight waits for it, and starts another if that one gave up
+    /// while the mic is still wanted.
+    private func openMic() async {
+        while !micOpen, !micBusy {
+            if openTask == nil { openTask = Task { await self.performOpen() } }
+            let gaveUp = await openTask?.value ?? false
+            guard gaveUp, micWanted else { return }
+        }
     }
 
-    private func performOpen() async {
-        defer { openTask = nil }
+    /// Something needs the mic: wake word armed, a capture, a held hotkey, or
+    /// a follow-up that is still opening it.
+    private var micWanted: Bool { armed || capture != nil || hotkeyHeld || pendingOpens > 0 }
+
+    /// Returns true when the mic was opened and then given up, because it was no longer wanted.
+    private func performOpen() async -> Bool {
+        await stopTask?.value
         do {
             let stream = try await input.start()
             _ = chunker.drain()
@@ -245,9 +253,14 @@ public actor Listener {
             spotted = false
             await gate.reset()
             // start() and reset() suspend: a call may have started, or nobody may want the mic any more.
-            guard !micBusy, armed || capture != nil || hotkeyHeld || pendingOpens > 0 else {
-                await input.stop()
-                return
+            guard !micBusy, micWanted else {
+                // Clear this open before stopping, so a caller that comes during the stop starts its own.
+                openTask = nil
+                let stopping = Task { await self.input.stop() }
+                stopTask = stopping
+                await stopping.value
+                if stopTask == stopping { stopTask = nil }
+                return true
             }
             micOpen = true
             streamTask = Task { [weak self] in
@@ -256,6 +269,8 @@ public actor Listener {
         } catch {
             log.error("couldn't open the mic: \(error.localizedDescription, privacy: .public)")
         }
+        openTask = nil
+        return false
     }
 
     private func startPrewarm() {
@@ -278,7 +293,7 @@ public actor Listener {
     }
 
     private func closeMicIfIdle() async {
-        if !armed, capture == nil, !hotkeyHeld { await closeMic() }
+        if !armed, capture == nil, !hotkeyHeld, pendingOpens == 0 { await closeMic() }
     }
 
     private func receive(_ samples: [Float]) async {
@@ -370,7 +385,7 @@ public actor Listener {
         await observer?.captureEnded(heard: heard)
         if heard {
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now))
-        } else if !dropped, capture == nil {
+        } else if !micBusy, capture == nil {
             await chimes.play(.closed)
         }
         await closeMicIfIdle()
