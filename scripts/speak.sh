@@ -44,6 +44,7 @@ KOKORO_VOICE=${EARSHOT_KOKORO_VOICE:-af_heart}
 SAY_VOICE=${EARSHOT_SAY_VOICE:-}          # empty: the system voice
 BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
 LONG_MAX=${EARSHOT_LONG_MAX_SECS:-7200}   # updates during one command stop after 2 hours
+DECIDE_SECS=${EARSHOT_DECIDE_SECS:-3500}  # how long a prompt can be answered by voice (hook timeout 3600)
 LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
 LEVEL=${EARSHOT_LEVEL:-normal}            # quiet | normal | all (see tell)
 STYLE=${EARSHOT_STYLE:-plain}             # plain | upbeat | cheeky: tone of the finished line
@@ -865,6 +866,53 @@ ask)
     new_wait permission "$(asks_for)"; start_timer "$sid" "$token"
     [ "$tool" = Bash ] && record_cmd
   fi
+  ;;
+decide)
+  # PermissionRequest, next to ask: Earshot for Mac can answer the prompt by
+  # voice. The dialog stays on screen meanwhile; the first answer wins. Without
+  # the app, or when it can't listen now, this ends at once.
+  [ "$tool" = AskUserQuestion ] && exit 0
+  app_up || exit 0
+  # ask starts at the same moment and writes the wait file.
+  wf=$(wait_file "$sid")
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -f "$wf" ] && break; sleep 0.2; done
+  read -r token 2>/dev/null < "$wf" || exit 0
+  id="$now-$$-$RANDOM"; ans="$STATE/answer-$sid-$id"
+  app_send "$(jq -nc --arg s "$sid" --arg i "$id" --arg n "$who" --arg w "$(asks_for)" --arg a "$ans" \
+    '{v: 1, type: "approval", session: $s, id: $i, name: $n, what: $w, answer: $a}')" || exit 0
+  # closed <by>: the app stops listening for this prompt. In the background,
+  # and away from stdout, which carries the decision.
+  closed() {
+    app_send "$(jq -nc --arg s "$sid" --arg i "$id" --arg b "$1" '{v: 1, type: "approval", session: $s, id: $i, state: "closed", by: $b}')" \
+      </dev/null >/dev/null 2>&1 &
+  }
+  deadline=$((now + DECIDE_SECS)); n=0
+  while :; do
+    if [ -e "$ans" ]; then
+      a=$(head -c 16 "$ans" | tr -d '[:space:]'); rm -f "$ans"
+      if [ "$a" = allow ] || [ "$a" = deny ]; then
+        # After a deny no tool runs, so nothing else would stop the reminders.
+        clear_wait
+        if [ -s "$warned" ]; then set_status stuck; else set_status working; fi
+        echo "$(date '+%F %T') $who: answered by voice ($a)" >> "$LOG"
+        if [ "$a" = allow ]; then
+          echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+        else
+          echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"The user said no by voice."}}}'
+        fi
+        closed voice; exit 0
+      fi
+    fi
+    # Answered on screen: the tool ran (no wait file), a newer prompt took its
+    # place (new token), Esc or No (the transcript moved on), or, every 2 s,
+    # a long command you approved is running.
+    if [ "$(head -1 "$wf" 2>/dev/null)" != "$token" ] || ! still_waiting "$sid" \
+      || { [ $((++n % 4)) = 0 ] && approved "$sid"; }; then
+      closed screen; exit 0
+    fi
+    [ "$(date +%s)" -ge "$deadline" ] && { closed timeout; exit 0; }
+    sleep 0.5
+  done
   ;;
 question)
   # PreToolUse for AskUserQuestion: the same grace period, then reminders.

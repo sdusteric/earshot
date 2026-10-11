@@ -7,7 +7,10 @@
       { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" question" }] },
       { "matcher": "Bash|WebFetch|WebSearch|mcp__.*", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" pretool", "async": true }] }
     ],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" ask" }] }],
+    "PermissionRequest": [{ "hooks": [
+      { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" ask" },
+      { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" decide", "timeout": 3600 }
+    ] }],
     "PostToolUse": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" tool" }] }],
     "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" toolfail" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh\" stop" }] }],
