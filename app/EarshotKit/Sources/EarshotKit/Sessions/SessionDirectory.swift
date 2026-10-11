@@ -88,12 +88,19 @@ public actor SessionDirectory {
     private var list: [LiveSession] = []
     private var lastSpoke: (id: String, at: Date)?
     private var refreshedAt: Date?
+    private var inflight: Task<Void, Never>?
+    private let readFile: @Sendable (String) -> Data?
+    private var claudeCache: (stamp: FileStamp, projects: [(path: String, trusted: Bool)])?
+    private var projectNames: [String: String] = [:]
+
+    private struct FileStamp: Equatable { var modified: Date?; var size: Int? }
 
     public init(runner: any ClaudeRunner, store: SessionStore, labeler: Labeler,
                 claudeJSON: String = NSHomeDirectory() + "/.claude.json",
-                clock: @escaping @Sendable () -> Date = Date.init) {
+                clock: @escaping @Sendable () -> Date = Date.init,
+                readFile: @escaping @Sendable (String) -> Data? = { FileManager.default.contents(atPath: $0) }) {
         self.runner = runner; self.store = store; self.labeler = labeler
-        self.claudeJSON = claudeJSON; self.clock = clock
+        self.claudeJSON = claudeJSON; self.clock = clock; self.readFile = readFile
     }
 
     public var sessions: [LiveSession] { list }
@@ -102,20 +109,32 @@ public actor SessionDirectory {
     /// Refreshes unless the list is younger than this: the wake word already
     /// refreshed it, so a command does not pay the 130 ms twice.
     public func refresh(ifOlderThan seconds: TimeInterval) async {
+        if let t = inflight { await t.value; return }
         if let r = refreshedAt, clock().timeIntervalSince(r) < seconds { return }
         await refresh()
     }
 
     /// Reads `claude agents --json` (about 130 ms) and merges the plugin's view.
+    /// A refresh that is already running is awaited, not repeated.
     public func refresh() async {
-        refreshedAt = clock()
+        if let t = inflight { await t.value; return }
+        let t = Task { await self.performRefresh() }
+        inflight = t
+        await t.value
+    }
+
+    private func performRefresh() async {
+        defer { inflight = nil }
         let r = await runner.run(["agents", "--json"], cwd: nil, timeout: .seconds(3))
-        let agents = r.status == 0 ? AgentEntry.decodeList(r.stdout) : []
+        let succeeded = r.status == 0 && !r.timedOut
+            && (try? JSONSerialization.jsonObject(with: r.stdout)) is [Any]
+        let agents = succeeded ? AgentEntry.decodeList(r.stdout) : []
+        let previous = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let reported = Dictionary(await store.sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var merged: [LiveSession] = []
         for a in agents {
             let info = reported[a.sessionId]
-            let project = info?.project ?? SpokenNames.project(cwd: a.cwd)
+            let project = info?.project ?? projectName(a.cwd)
             let agentTitle = a.name.flatMap { SpokenNames.isDefaultName($0, cwd: a.cwd) ? nil : $0 } ?? ""
             let title = info?.title.flatMap { $0.isEmpty ? nil : $0 } ?? agentTitle
             let label = title.isEmpty ? "" : await labeler.label(session: a.sessionId, title: title)
@@ -123,11 +142,13 @@ public actor SessionDirectory {
                                       label: label, name: project, busy: a.isBusy, waiting: a.isWaiting,
                                       state: info?.state, detail: info?.detail, since: info?.updated))
         }
-        // Sessions only the plugin knows (agents failed, or a kind it does not list).
-        for (id, info) in reported where !merged.contains(where: { $0.id == id }) {
+        // Sessions only the plugin knows, when agents failed: a session that
+        // died without a closed message must not linger as a ghost.
+        for (id, info) in reported where !succeeded && !merged.contains(where: { $0.id == id }) {
+            let old = previous[id]
             let title = info.title ?? ""
             let label = title.isEmpty ? "" : await labeler.label(session: id, title: title)
-            merged.append(LiveSession(id: id, pid: nil, kind: "unknown", cwd: "", project: info.project ?? info.name,
+            merged.append(LiveSession(id: id, pid: old?.pid, kind: old?.kind ?? "unknown", cwd: old?.cwd ?? "", project: info.project ?? info.name,
                                       title: title, label: label, name: info.name, busy: info.state == .working,
                                       waiting: info.state == .needs || info.state == .reply, state: info.state,
                                       detail: info.detail, since: info.updated))
@@ -135,6 +156,14 @@ public actor SessionDirectory {
         let names = SpokenNames.names(merged.map { .init(id: $0.id, project: $0.project, title: $0.title, label: $0.label) })
         for i in merged.indices { merged[i].name = names[merged[i].id] ?? merged[i].project }
         list = merged
+        if succeeded { refreshedAt = clock() }
+    }
+
+    private func projectName(_ cwd: String) -> String {
+        if let n = projectNames[cwd] { return n }
+        let n = SpokenNames.project(cwd: cwd)
+        projectNames[cwd] = n
+        return n
     }
 
     public func noteSpoke(about session: String) { lastSpoke = (session, clock()) }
@@ -199,19 +228,28 @@ public actor SessionDirectory {
     /// Folders Claude Code knows (from ~/.claude.json, with their trust) and
     /// the folders of open sessions.
     public func knownProjects() -> [KnownProject] {
-        var out: [KnownProject] = []
-        if let data = FileManager.default.contents(atPath: claudeJSON),
-           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let projects = root["projects"] as? [String: Any] {
-            for (path, value) in projects {
-                let trusted = (value as? [String: Any])?["hasTrustDialogAccepted"] as? Bool ?? false
-                out.append(KnownProject(name: SpokenNames.project(cwd: path), path: path, trusted: trusted))
-            }
-        }
+        var out = claudeProjects().map { KnownProject(name: projectName($0.path), path: $0.path, trusted: $0.trusted) }
         for s in list where !s.cwd.isEmpty && !out.contains(where: { $0.path == s.cwd }) {
             out.append(KnownProject(name: s.project, path: s.cwd, trusted: true))
         }
         return out.sorted { $0.path < $1.path }
+    }
+
+    /// The folders in ~/.claude.json, parsed again only when the file's date or size changes.
+    private func claudeProjects() -> [(path: String, trusted: Bool)] {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: claudeJSON)
+        let stamp = FileStamp(modified: attrs?[.modificationDate] as? Date, size: (attrs?[.size] as? NSNumber)?.intValue)
+        if let c = claudeCache, c.stamp == stamp { return c.projects }
+        var found: [(path: String, trusted: Bool)] = []
+        if attrs != nil, let data = readFile(claudeJSON),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let projects = root["projects"] as? [String: Any] {
+            for (path, value) in projects {
+                found.append((path, (value as? [String: Any])?["hasTrustDialogAccepted"] as? Bool ?? false))
+            }
+        }
+        claudeCache = (stamp, found)
+        return found
     }
 
     public func matchProject(_ spoken: String) -> KnownProject? {

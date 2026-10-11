@@ -7,12 +7,18 @@ actor FakeRunner: ClaudeRunner {
     var agents: [AgentEntry]
     var results: [String: RunResult] = [:]   // by first argument
     private(set) var calls: [(args: [String], cwd: String?)] = []
+    private var hold = false
+    private var failAgents = false
+    func setHold(_ h: Bool) { hold = h }
+    func setFail(_ f: Bool) { failAgents = f }
     init(_ agents: [AgentEntry]) { self.agents = agents }
     func setAgents(_ a: [AgentEntry]) { agents = a }
     func setResult(_ first: String, _ r: RunResult) { results[first] = r }
     func run(_ args: [String], cwd: String?, timeout: Duration) async -> RunResult {
         calls.append((args, cwd))
         if args.first == "agents" {
+            while hold { await Task.yield() }
+            if failAgents { return RunResult(status: 1) }
             let objs: [[String: Any]] = agents.map { a in
                 var d: [String: Any] = ["sessionId": a.sessionId, "cwd": a.cwd, "kind": a.kind]
                 if let p = a.pid { d["pid"] = p }
@@ -136,6 +142,64 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         #expect(await d.matchProject("the blog")?.path == "/p/blog")
         #expect(await d.matchProject("newthing")?.path == "/p/new-thing")
         #expect(await d.matchProject("payments") == nil)
+    }
+
+    @Test func theClaudeJSONIsReadOnceUntilItChanges() async throws {
+        let path = NSTemporaryDirectory() + "ek-claude-\(UUID().uuidString.prefix(6)).json"
+        try #"{"projects":{"/p/blog":{"hasTrustDialogAccepted":true}}}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        let reads = Box(0)
+        let d = SessionDirectory(runner: FakeRunner([agent("a", "billing-service")]), store: store, labeler: labeler,
+                                 claudeJSON: path, readFile: { reads.value += 1; return FileManager.default.contents(atPath: $0) })
+        await d.refresh()
+        for _ in 0..<3 { _ = await d.vocabulary(); _ = await d.matchProject("blog") }
+        #expect(reads.value == 1)
+        try #"{"projects":{"/p/blog":{"hasTrustDialogAccepted":true},"/p/more":{}}}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        _ = await d.knownProjects()
+        #expect(reads.value == 2)
+        #expect(await d.matchProject("more")?.path == "/p/more")
+    }
+
+    @Test func overlappingRefreshesShareOneAgentsCall() async {
+        let runner = FakeRunner([agent("a", "blog")])
+        await runner.setHold(true)
+        let d = SessionDirectory(runner: runner, store: store, labeler: labeler, claudeJSON: "/nonexistent")
+        let first = Task { await d.refresh() }
+        while await runner.argLists.isEmpty { await Task.yield() }
+        let second = Task { await d.refresh(ifOlderThan: 2); return await d.sessions.map(\.id) }
+        for _ in 0..<20 { await Task.yield() }
+        await runner.setHold(false)
+        await first.value
+        #expect(await second.value == ["a"])
+        #expect(await d.sessions.map(\.id) == ["a"])
+        #expect(await runner.argLists.filter { $0.first == "agents" }.count == 1)
+    }
+
+    @Test func aFailedRefreshDoesNotStampTheTime() async {
+        let runner = FakeRunner([agent("a", "blog")])
+        await runner.setFail(true)
+        let d = SessionDirectory(runner: runner, store: store, labeler: labeler, claudeJSON: "/nonexistent")
+        await d.refresh()
+        await runner.setFail(false)
+        await d.refresh(ifOlderThan: 60)
+        #expect(await d.sessions.map(\.id) == ["a"])
+    }
+
+    @Test func aSessionOnlyThePluginKnowsIsNotListedWhenAgentsSucceeded() async {
+        await store.apply(.init(session: "ghost", state: .working, name: "ghost", project: "ghost"))
+        let (d, _) = await directory([agent("a", "blog")])
+        #expect(await d.sessions.map(\.id) == ["a"])
+    }
+
+    @Test func whenAgentsFailsPluginSessionsStayAndKeepTheirPid() async {
+        await store.apply(.init(session: "a", state: .working, name: "blog", project: "blog"))
+        await store.apply(.init(session: "p", state: .working, name: "plug", project: "plug"))
+        let (d, runner) = await directory([agent("a", "blog", pid: 4242)])
+        #expect(await d.session("p") == nil)
+        await runner.setFail(true)
+        await d.refresh()
+        #expect(Set(await d.sessions.map(\.id)) == ["a", "p"])
+        #expect(await d.session("a")?.pid == 4242)
+        #expect(await d.session("a")?.kind == "interactive")
     }
 
     @Test func rollCallPutsSessionsThatNeedYouFirst() {
