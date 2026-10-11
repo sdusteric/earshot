@@ -157,4 +157,57 @@ final class Box<T>: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(150))
         #expect(await player.played.isEmpty)
     }
+
+    func core(_ p: String, canListen: Bool, book: ApprovalBook) -> EarshotCore {
+        let availability = ListenAvailability()
+        availability.canListen = canListen
+        let speech = SpeechOut(synth: FakeSynth(), player: FakePlayer(), mic: FakeMic(), ducker: FakeDucker())
+        return EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog(),
+                           approvals: book, availability: availability)
+    }
+
+    func approvalJSON(_ dir: String, sent: Double) -> String {
+        #"{"v":1,"type":"approval","session":"s1","id":"1-2-3","name":"blog","what":"to run tests","answer":"\#(dir)/answer-s1-1-2-3","secret":"0123456789abcdef0123456789abcdef","pid":1,"sent":\#(Int(sent))}"#
+    }
+
+    @Test func takesAnApprovalOnlyWhenItCanListen() async throws {
+        let dir = NSTemporaryDirectory() + "ek-ap-\(UUID().uuidString.prefix(6))"
+        let now = Date().timeIntervalSince1970 * 1000
+        for (canListen, expected) in [(true, #"{"ok":true}"#), (false, #"{"ok":false,"reason":"not listening"}"#)] {
+            let p = path()
+            let book = ApprovalBook(stateDir: dir, isAlive: { _ in true })
+            let c = core(p, canListen: canListen, book: book)
+            try await c.start()
+            #expect(try send(p, approvalJSON(dir, sent: now)) == expected)
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(await book.current.count == (canListen ? 1 : 0))
+            c.stop()
+        }
+    }
+
+    /// A closed message is applied however late it is read: dropping it would
+    /// leave the app listening for a prompt that is gone.
+    @Test func aLateClosedIsStillApplied() async throws {
+        let dir = NSTemporaryDirectory() + "ek-ap-\(UUID().uuidString.prefix(6))"
+        let p = path()
+        let book = ApprovalBook(stateDir: dir, isAlive: { _ in true })
+        let c = core(p, canListen: true, book: book)
+        try await c.start()
+        _ = try send(p, approvalJSON(dir, sent: Date().timeIntervalSince1970 * 1000))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(try send(p, #"{"v":1,"type":"approval","session":"s1","id":"1-2-3","state":"closed","by":"screen","sent":1000}"#) == #"{"ok":true}"#)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await book.current.isEmpty)
+        c.stop()
+    }
+
+    @Test func aLateOpenApprovalIsRefused() async throws {
+        let dir = NSTemporaryDirectory() + "ek-ap-\(UUID().uuidString.prefix(6))"
+        let p = path()
+        let book = ApprovalBook(stateDir: dir, isAlive: { _ in true })
+        let c = core(p, canListen: true, book: book)
+        try await c.start()
+        #expect(try send(p, approvalJSON(dir, sent: Date().timeIntervalSince1970 * 1000 - 1000)) == #"{"ok":false,"reason":"late"}"#)
+        c.stop()
+    }
 }

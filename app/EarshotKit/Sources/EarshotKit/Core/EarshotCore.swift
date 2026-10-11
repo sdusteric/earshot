@@ -14,14 +14,19 @@ public final class EarshotCore: Sendable {
     public let speech: SpeechOut
     public let sessions: SessionStore
     public let events: EventLog
+    public let approvals: ApprovalBook
+    public let availability: ListenAvailability
     private let server: LineServer
     private let inbox: AsyncStream<AppMessage>.Continuation
     private let stream: AsyncStream<AppMessage>
 
-    public init(socketPath: String = EarshotCore.socketPath, speech: SpeechOut, sessions: SessionStore, events: EventLog) {
+    public init(socketPath: String = EarshotCore.socketPath, speech: SpeechOut, sessions: SessionStore, events: EventLog,
+                approvals: ApprovalBook = ApprovalBook(), availability: ListenAvailability = ListenAvailability()) {
         self.speech = speech
         self.sessions = sessions
         self.events = events
+        self.approvals = approvals
+        self.availability = availability
         let (stream, inbox) = AsyncStream<AppMessage>.makeStream()
         self.stream = stream
         self.inbox = inbox
@@ -34,11 +39,23 @@ public final class EarshotCore: Sendable {
             } catch {
                 return LineServer.Answer(reply: AppReply(ok: false, reason: "unreadable").encoded)
             }
-            // The plugin waits 0.2 s, then says the line itself. A line read
-            // later than this was (or is about to be) said already.
-            if case .say(let s) = message, let sent = s.sent,
-               Date().timeIntervalSince1970 * 1000 - sent > EarshotCore.lateAfterMs {
-                return LineServer.Answer(reply: AppReply(ok: false, reason: "late").encoded)
+            let late: (Double?) -> Bool = { sent in
+                guard let sent else { return false }
+                return Date().timeIntervalSince1970 * 1000 - sent > EarshotCore.lateAfterMs
+            }
+            switch message {
+            case .say(let s):
+                // The plugin waits 0.2 s, then says the line itself. A line read
+                // later than this was (or is about to be) said already.
+                if late(s.sent) { return LineServer.Answer(reply: AppReply(ok: false, reason: "late").encoded) }
+            case .approval(let a) where !a.isClosed:
+                // The hook stops waiting after 0.2 s; it then sends closed.
+                if late(a.sent) { return LineServer.Answer(reply: AppReply(ok: false, reason: "late").encoded) }
+                if !availability.canListen {
+                    return LineServer.Answer(reply: AppReply(ok: false, reason: "not listening").encoded)
+                }
+            default:
+                break   // status, and closed approvals, however late
             }
             // Kept only once the plugin has the answer: if it stopped waiting,
             // it says the line itself.
@@ -49,7 +66,7 @@ public final class EarshotCore: Sendable {
     /// Starts the speaker, then opens the socket.
     public func start() async throws {
         await speech.start()
-        let (stream, speech, sessions, events) = (self.stream, self.speech, self.sessions, self.events)
+        let (stream, speech, sessions, events, approvals) = (self.stream, self.speech, self.sessions, self.events, self.approvals)
         Task {
             for await message in stream {
                 switch message {
@@ -61,8 +78,9 @@ public final class EarshotCore: Sendable {
                     if before == .needs || before == .reply, s.state != .needs, s.state != .reply {
                         await speech.sessionAnswered(s.session)
                     }
-                case .approval:
-                    break
+                case .approval(let a):
+                    let taken = await approvals.apply(a)
+                    await events.add(a.isClosed ? "approval closed (\(a.by ?? "?"))" : (taken ? "approval open" : "approval refused"))
                 }
             }
         }
