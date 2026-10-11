@@ -165,7 +165,7 @@ public actor VoiceLoop: ListenObserver {
                 let d = ContinuousClock.now - ended
                 let ms = Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)
                 signposter.emitEvent("speech")
-                latencyLog.info("latency \(ms, privacy: .public) ms")
+                latencyLog.notice("latency \(ms, privacy: .public) ms")
                 await events.add("latency \(ms) ms")
             }
         case .finished(let line):

@@ -6,6 +6,7 @@
 //   parse-eval TSV           the command parser on tests/eval/parser-cases.tsv
 //   wake-eval DIR            wake word and transcripts on recordings (DIR/manifest.tsv)
 //   send TARGET PROMPT       one prompt through the real directory and dispatcher
+//   send-id ID PROMPT        the same, to the session with this id
 import AVFoundation
 import Darwin
 import EarshotKit
@@ -28,8 +29,9 @@ let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
         case "parse-eval" where a.count == 2: try await parseEval(URL(fileURLWithPath: a[1]))
         case "wake-eval" where a.count == 2: try await wakeEval(URL(fileURLWithPath: a[1]))
         case "send" where a.count == 3: await send(target: a[1], prompt: a[2])
+        case "send-id" where a.count == 3: await send(id: a[1], prompt: a[2])
         default:
-            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | send TARGET PROMPT")
+            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | send TARGET PROMPT | send-id ID PROMPT")
             exit(2)
         }
     }
@@ -249,6 +251,8 @@ func parseEval(_ url: URL) async throws {
         if matches(got, parts[1]) { pass += 1 } else { print("MISS\t\(parts[0])\twant \(parts[1])\tgot \(got)") }
     }
     print(String(format: "%d of %d (%.0f%%), %d by the grammar", pass, total, Double(pass) / Double(max(total, 1)) * 100, grammar))
+    if total == 0 { print("FAIL: no cases"); exit(1) }
+    if Double(pass) / Double(total) < 0.95 { print("FAIL: below the 95% bar"); exit(1) }
 }
 
 func matches(_ c: Command, _ want: String) -> Bool {
@@ -276,10 +280,11 @@ func wakeEval(_ dir: URL) async throws {
     let spotter = CtcWakeSpotter()
     try await spotter.load()
     let transcriber = ParakeetTranscriber()
-    var hits = 0, misses = 0, falseWakes = 0, words = 0, wordsTotal = 0
+    var hits = 0, misses = 0, falseWakes = 0, words = 0, wordsTotal = 0, rows = 0
     for line in try String(contentsOf: dir.appending(path: "manifest.tsv"), encoding: .utf8).split(separator: "\n") {
         let p = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
         guard p.count >= 2 else { continue }
+        rows += 1
         let samples = try AudioConverter().resampleAudioFile(dir.appending(path: p[0]))
         let woke = await spotter.heardWake(Array(samples.prefix(32_000)), sensitivity: 5)
         switch (p[1] == "1", woke) {
@@ -295,17 +300,41 @@ func wakeEval(_ dir: URL) async throws {
         }
     }
     print("wake: \(hits) hit, \(misses) missed, \(falseWakes) false; transcripts: \(words) of \(wordsTotal) right")
+    var reasons: [String] = []
+    if rows == 0 { reasons.append("the manifest is empty") }
+    if misses > 0 { reasons.append("\(misses) missed wake(s)") }
+    if falseWakes > 0 { reasons.append("\(falseWakes) false wake(s)") }
+    if wordsTotal - words > wordsTotal / 5 { reasons.append("\(wordsTotal - words) of \(wordsTotal) transcripts wrong (at most 1 in 5)") }
+    if !reasons.isEmpty { print("FAIL: " + reasons.joined(separator: "; ")); exit(1) }
 }
 
 /// Sends one prompt through the real directory and dispatcher, as a voice command would.
 func send(target: String, prompt: String) async {
-    guard let path = ClaudeCLI.locate() else { print("claude not found"); return }
+    guard let (_, dispatcher) = rig() else { return }
+    let o = await dispatcher.run(.send(target: target, prompt: prompt))
+    print(o.line ?? "(nothing said)")
+    try? await Task.sleep(for: .seconds(9))   // time for the receipt check
+}
+
+/// The same, to the session with this id, by its spoken name.
+func send(id: String, prompt: String) async {
+    guard let (directory, dispatcher) = rig() else { return }
+    await directory.refresh()
+    guard let s = await directory.session(id) else { print("no session with id \(id)"); exit(1) }
+    guard case .one(let found) = await directory.resolve(s.name), found.id == id else {
+        print("the name \"\(s.name)\" does not pick out that session alone"); exit(1)
+    }
+    let o = await dispatcher.run(.send(target: s.name, prompt: prompt))
+    print(o.line ?? "(nothing said)")
+    try? await Task.sleep(for: .seconds(9))
+}
+
+func rig() -> (SessionDirectory, Dispatcher)? {
+    guard let path = ClaudeCLI.locate() else { print("claude not found"); exit(1) }
     let runner = ClaudeCLI(path: path)
     let store = SessionStore()
     let directory = SessionDirectory(runner: runner, store: store, labeler: Labeler(model: nil))
     let dispatcher = Dispatcher(directory: directory, store: store, transport: CCSocketTransport(), runner: runner,
                                 approvals: ApprovalBook(), say: { print("later: \($0)") }, receiptTimeout: .seconds(8))
-    let o = await dispatcher.run(.send(target: target, prompt: prompt))
-    print(o.line ?? "(nothing said)")
-    try? await Task.sleep(for: .seconds(9))   // time for the receipt check
+    return (directory, dispatcher)
 }
