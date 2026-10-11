@@ -58,6 +58,7 @@ public actor SpeechOut {
     private let callTimeout: Duration
     private let synthTimeout: Duration
     private let clock: @Sendable () -> Date
+    private let holdTimeout: Duration
 
     private var queue: [SpokenLine] = []
     private var held = HoldQueue()
@@ -73,6 +74,10 @@ public actor SpeechOut {
     private var bargedIn = false
     /// A listening begin ducked other audio and nobody has ended it yet.
     private var owed = false
+    /// The line after which the queue waits (see holdAfter), and whether it is waiting now.
+    private var holdID: UUID?
+    private var holdActive = false
+    private var holdGeneration = 0
     private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
     private var lastMicBusy = false
     private var catchUpGeneration = 0
@@ -86,11 +91,11 @@ public actor SpeechOut {
                 answered: @escaping @Sendable (SpokenLine) -> Bool = SpokenLine.transcriptAnswered,
                 settle: Duration = .seconds(4), maxWait: TimeInterval = 60, lineTimeout: Duration = .seconds(30),
                 callTimeout: Duration = .seconds(3), synthTimeout: Duration = .seconds(25),
-                clock: @escaping @Sendable () -> Date = Date.init) {
+                clock: @escaping @Sendable () -> Date = Date.init, holdTimeout: Duration = .seconds(3)) {
         self.synth = synth; self.player = player; self.mic = mic; self.ducker = ducker
         self.answered = answered; self.settle = settle; self.maxWait = maxWait
         self.lineTimeout = lineTimeout; self.callTimeout = callTimeout; self.synthTimeout = synthTimeout
-        self.clock = clock
+        self.clock = clock; self.holdTimeout = holdTimeout
     }
 
     /// Starts following the mic. Later calls do nothing.
@@ -152,12 +157,41 @@ public actor SpeechOut {
         listening -= 1
         guard listening == 0 else { return }
         // A running run ends the ducking in its tail; otherwise end it here.
-        if !running, queue.isEmpty, owed {
+        if !running, queue.isEmpty, owed, !holdActive {
             owed = false
             let ducker = self.ducker
             await bounded(callTimeout, ()) { await ducker.end() }
         }
         runIfNeeded()
+    }
+
+    /// When this line finishes playing, nothing else starts and the ducking
+    /// stays on until releaseHold (or the safety timeout), so a follow-up
+    /// window can open before the next line. A line that does not finish
+    /// (stopped, dropped) creates no hold.
+    public func holdAfter(_ id: UUID) { holdID = id }
+
+    public func releaseHold() {
+        guard holdActive else { return }
+        holdActive = false
+        holdGeneration += 1
+        runIfNeeded()
+    }
+
+    private func startHold() {
+        holdActive = true
+        owed = true   // the ducking is ended when the hold is released
+        holdGeneration += 1
+        let generation = holdGeneration
+        Task { [holdTimeout] in
+            try? await Task.sleep(for: holdTimeout)
+            await self.holdTimedOut(generation)
+        }
+    }
+
+    private func holdTimedOut(_ generation: Int) {
+        guard holdActive, holdGeneration == generation else { return }
+        releaseHold()
     }
 
     public func lineEvents() -> AsyncStream<LineEvent> {
@@ -196,7 +230,7 @@ public actor SpeechOut {
     private func run() async {
         var ducked = false
         while true {
-        while !queue.isEmpty, listening == 0 {
+        while !queue.isEmpty, listening == 0, !holdActive {
             let line = queue.removeFirst()
             if clock().timeIntervalSince(line.received) > maxWait {
                 log.info("dropped a line that waited over \(Int(self.maxWait)) s")
@@ -241,7 +275,10 @@ public actor SpeechOut {
                 finished = true
             }
             currentLine = nil
-            if playedToEnd, made != nil { emit(.finished(line)) }
+            if playedToEnd, made != nil {
+                if holdID == line.id { holdID = nil; startHold() }
+                emit(.finished(line))
+            }
             if !finished && interrupted {
                 // A call started: say this line and the rest later.
                 hold(line)
@@ -250,14 +287,14 @@ public actor SpeechOut {
             }
             // Stopped because you talked: the line is dropped; the queue waits for endListening.
         }
-        if listening == 0, ducked || owed {
+        if listening == 0, !holdActive, ducked || owed {
             ducked = false
             owed = false
             let ducker = self.ducker
             await bounded(callTimeout, ()) { await ducker.end() }
         }
         // Lines or a listening begin that arrived during the awaited end: go again.
-        if listening == 0, !queue.isEmpty || owed { continue }
+        if listening == 0, !holdActive, !queue.isEmpty || owed { continue }
         break
         }
         running = false

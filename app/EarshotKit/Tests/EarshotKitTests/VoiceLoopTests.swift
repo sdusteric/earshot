@@ -5,8 +5,27 @@ import Testing
 actor FakeFollowUps: FollowUpListening {
     private(set) var calls: [Listener.FollowUp] = []
     private(set) var vocabulary: [String] = []
-    func listenFollowUp(_ f: Listener.FollowUp, within: Duration?) async { calls.append(f) }
+    private var delay: Duration = .zero
+    /// Opening a window takes this long, like starting the recognizer.
+    func slow(_ d: Duration) { delay = d }
+    func listenFollowUp(_ f: Listener.FollowUp, within: Duration?) async {
+        calls.append(f)
+        if delay > .zero { try? await Task.sleep(for: delay) }
+    }
     func setVocabulary(_ v: [String]) async { vocabulary = v }
+}
+
+/// Counts the loop's begin and end calls on the real SpeechOut.
+actor CountingSpeaker: LineSpeaker {
+    let inner: SpeechOut
+    private(set) var begins = 0, ends = 0
+    init(_ inner: SpeechOut) { self.inner = inner }
+    func enqueue(_ line: SpokenLine) async { await inner.enqueue(line) }
+    func beginListening() async { begins += 1; await inner.beginListening() }
+    func endListening() async { ends += 1; await inner.endListening() }
+    func lineEvents() async -> AsyncStream<SpeechOut.LineEvent> { await inner.lineEvents() }
+    func holdAfter(_ id: UUID) async { await inner.holdAfter(id) }
+    func releaseHold() async { await inner.releaseHold() }
 }
 
 @Suite struct VoiceLoopTests {
@@ -29,6 +48,7 @@ actor FakeFollowUps: FollowUpListening {
         let player: FakePlayer
         let book: ApprovalBook
         let heard: AsyncStream<Listener.Utterance>.Continuation
+        let counter: CountingSpeaker
     }
 
     func rig(_ agents: [AgentEntry], blocking: Bool = false) async -> Rig {
@@ -42,20 +62,21 @@ actor FakeFollowUps: FollowUpListening {
         let book = ApprovalBook(stateDir: approvalsDir, isAlive: { _ in true })
         let dispatcher = Dispatcher(directory: directory, store: store, transport: transport, runner: runner, approvals: book,
                                     say: { _ in }, receiptTimeout: .seconds(60))
+        let counter = CountingSpeaker(speech)
         let loop = VoiceLoop(followUps: followUps, parser: CommandParser(model: nil), dispatcher: dispatcher,
-                             directory: directory, approvals: book, speech: speech, chimes: chimes, events: EventLog())
+                             directory: directory, approvals: book, speech: counter, chimes: chimes, events: EventLog())
         let (stream, cont) = AsyncStream<Listener.Utterance>.makeStream()
         await loop.start(utterances: stream)
-        return Rig(loop: loop, speech: speech, player: player, book: book, heard: cont)
+        return Rig(loop: loop, speech: speech, player: player, book: book, heard: cont, counter: counter)
     }
 
     func said(_ text: String, _ trigger: Listener.Trigger = .hotkey) -> Listener.Utterance {
         .init(text: text, trigger: trigger, endedAt: .now)
     }
 
-    func approval(_ id: String = "1-1-1") -> AppMessage.Approval {
-        .init(session: "s1", id: id, name: "billing service", what: "to run the migration",
-              answer: "\(approvalsDir)/answer-s1-\(id)", secret: secret, pid: 1)
+    func approval(_ id: String = "1-1-1", session: String = "s1") -> AppMessage.Approval {
+        .init(session: session, id: id, name: "billing service", what: "to run the migration",
+              answer: "\(approvalsDir)/answer-\(session)-\(id)", secret: secret, pid: 1)
     }
 
     @Test func aCommandIsCarriedOutAndConfirmed() async {
@@ -173,6 +194,58 @@ actor FakeFollowUps: FollowUpListening {
         await r.loop.captureBegan(.wake)
         await r.loop.captureEnded(heard: false)
         #expect(await ducker.ends == 2)
+    }
+
+    /// Prompt A closes on screen and B opens for the same session during A's line.
+    @Test func theWindowIsOnlyForThePromptTheLineWasAbout() async {
+        let r = await rig([agent("s1", "billing-service")], blocking: true)
+        await r.book.apply(approval("1-1-1"))
+        await r.speech.enqueue(SpokenLine(text: "Hey, billing service needs your OK to run the migration.", kind: .need, session: "s1"))
+        let player = r.player
+        #expect(await eventually { await player.isPlaying })
+        await r.book.apply(.init(session: "s1", id: "1-1-1", state: "closed", by: "screen"))
+        await r.book.apply(approval("2-2-2"))
+        await player.finish()
+        await r.speech.waitUntilIdle()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await followUps.calls.isEmpty)
+    }
+
+    /// The next line waits for the window of the one before it.
+    @Test func theNextLineWaitsForTheWindow() async {
+        let r = await rig([agent("s1", "billing-service"), agent("s2", "blog")], blocking: true)
+        await r.book.apply(approval("1-1-1"))
+        await r.book.apply(approval("2-2-2", session: "s2"))
+        await r.speech.enqueue(SpokenLine(text: "one needs your OK", kind: .need, session: "s1"))
+        await r.speech.enqueue(SpokenLine(text: "two needs your OK", kind: .need, session: "s2"))
+        let player = r.player
+        await followUps.slow(.milliseconds(300))
+        #expect(await eventually { await player.isPlaying })
+        await player.finish()
+        #expect(await eventually { await followUps.calls == [.approval(id: "1-1-1")] })
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(await player.played.count == 1)   // still waiting for the window to open
+        #expect(await eventually { await player.played.count == 2 })
+        #expect(await followUps.calls.first == .approval(id: "1-1-1"))
+        #expect(await eventually { await player.isPlaying })
+        await player.finish()
+        #expect(await eventually { await followUps.calls.count == 2 })
+    }
+
+    @Test func listeningIsNeverEndedMoreOftenThanItBegan() async {
+        let r = await rig([agent("b", "blog")])
+        await r.loop.captureBegan(.hotkey)
+        await r.loop.captureEnded(heard: true)
+        await r.loop.captureBegan(.wake)
+        await r.loop.captureEnded(heard: true)
+        r.heard.yield(said("What's everyone doing?"))
+        r.heard.yield(said("What's everyone doing?"))
+        let player = r.player
+        #expect(await eventually { await player.played.count == 2 })
+        await r.speech.waitUntilIdle()
+        let c = r.counter
+        #expect(await c.begins == 2)
+        #expect(await c.ends == 2)
     }
 
     @Test func theWakeWordRefreshesTheVocabulary() async {

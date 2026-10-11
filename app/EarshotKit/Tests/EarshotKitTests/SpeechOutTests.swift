@@ -124,6 +124,60 @@ actor SlowEndDucker: Ducking {
         }
     }
 
+    func makeHolding(_ player: FakePlayer, holdTimeout: Duration = .seconds(3)) async -> SpeechOut {
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: ducker, answered: { _ in false },
+                          settle: .milliseconds(30), holdTimeout: holdTimeout)
+        await s.start()
+        return s
+    }
+
+    @Test func holdAfterPausesTheQueueUntilReleased() async {
+        let player = FakePlayer(blocking: true)
+        let s = await makeHolding(player)
+        let one = line("one"), two = line("two")
+        await s.holdAfter(one.id)
+        await s.enqueue(one); await s.enqueue(two)
+        await eventually { await player.isPlaying }
+        await player.unblock()
+        await eventually { await player.played == ["one"] }
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await player.played == ["one"])
+        #expect(await ducker.ends == 0)
+        await s.releaseHold()
+        await s.waitUntilIdle()
+        #expect(await player.played == ["one", "two"])
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func theHoldReleasesItselfAfterTheTimeout() async {
+        let player = FakePlayer()
+        let s = await makeHolding(player, holdTimeout: .milliseconds(80))
+        let one = line("one")
+        await s.holdAfter(one.id)
+        await s.enqueue(one); await s.enqueue(line("two"))
+        await eventually { await player.played == ["one"] }
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(await player.played == ["one"])
+        await eventually { await player.played == ["one", "two"] }
+        await s.waitUntilIdle()
+        #expect(await player.played == ["one", "two"])
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func aHoldWithNothingQueuedEndsTheDuckingOnRelease() async {
+        let player = FakePlayer()
+        let s = await makeHolding(player)
+        let one = line("one")
+        await s.holdAfter(one.id)
+        await s.enqueue(one)
+        await eventually { await player.played == ["one"] }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await ducker.ends == 0)
+        await s.releaseHold()
+        await eventually { await ducker.ends == 1 }
+        #expect(await ducker.ends == 1)
+    }
+
     @Test func playsInOrderAndEndsDuckingOncePerRun() async {
         let player = FakePlayer()
         let s = await make(player)

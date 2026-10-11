@@ -14,6 +14,8 @@ public protocol LineSpeaker: Sendable {
     func beginListening() async
     func endListening() async
     func lineEvents() async -> AsyncStream<SpeechOut.LineEvent>
+    func holdAfter(_ id: UUID) async
+    func releaseHold() async
 }
 
 extension SpeechOut: LineSpeaker {}
@@ -35,6 +37,8 @@ public actor VoiceLoop: ListenObserver {
     private var pending: Dispatcher.Pending?
     /// Follow-up windows to open once a line has been said.
     private var afterLine: [UUID: Listener.FollowUp] = [:]
+    /// The open prompt a need line was about when it began, for its window.
+    private var needPrompt: [UUID: String] = [:]
     /// When the command that led to a line ended, for the latency log.
     private var commandEnded: [UUID: ContinuousClock.Instant] = [:]
     /// One per heard capture whose utterance has not arrived yet. Each is
@@ -150,6 +154,13 @@ public actor VoiceLoop: ListenObserver {
     private func lineEvent(_ e: SpeechOut.LineEvent) async {
         switch e {
         case .started(let line):
+            // A window is due after this line: keep the queue from moving on until it is open.
+            var due = afterLine[line.id] != nil
+            if line.kind == .need, !line.session.isEmpty, let a = await approvals.latest(session: line.session) {
+                needPrompt[line.id] = a.id
+                due = true
+            }
+            if due { await speech.holdAfter(line.id) }
             if let ended = commandEnded.removeValue(forKey: line.id) {
                 let d = ContinuousClock.now - ended
                 let ms = Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)
@@ -160,11 +171,14 @@ public actor VoiceLoop: ListenObserver {
         case .finished(let line):
             if !line.session.isEmpty { await directory.noteSpoke(about: line.session) }
             // Windows open only now, after Earshot's own line, so it never hears itself.
+            let prompt = needPrompt.removeValue(forKey: line.id)
             if let f = afterLine.removeValue(forKey: line.id) {
                 await followUps.listenFollowUp(f, within: nil)
-            } else if line.kind == .need, !line.session.isEmpty, let a = await approvals.latest(session: line.session) {
-                await followUps.listenFollowUp(.approval(id: a.id), within: nil)
+            } else if let id = prompt, await approvals.isOpen(id) {
+                // Only the prompt the line was about, and only while it is still open.
+                await followUps.listenFollowUp(.approval(id: id), within: nil)
             }
+            await speech.releaseHold()
         }
     }
 
