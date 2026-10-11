@@ -33,15 +33,21 @@ public actor Listener {
         public var minClipSamples: Int
         /// How long to wait before reopening a mic that ended on its own.
         public var reopenDelay: Duration
+        /// After a line of Earshot's that says the wake phrase, how long a wake is still its own voice.
+        public var ownWakeGrace: Duration
+        /// How long Earshot's lines are remembered, to drop a wake that repeats one.
+        public var ownLineMemory: Duration
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
                     preRollSamples: Int = 4_800, spotAtSamples: Int = 24_000, spotWindowSamples: Int = 32_000,
-                    minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500)) {
+                    minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500),
+                    ownWakeGrace: Duration = .seconds(1), ownLineMemory: Duration = .seconds(10)) {
             self.wakeSilence = wakeSilence; self.followUp = followUp; self.minHold = minHold
             self.maxCommandSamples = maxCommandSamples; self.preRollSamples = preRollSamples
             self.spotAtSamples = spotAtSamples; self.spotWindowSamples = spotWindowSamples
             self.minClipSamples = minClipSamples; self.reopenDelay = reopenDelay
+            self.ownWakeGrace = ownWakeGrace; self.ownLineMemory = ownLineMemory
         }
     }
 
@@ -92,8 +98,15 @@ public actor Listener {
     private var stopTask: Task<Void, Never>?
     /// Callers that are opening the mic to start a capture of their own.
     private var pendingOpens = 0
+    /// The line Earshot is saying now, if any.
+    private var speaking: String?
+    /// Until then a wake is Earshot's own voice: a line of its own that says the wake phrase just ended.
+    private var ownWakeUntil: ContinuousClock.Instant?
+    /// Earshot's recent lines, normalised, with when they were last heard.
+    private var ownLines: [(text: String, at: ContinuousClock.Instant)] = []
 
-    /// Wake captures whose transcript did not start with the wake phrase.
+    /// Wakes that were not you: the transcript did not start with the wake
+    /// phrase, or it was Earshot's own voice.
     public private(set) var falseWakes = 0
 
     public init(input: any AudioInput, gate: any SpeechGate, spotter: any WakeSpotter, transcriber: any Transcriber,
@@ -108,6 +121,36 @@ public actor Listener {
     public func setObserver(_ o: any ListenObserver) { observer = o }
     public func setSensitivity(_ s: Int) { sensitivity = s }
     public func setVocabulary(_ v: [String]) { vocabulary = v }
+
+    /// What Earshot is saying now (nil when it went quiet), so it never wakes
+    /// itself: a session named "earshot" makes it say the wake phrase.
+    public func setSpeaking(_ text: String?) {
+        let now = ContinuousClock.now
+        if let text {
+            speaking = text
+            ownLines.append((Self.squash(text), now))
+        } else if let line = speaking {
+            speaking = nil
+            if Self.mentionsWake(line) { ownWakeUntil = now + timing.ownWakeGrace }
+            if let i = ownLines.lastIndex(where: { $0.text == Self.squash(line) }) { ownLines[i].at = now }
+        }
+        ownLines.removeAll { now - $0.at > timing.ownLineMemory && $0.text != speaking.map(Self.squash) }
+    }
+
+    /// A wake now would be Earshot's own voice: it is saying the wake phrase, or just said it.
+    private var ownVoiceWake: Bool {
+        if let speaking, Self.mentionsWake(speaking) { return true }
+        if let until = ownWakeUntil, ContinuousClock.now < until { return true }
+        return false
+    }
+
+    /// The transcript is part of a line Earshot said in the last few seconds.
+    private func repeatsOwnLine(_ transcript: String) -> Bool {
+        let t = Self.squash(transcript)
+        guard !t.isEmpty else { return false }
+        let now = ContinuousClock.now, current = speaking.map(Self.squash)
+        return ownLines.contains { (now - $0.at <= timing.ownLineMemory || $0.text == current) && $0.text.contains(t) }
+    }
 
     public func phaseChanges() -> AsyncStream<Phase> {
         let (stream, cont) = AsyncStream<Phase>.makeStream()
@@ -384,7 +427,12 @@ public actor Listener {
            ring.total - s >= timing.spotAtSamples || edge == .end {
             spotted = true
             let window = ring.samples(from: s, to: s + timing.spotWindowSamples)
-            if await spotter.heardWake(window, sensitivity: sensitivity), capture == nil, !micBusy, micOpen {
+            let ownBefore = ownVoiceWake
+            let woke = await spotter.heardWake(window, sensitivity: sensitivity)
+            if woke, ownBefore || ownVoiceWake {
+                // Earshot said the wake phrase itself (a session named "earshot"): not a wake, no barge-in.
+                falseWakes += 1
+            } else if woke, capture == nil, !micBusy, micOpen {
                 let c = Capture(trigger: .wake, start: s, waitingForSpeech: false)
                 capture = c
                 phase = .capturing(.wake)
@@ -417,7 +465,11 @@ public actor Listener {
         // A result that arrives after a call started is dropped.
         let dropped = micBusy
         if c.trigger == .wake, !c.commandPhase {
-            if let rest = Self.stripWake(text) {
+            if repeatsOwnLine(text) {
+                // The mic heard Earshot's own line.
+                falseWakes += 1
+                text = ""
+            } else if let rest = Self.stripWake(text) {
                 text = rest
                 if text.isEmpty, !dropped, capture == nil, micOpen {
                     // "Hey Earshot" alone: keep listening for the command.
@@ -478,9 +530,19 @@ public actor Listener {
         #"^\s*(?:(?:hey|hi|ok|okay|a)[\s,.!]*)?(?:ear\s*shot|air\s*shot|earshot)\b[\s,.!?]*"#
     ).ignoresCase()
 
+    nonisolated(unsafe) private static let wakeAnywhere = try! Regex(#"\b(?:ear\s*shot|air\s*shot)\b"#).ignoresCase()
+
     /// The text after the wake phrase, or nil when it does not start with it.
     public static func stripWake(_ text: String) -> String? {
         guard let m = text.prefixMatch(of: wakePrefix) else { return nil }
         return String(text[m.range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The wake phrase anywhere in the text ("Hey, earshot needs your OK").
+    public static func mentionsWake(_ text: String) -> Bool { text.contains(wakeAnywhere) }
+
+    /// Lowercase letters and digits only, so "Hey, Earshot" and "hey ear shot" compare equal.
+    static func squash(_ text: String) -> String {
+        String(text.lowercased().filter { $0.isLetter || $0.isNumber })
     }
 }

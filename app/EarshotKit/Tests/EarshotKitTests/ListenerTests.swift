@@ -585,6 +585,92 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await observer.heard == [false])
     }
 
+    // MARK: - Earshot's own voice
+
+    /// A session named "earshot": the plugin says "Hey, earshot needs your OK".
+    @Test func aWakeWhileEarshotSaysThePhraseIsIgnored() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await spotter.calls == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)   // no capture, so no barge-in
+        #expect(await l.falseWakes == 1)
+    }
+
+    @Test func aWakeJustAfterSuchALineIsIgnored() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Earshot finished: fixed the tests.")
+        await l.setSpeaking(nil)
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await spotter.calls == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await observer.events.isEmpty)
+        #expect(await l.falseWakes == 1)
+    }
+
+    /// The spec: the wake word stops the line that is playing.
+    @Test func aWakeDuringAnotherLineBargesIn() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Billing service needs your OK to run the tests.")
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await l.falseWakes == 0)
+    }
+
+    @Test func aWakeThatRepeatsALineEarshotJustSaidIsDropped() async {
+        let t = ScriptTranscriber(fixed: "Hey earshot needs your OK.")
+        var timing = Listener.Timing.forTests
+        timing.ownWakeGrace = .zero
+        let l = await make(timing, transcriber: t)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking(nil)
+        try? await Task.sleep(for: .milliseconds(20))
+        await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+        #expect(await l.falseWakes == 1)
+        #expect(await observer.heard == [false])
+    }
+
+    @Test func aLineSaidLongAgoNoLongerDropsAWake() async {
+        let t = ScriptTranscriber(fixed: "Hey earshot needs your OK.")
+        var timing = Listener.Timing.forTests
+        timing.ownWakeGrace = .zero
+        timing.ownLineMemory = .milliseconds(30)
+        let l = await make(timing, transcriber: t)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking(nil)
+        try? await Task.sleep(for: .milliseconds(80))
+        await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "needs your OK.")
+    }
+
+    @Test(arguments: [
+        ("Hey, earshot needs your OK to run the tests.", true),
+        ("Earshot finished: fixed the tests.", true),
+        ("The ear shot session is done.", true),
+        ("Billing service needs your OK.", false),
+        ("Hearsay is not evidence.", false),
+    ])
+    func findsTheWakePhraseAnywhere(_ line: String, _ found: Bool) {
+        #expect(Listener.mentionsWake(line) == found)
+    }
+
     @Test(arguments: [
         ("Hey Earshot, what's everyone doing?", "what's everyone doing?"),
         ("hey ear shot tell billing to run the tests", "tell billing to run the tests"),

@@ -433,7 +433,23 @@ actor SlowEndDucker: Ducking {
         await s.beginListening()
         await s.endListening()
         try? await Task.sleep(for: .milliseconds(50))
-        #expect(await events.items == [.started(a), .finished(a), .started(b)])
+        await eventually { await events.items.count == 5 }
+        #expect(await events.items == [.started(a), .finished(a), .ended(a), .started(b), .ended(b)])
+    }
+
+    /// A line held for a call still says it ended, so the listener knows Earshot went quiet.
+    @Test func aLineHeldForACallEnds() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        let events = Collected<SpeechOut.LineEvent>()
+        let stream = await s.lineEvents()
+        Task { for await e in stream { await events.add(e) } }
+        let a = line("cut by a call", .need)
+        await s.enqueue(a)
+        await eventually { await player.isPlaying }
+        mic.set(true)
+        await eventually { await events.items.count == 2 }
+        #expect(await events.items == [.started(a), .ended(a)])
     }
 
     @Test func aLineMadeWhileYouTalkWaitsForTheEnd() async {
@@ -514,7 +530,7 @@ actor SlowEndDucker: Ducking {
         await s.enqueue(a)
         await eventually { await ducker.ends == 1 }
         try? await Task.sleep(for: .milliseconds(30))
-        #expect(await events.items == [.started(a)])
+        #expect(await events.items == [.started(a), .ended(a)])
     }
 
     @Test func aRequeuedLineStaysBehindAnswersEnqueuedMeanwhile() async {

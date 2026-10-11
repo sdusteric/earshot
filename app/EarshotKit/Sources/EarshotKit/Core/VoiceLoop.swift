@@ -4,6 +4,8 @@ import os
 public protocol FollowUpListening: Sendable {
     func listenFollowUp(_ f: Listener.FollowUp, within: Duration?) async
     func setVocabulary(_ v: [String]) async
+    /// What Earshot is saying now, nil when it stopped, so it never wakes itself.
+    func setSpeaking(_ text: String?) async
 }
 
 extension Listener: FollowUpListening {}
@@ -154,6 +156,7 @@ public actor VoiceLoop: ListenObserver {
     private func lineEvent(_ e: SpeechOut.LineEvent) async {
         switch e {
         case .started(let line):
+            await followUps.setSpeaking(line.text)
             // A window is due after this line: keep the queue from moving on until it is open.
             var due = afterLine[line.id] != nil
             if line.kind == .need, !line.session.isEmpty, let a = await approvals.latest(session: line.session) {
@@ -179,6 +182,8 @@ public actor VoiceLoop: ListenObserver {
                 await followUps.listenFollowUp(.approval(id: id), within: nil)
             }
             await speech.releaseHold()
+        case .ended:
+            await followUps.setSpeaking(nil)
         }
     }
 

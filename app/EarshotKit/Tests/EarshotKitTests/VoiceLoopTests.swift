@@ -13,6 +13,8 @@ actor FakeFollowUps: FollowUpListening {
         if delay > .zero { try? await Task.sleep(for: delay) }
     }
     func setVocabulary(_ v: [String]) async { vocabulary = v }
+    private(set) var speaking: [String?] = []
+    func setSpeaking(_ text: String?) async { speaking.append(text) }
 }
 
 /// Counts the loop's begin and end calls on the real SpeechOut.
@@ -246,6 +248,13 @@ actor CountingSpeaker: LineSpeaker {
         let c = r.counter
         #expect(await c.begins == 2)
         #expect(await c.ends == 2)
+    }
+
+    /// The listener knows what Earshot says, so a line naming "earshot" never wakes it.
+    @Test func theListenerIsToldWhatEarshotSays() async {
+        let r = await rig([agent("b", "blog")])
+        await r.speech.enqueue(SpokenLine(text: "Hey, earshot needs your OK.", kind: .need, session: "x"))
+        #expect(await eventually { await followUps.speaking == ["Hey, earshot needs your OK.", nil] })
     }
 
     @Test func theWakeWordRefreshesTheVocabulary() async {

@@ -25,11 +25,12 @@ if [ "$1" = record ]; then
   echo "Recording the listening chime played through the speakers"
   ( sleep 0.5; afplay /System/Library/Sounds/Tink.aiff ) & P record 4 "$D/own-chime.wav" >/dev/null || { echo "recording own-chime.wav failed"; exit 1; }; wait
   printf 'own-chime.wav\t0\t\n' >> "$D/manifest.tsv"
-  for line in "Hey, billing service needs your OK to run the migration." "Still on blog, about six minutes in." "Three sessions. Billing service is working."; do
+  for line in "Hey, billing service needs your OK to run the migration." "Still on blog, about six minutes in." "Three sessions. Billing service is working." \
+              "Hey, earshot needs your OK to run the tests." "Earshot finished: fixed the tests."; do
     f="own-$((++n)).wav"
     echo "Recording Earshot's own line: $line"
     ( sleep 0.5; say "$line" ) & P record 4 "$D/$f" >/dev/null || { echo "recording $f failed"; exit 1; }; wait
-    printf '%s\t0\t\n' "$f" >> "$D/manifest.tsv"
+    printf '%s\t0\t\t%s\n' "$f" "$line" >> "$D/manifest.tsv"
   done
 fi
 P wake-eval "$D"

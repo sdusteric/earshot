@@ -275,7 +275,8 @@ func matches(_ c: Command, _ want: String) -> Bool {
 }
 
 /// DIR holds WAV files and manifest.tsv: file, 1 if it says the wake phrase
-/// else 0, words the transcript must contain (may be empty).
+/// else 0, words the transcript must contain (may be empty), and for Earshot's
+/// own lines the line it was saying (may be left out).
 func wakeEval(_ dir: URL) async throws {
     let spotter = CtcWakeSpotter()
     try await spotter.load()
@@ -286,7 +287,13 @@ func wakeEval(_ dir: URL) async throws {
         guard p.count >= 2 else { continue }
         rows += 1
         let samples = try AudioConverter().resampleAudioFile(dir.appending(path: p[0]))
-        let woke = await spotter.heardWake(Array(samples.prefix(32_000)), sensitivity: 5)
+        var woke = await spotter.heardWake(Array(samples.prefix(32_000)), sensitivity: 5)
+        // Column 4: the line Earshot was saying. The listener ignores the spotter while Earshot
+        // says the wake phrase itself. Any other line it would cut off, so that counts as a false wake.
+        if woke, p.count > 3, Listener.mentionsWake(p[3]) {
+            woke = false
+            print("OWN WAKE PHRASE, IGNORED\t\(p[0])")
+        }
         switch (p[1] == "1", woke) {
         case (true, true): hits += 1
         case (true, false): misses += 1; print("MISSED WAKE\t\(p[0])")

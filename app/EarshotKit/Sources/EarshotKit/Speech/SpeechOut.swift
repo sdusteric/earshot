@@ -42,7 +42,10 @@ final class Once: @unchecked Sendable {
 /// app uses the mic, and are said in a catch-up afterwards.
 public actor SpeechOut {
     public enum State: Sendable, Equatable { case idle, speaking, holding }
-    public enum LineEvent: Sendable, Equatable { case started(SpokenLine), finished(SpokenLine) }
+    /// started, then finished when the line played to the end, then ended
+    /// whenever a started line stops for any reason (finished, barged in,
+    /// timed out, held for a call).
+    public enum LineEvent: Sendable, Equatable { case started(SpokenLine), finished(SpokenLine), ended(SpokenLine) }
 
     public static let errorTone = URL(fileURLWithPath: "/System/Library/Sounds/Basso.aiff")
     private let log = Logger(subsystem: "com.earshot.app", category: "speech")
@@ -279,6 +282,7 @@ public actor SpeechOut {
                 if holdID == line.id { holdID = nil; startHold() }
                 emit(.finished(line))
             }
+            emit(.ended(line))
             if !finished && interrupted {
                 // A call started: say this line and the rest later.
                 hold(line)
