@@ -6,6 +6,7 @@ import SwiftUI
 struct EarshotApp: App {
     @State private var model = AppModel()
     @AppStorage("onboarded") private var onboarded = false
+    @State private var orb: OrbPanel?
     @Environment(\.openWindow) private var openWindow
 
     init() {
@@ -22,6 +23,7 @@ struct EarshotApp: App {
             Image(systemName: model.menuIcon)
                 .task {
                     model.start()
+                    if orb == nil { orb = OrbPanel(model: model) }
                     if !onboarded {
                         NSApp.activate()
                         openWindow(id: "onboarding")

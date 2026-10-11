@@ -6,6 +6,7 @@ struct SettingsView: View {
         TabView {
             GeneralTab().tabItem { Label("General", systemImage: "gearshape") }
             VoiceTab().tabItem { Label("Voice", systemImage: "waveform") }
+            ListeningTab().tabItem { Label("Listening", systemImage: "mic") }
             AudioTab().tabItem { Label("Audio", systemImage: "speaker.wave.2") }
             DiagnosticsTab().tabItem { Label("Diagnostics", systemImage: "stethoscope") }
         }
@@ -100,6 +101,65 @@ private struct SavedField: View {
     private func commit() {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         if trimmed != value { save(trimmed) }
+    }
+}
+
+private struct ListeningTab: View {
+    @Environment(AppModel.self) private var model
+    @State private var inputs: [AudioDevices.Device] = []
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Listen for \u{201C}Hey Earshot\u{201D}",
+                       isOn: Binding(get: { model.config.wakeWord },
+                                     set: { on in model.save { $0.set("EARSHOT_WAKE", on ? "on" : "off") } }))
+                Picker("On battery", selection: Binding(get: { model.config.wakeOnBattery },
+                                                        set: { v in model.save { $0.set("EARSHOT_WAKE_BATTERY", v.rawValue) } })) {
+                    Text("Listen, except in Low Power Mode").tag(EarshotConfig.WakeBattery.lowpower)
+                    Text("Always listen").tag(EarshotConfig.WakeBattery.always)
+                    Text("Only listen on power").tag(EarshotConfig.WakeBattery.power)
+                }
+                .disabled(!model.config.wakeWord)
+                Slider(value: Binding(get: { Double(model.config.wakeSensitivity) },
+                                      set: { v in model.save { $0.set("EARSHOT_WAKE_SENSITIVITY", String(Int(v))) } }),
+                       in: 1...10, step: 1) {
+                    Text("Sensitivity")
+                } minimumValueLabel: { Text("Fewer false starts") } maximumValueLabel: { Text("Fewer misses") }
+                .disabled(!model.config.wakeWord)
+            }
+            Section {
+                Picker("Hold to talk", selection: Binding(get: { model.config.hotkey },
+                                                          set: { v in model.save { $0.set("EARSHOT_HOTKEY", v.rawValue) } })) {
+                    Text("Right Option").tag(EarshotConfig.Hotkey.rightOption)
+                    Text("Right Command").tag(EarshotConfig.Hotkey.rightCommand)
+                    Text("Off").tag(EarshotConfig.Hotkey.off)
+                }
+                if model.config.hotkey != .off, !model.hotkeyAllowed {
+                    Text("macOS needs to allow Earshot to see the hotkey (Input Monitoring). It only watches that one key.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Allow the Hotkey…") { model.requestHotkeyAccess() }
+                }
+            }
+            Section {
+                Picker("Microphone", selection: Binding(get: { model.config.inputDevice ?? "" },
+                                                        set: { v in model.save { $0.set("EARSHOT_INPUT", v.isEmpty ? nil : v) } })) {
+                    Text("Automatic").tag("")
+                    ForEach(inputs, id: \.uid) { Text($0.name).tag($0.uid) }
+                }
+                Text("Automatic uses the built-in mic while your output is a Bluetooth headset, so the headset keeps its full sound quality.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !model.micAllowed {
+                    Button("Allow the Microphone…") { Task { await model.requestMic() } }
+                }
+            }
+            Text("Audio stays on this Mac. Earshot keeps the last few seconds in memory to hear a command, and never saves or sends it.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            model.reloadConfig()
+            inputs = AudioDevices.all().filter(\.hasInput)
+        }
     }
 }
 
