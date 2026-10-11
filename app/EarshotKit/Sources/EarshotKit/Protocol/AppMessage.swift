@@ -2,7 +2,7 @@ import Foundation
 
 /// Kinds of spoken lines, named as the plugin names them (see `tell` in speak.sh).
 public enum LineKind: String, Codable, Sendable, CaseIterable {
-    case need, reply, alert, done, beat, ack, roll, intro
+    case need, reply, alert, done, beat, ack, roll, intro, confirm
 
     /// Kept for the catch-up while another app uses the mic. Progress updates
     /// and "On it" are stale by then.
@@ -32,6 +32,7 @@ public enum SessionState: String, Codable, Sendable {
 public enum AppMessage: Sendable, Equatable {
     case say(Say)
     case status(Status)
+    case approval(Approval)
 
     public static let version = 1
 
@@ -79,6 +80,34 @@ public enum AppMessage: Sendable, Equatable {
         }
     }
 
+    /// A permission prompt the plugin's decide hook waits on, or its end.
+    /// See docs/superpowers/specs/2026-10-11-voice-approvals-design.md.
+    public struct Approval: Codable, Sendable, Equatable {
+        public var session: String
+        public var id: String
+        /// nil while the prompt is open, "closed" when it ended.
+        public var state: String?
+        /// How it ended: voice, screen, timeout or unclaimed.
+        public var by: String?
+        public var name: String?
+        public var what: String?
+        /// The file the app writes "allow <secret>" or "deny <secret>" to.
+        public var answer: String?
+        public var secret: String?
+        /// The waiting hook, to check it still runs.
+        public var pid: Int32?
+        public var sent: Double?
+
+        public init(session: String, id: String, state: String? = nil, by: String? = nil, name: String? = nil,
+                    what: String? = nil, answer: String? = nil, secret: String? = nil, pid: Int32? = nil,
+                    sent: Double? = nil) {
+            self.session = session; self.id = id; self.state = state; self.by = by; self.name = name
+            self.what = what; self.answer = answer; self.secret = secret; self.pid = pid; self.sent = sent
+        }
+
+        public var isClosed: Bool { state == "closed" }
+    }
+
     public enum DecodeError: Error, Equatable {
         case badMessage
         case version(Int)
@@ -98,6 +127,9 @@ public enum AppMessage: Sendable, Equatable {
         case "status":
             guard let s = try? d.decode(Status.self, from: line) else { throw .badMessage }
             return .status(s)
+        case "approval":
+            guard let a = try? d.decode(Approval.self, from: line) else { throw .badMessage }
+            return .approval(a)
         default:
             throw .unknownType(env.type)
         }

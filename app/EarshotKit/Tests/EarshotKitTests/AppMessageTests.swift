@@ -41,4 +41,29 @@ import Testing
         #expect(String(decoding: AppReply(ok: true).encoded, as: UTF8.self) == #"{"ok":true}"#)
         #expect(String(decoding: AppReply(ok: false, reason: "version").encoded, as: UTF8.self) == #"{"ok":false,"reason":"version"}"#)
     }
+
+    @Test func decodesAnOpenApproval() throws {
+        let m = try decode(#"{"v":1,"type":"approval","session":"s1","id":"1790000000-123-456","name":"billing service","what":"to run the migration","answer":"/t/earshot/answer-s1-1790000000-123-456","secret":"0123456789abcdef0123456789abcdef","pid":123,"sent":1790000000000}"#)
+        guard case .approval(let a) = m else { Issue.record("not an approval"); return }
+        #expect(a.session == "s1")
+        #expect(a.id == "1790000000-123-456")
+        #expect(a.name == "billing service")
+        #expect(a.what == "to run the migration")
+        #expect(a.secret == "0123456789abcdef0123456789abcdef")
+        #expect(a.pid == 123)
+        #expect(!a.isClosed)
+    }
+
+    @Test func decodesAClosedApproval() throws {
+        let m = try decode(#"{"v":1,"type":"approval","session":"s1","id":"x","state":"closed","by":"screen"}"#)
+        guard case .approval(let a) = m else { Issue.record("not an approval"); return }
+        #expect(a.isClosed)
+        #expect(a.by == "screen")
+        #expect(a.secret == nil)
+    }
+
+    @Test func confirmLinesAreNeverHeld() {
+        #expect(!LineKind.confirm.isHeld)
+        #expect(LineKind.confirm.catchUpRank == 2)
+    }
 }

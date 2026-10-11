@@ -61,6 +61,8 @@ public final class EarshotCore: Sendable {
                     if before == .needs || before == .reply, s.state != .needs, s.state != .reply {
                         await speech.sessionAnswered(s.session)
                     }
+                case .approval:
+                    break
                 }
             }
         }
