@@ -3,3 +3,8 @@ mic-in-use
 *.mp3
 videos/
 tts/.build/
+.superpowers/
+app/EarshotKit/.build/
+app/EarshotKit/.swiftpm/
+app/build/
+app/Earshot.xcodeproj/
