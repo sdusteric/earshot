@@ -108,4 +108,58 @@ import Testing
     func otherSentencesAreNoAnswer(_ said: String) {
         #expect(Grammar.approvalWord(said) == nil)
     }
+
+    // Round 1 (G1): a question or negation before "to" is not a send.
+    @Test(arguments: [
+        "Tell billing not to deploy",
+        "Ask billing how to run the tests",
+        "Ask earshot what to do next",
+        "Tell billing service how to deploy",
+    ])
+    func questionsAndNegationsGoToTheModel(_ said: String) {
+        #expect(Grammar.parse(said, known: Self.known) == nil)
+    }
+
+    // Round 1 (G2): a target must look like a known session when names are known.
+    @Test(arguments: [
+        ("billing", true), ("billing service", true), ("the blog", true), ("blog", true),
+        ("billing not", false), ("the meantime", false), ("using mocks", false),
+    ] as [(String, Bool)])
+    func looksKnownMatchesNames(_ target: String, _ expected: Bool) {
+        #expect(Grammar.looksKnown(target, known: Self.known) == expected)
+    }
+
+    @Test func looksKnownWithNoNamesKeepsTheTarget() {
+        #expect(Grammar.looksKnown("anything at all", known: []))
+    }
+
+    @Test(arguments: [
+        "In the meantime, tell billing to deploy",
+        "On the other hand, run it",
+        "For example, do this",
+        "Stop using mocks",
+    ])
+    func unknownTargetsGoToTheModel(_ said: String) {
+        #expect(Grammar.parse(said, known: Self.known) == nil)
+    }
+
+    @Test func itIsAStatusPronoun() {
+        #expect(Grammar.parse("How's it going", known: Self.known) == .status(target: nil))
+    }
+
+    // Round 1 (G3): an answer's target must look like a known session.
+    @Test(arguments: [
+        "Yes but use file", "Yes, run the tests", "Yes, delete everything",
+        "Approve the deploy to production", "No idea",
+    ])
+    func answersWithTrailingContentGoToTheModel(_ said: String) {
+        #expect(Grammar.parse(said, known: Self.known) == nil)
+    }
+
+    // Round 1 (G4): trailing please and thanks go only after a comma; prompts keep their words.
+    @Test func promptsKeepTheirOwnWords() {
+        #expect(Grammar.parse("Tell billing to say thanks", known: Self.known) == .send(target: "billing", prompt: "say thanks"))
+        #expect(Grammar.parse("Tell billing to like the post", known: Self.known) == .send(target: "billing", prompt: "like the post"))
+        #expect(Grammar.parse("Tell billing to the", known: Self.known) == .unknown)
+    }
 }

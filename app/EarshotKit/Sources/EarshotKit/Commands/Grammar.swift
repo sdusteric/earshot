@@ -80,16 +80,50 @@ public enum Grammar {
             while let f = w.keys.first, Grammar.fillers.contains(f) { w = w.slice(1..<w.count) }
             if let rest = w.after(Grammar.leadIns) { w = rest }
             while let f = w.keys.first, Grammar.fillers.contains(f) { w = w.slice(1..<w.count) }
-            while let l = w.keys.last, Grammar.tail.contains(l) { w = w.slice(0..<(w.count - 1)) }
-            if let rest = w.before(["thank you"]) { w = rest }
+            return w.trimmingTail()
+        }
+
+        /// Trailing um and uh always go. Trailing please, thanks and thank you go
+        /// only when the word before them ends with a comma ("deploy, thanks").
+        func trimmingTail() -> Words {
+            var w = self
+            while let l = w.keys.last {
+                let n = w.count
+                if ["um", "uh"].contains(l) {
+                    w = w.slice(0..<(n - 1))
+                } else if l == "please" || l == "thanks", n >= 2, w.said[n - 2].hasSuffix(",") {
+                    w = w.slice(0..<(n - 1))
+                } else if n >= 3, Array(w.keys[(n - 2)...]) == ["thank", "you"], w.said[n - 3].hasSuffix(",") {
+                    w = w.slice(0..<(n - 2))
+                } else {
+                    break
+                }
+            }
             return w
+        }
+
+        /// What a prompt keeps: only um, uh, erm, hmm and please go from its edges (G4).
+        func trimmingPromptFillers() -> Words {
+            var w = self
+            while let f = w.keys.first, Grammar.promptFillers.contains(f) { w = w.slice(1..<w.count) }
+            if let rest = w.after(Grammar.leadIns) { w = rest }
+            while let f = w.keys.first, Grammar.promptFillers.contains(f) { w = w.slice(1..<w.count) }
+            return w.trimmingTail()
+        }
+
+        /// True when nothing is left but articles and fillers.
+        var isBlankPrompt: Bool {
+            keys.allSatisfy { Grammar.promptFillers.contains($0) || Grammar.articles.contains($0) }
         }
     }
 
     static let fillers: Set<String> = ["um", "uh", "erm", "hmm", "so", "okay", "ok", "please", "hey", "and", "like"]
     static let leadIns = ["can you", "could you", "would you", "will you", "i want you to", "i need you to",
                           "go ahead and", "i'd like you to"]
-    static let tail: Set<String> = ["please", "thanks", "um", "uh"]
+    static let promptFillers: Set<String> = ["um", "uh", "erm", "hmm", "please"]
+    static let articles: Set<String> = ["the", "a", "an"]
+    /// A word that ends a "to" phrase in a negation or a question: the grammar leaves it to the model (G1).
+    static let blockersBeforeTo: Set<String> = ["not", "how", "what", "where", "when", "whether", "why", "which", "never"]
 
     static let allowWords: Set<String> = ["yes", "yeah", "yep", "yup", "allow", "allow it", "approve", "approve it",
                                           "approved", "go ahead", "do it", "sure", "ok", "okay", "yes please",
@@ -117,6 +151,25 @@ public enum Grammar {
                                              "which", "who", "is", "are", "does", "did"]
     static let pronouns: Set<String> = ["it", "them", "him", "her", "claude", "that session", "this session"]
 
+    /// True when a target could be one of the known names. With no names known, any target passes.
+    public static func looksKnown(_ target: String, known: [String]) -> Bool {
+        if known.isEmpty { return true }
+        let t = nameWords(target)
+        guard !t.isEmpty else { return false }
+        return known.contains { k in
+            let n = nameWords(k)
+            return !n.isEmpty && (t.starts(with: n) || n.starts(with: t))
+        }
+    }
+
+    /// A name as words: lowercase, no leading "the", no trailing "session".
+    static func nameWords(_ s: String) -> [String] {
+        var w = Words(s).keys
+        if w.first == "the" { w.removeFirst() }
+        if w.last == "session" { w.removeLast() }
+        return w
+    }
+
     public static func approvalWord(_ text: String) -> Bool? {
         let k = Words(text).key
         if allowWords.contains(k) { return true }
@@ -132,49 +185,56 @@ public enum Grammar {
         }
         let w = Words(transcript).trimmingFillers()
         guard !w.isEmpty else { return .unknown }
-        if let c = answer(w) ?? status(w) ?? stop(w) ?? start(w) ?? send(w, known: known) { return c }
+        if let c = answer(w, known: known) ?? status(w, known: known) ?? stop(w, known: known) ?? start(w) ?? send(w, known: known) { return c }
         return nil
     }
 
     // MARK: - Shapes
 
-    private static func answer(_ w: Words) -> Command? {
+    private static func answer(_ w: Words, known: [String]) -> Command? {
         for (prefixes, allow) in [(["yes to", "yes for", "yes", "yeah", "approve", "allow", "go ahead for"], true),
                                   (["no to", "no for", "no", "deny", "don't allow", "reject"], false)] {
             guard var rest = w.after(prefixes), !rest.isEmpty, rest.count <= 4, rest.keys.first != "and" else { continue }
             if rest.keys.first == "it" { rest = rest.slice(1..<rest.count) }
             if rest.isEmpty { return .answer(allow: allow, target: nil) }
+            guard looksKnown(rest.text, known: known) else { continue }
             return .answer(allow: allow, target: rest.text)
         }
         return nil
     }
 
-    private static func status(_ w: Words) -> Command? {
+    private static func status(_ w: Words, known: [String]) -> Command? {
         if everyone.contains(w.key) { return .status(target: nil) }
         for (pre, post) in statusShapes {
             guard var t = pre.isEmpty ? Optional(w) : w.after([pre]) else { continue }
             if !post.isEmpty { guard let b = t.before([post]) else { continue }; t = b }
             guard !t.isEmpty, t.count <= 5 else { continue }
-            if ["everyone", "everybody", "everything"].contains(t.key) { return .status(target: nil) }
+            if ["everyone", "everybody", "everything"].contains(t.key) || pronouns.contains(t.key) { return .status(target: nil) }
+            guard looksKnown(t.text, known: known) else { continue }
             return .status(target: t.text)
         }
         return nil
     }
 
-    private static func stop(_ w: Words) -> Command? {
+    private static func stop(_ w: Words, known: [String]) -> Command? {
         if ["stop", "stop it", "stop that", "halt"].contains(w.key) { return .stop(target: nil, now: false) }
         let nowWords = ["right now", "now", "immediately", "at once"]
         if let rest = w.after(["tell", "ask"]), let (t, p) = rest.split(at: ["to"]), !t.isEmpty {
-            switch p.key {
-            case "stop": return .stop(target: t.text, now: false)
-            case "stop now", "stop right now", "stop immediately", "stop at once": return .stop(target: t.text, now: true)
-            default: break
+            if blockersBeforeTo.contains(t.keys.last ?? "") { return nil }
+            if pronouns.contains(t.key) || looksKnown(t.text, known: known) {
+                let target = pronouns.contains(t.key) ? nil : t.text
+                switch p.key {
+                case "stop": return .stop(target: target, now: false)
+                case "stop now", "stop right now", "stop immediately", "stop at once": return .stop(target: target, now: true)
+                default: break
+                }
             }
         }
         guard var t = w.after(["stop", "halt"]), !t.isEmpty, t.count <= 6 else { return nil }
         var now = false
         if let b = t.before(nowWords) { t = b; now = true }
         if t.isEmpty || pronouns.contains(t.key) { return .stop(target: nil, now: now) }
+        guard looksKnown(t.text, known: known) else { return nil }
         return .stop(target: t.text, now: now)
     }
 
@@ -186,7 +246,7 @@ public enum Grammar {
         guard let rest = w.after(shapes) else { return nil }
         guard !rest.isEmpty else { return .unknown }
         if let (p, prompt) = rest.split(at: ["to", "and"]), !p.isEmpty {
-            let pr = prompt.trimmingFillers()
+            let pr = prompt.trimmingPromptFillers()
             return .start(project: p.text, prompt: pr.isEmpty ? nil : pr.text)
         }
         return .start(project: rest.text, prompt: nil)
@@ -196,33 +256,36 @@ public enum Grammar {
         // tell X to P, ask X to P, get X to P
         if let rest = w.after(["tell", "ask", "get"]) {
             if let (t, p) = rest.split(at: ["to"]), !t.isEmpty {
-                return make(target: t, prompt: p)
+                if blockersBeforeTo.contains(t.keys.last ?? "") { return nil }
+                return make(target: t, prompt: p, known: known)
             }
             // ask X what / why / how ...: the question is the prompt
             if w.keys.first == "ask", let i = rest.keys.indices.dropFirst().first(where: { questionWords.contains(rest.keys[$0]) }) {
-                return make(target: rest.slice(0..<i), prompt: rest.slice(i..<rest.count))
+                return make(target: rest.slice(0..<i), prompt: rest.slice(i..<rest.count), known: known)
             }
             return nil
         }
         // in X, P / on X: P / for X P (with a known name)
         if let rest = w.after(["in", "on", "for", "over in"]) {
             if let (t, p) = rest.splitAtComma() ?? rest.splitAtKnown(known), !t.isEmpty {
-                return make(target: t, prompt: p)
+                return make(target: t, prompt: p, known: known)
             }
             if rest.said.last?.hasSuffix(",") == true || rest.said.last?.hasSuffix(":") == true { return .unknown }
             return nil
         }
         // send P to X
         if let rest = w.after(["send"]), let i = rest.keys.lastIndex(of: "to"), i > 0, i < rest.count - 1 {
-            return make(target: rest.slice((i + 1)..<rest.count), prompt: rest.slice(0..<i))
+            return make(target: rest.slice((i + 1)..<rest.count), prompt: rest.slice(0..<i), known: known)
         }
         return nil
     }
 
-    private static func make(target: Words, prompt: Words) -> Command {
-        let p = prompt.trimmingFillers()
-        guard !p.isEmpty else { return .unknown }
+    private static func make(target: Words, prompt: Words, known: [String]) -> Command? {
         let t = Words(target.text)   // drops a trailing comma or colon
-        return .send(target: t.isEmpty || pronouns.contains(t.key) ? nil : t.text, prompt: p.text)
+        let named = !t.isEmpty && !pronouns.contains(t.key)
+        if named && !looksKnown(t.text, known: known) { return nil }
+        let p = prompt.trimmingPromptFillers()
+        guard !p.isBlankPrompt else { return .unknown }
+        return .send(target: named ? t.text : nil, prompt: p.text)
     }
 }
