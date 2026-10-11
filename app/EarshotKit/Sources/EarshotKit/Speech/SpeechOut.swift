@@ -43,6 +43,7 @@ public actor SpeechOut {
 
     private var queue: [SpokenLine] = []
     private var held = HoldQueue()
+    private var started = false
     private var running = false
     private var playing = false
     private var interrupted = false
@@ -61,8 +62,10 @@ public actor SpeechOut {
         self.answered = answered; self.settle = settle; self.maxWait = maxWait; self.clock = clock
     }
 
-    /// Starts following the mic. Call once.
+    /// Starts following the mic. Later calls do nothing.
     public func start() {
+        guard !started else { return }
+        started = true
         let changes = mic.changes()
         Task { [weak self] in
             for await busy in changes { await self?.micChanged(busy) }
