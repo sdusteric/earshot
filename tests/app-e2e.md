@@ -53,6 +53,8 @@ playback within 3 seconds (a speaker in standby).
 
 ## Listening (plan 2)
 
+Release gate: the release waits for docs/superpowers/specs/2026-10-11-listening-probe.md (the Task 0 measurements) and the Task 21 eval output (`eval-parser.sh`, `eval-listener.sh`, the latency and power runs).
+
 ### Automated, with the models downloaded
 
 ```bash
@@ -84,10 +86,15 @@ bash scripts/send-integration.sh
 | Start | "Start a new session in <trusted folder> to say hi" | "Started a session in ..."; `claude agents` lists it |
 | Untrusted folder | Name a folder never opened in Claude | "... isn't trusted yet. Open it in Claude once first." |
 | Stop | "Stop <busy session>" | "... will stop after its current step."; it stops at the next step |
-| Secure input | In a password field, hold Right Option and type a character | No chime, no capture |
+| Secure input | In a password field, hold Right Option and type a character | No capture; a hold past 0.2 s plays the closed chime; the menu and the Listening settings say the hotkey is paused while another app uses secure keyboard entry |
 | Orb with another app in front | Hold the hotkey while Safari or Terminal is frontmost | The orb shows at the top center |
 | First launch prompts | On a fresh install, start the app | No Input Monitoring prompt appears before onboarding's hotkey step |
 | Chimes and own lines | Play the listening chime and Earshot's own lines through the speakers with the wake word on (the own-*.wav recordings in the listener eval include one with the chime) | Never wakes it (wake 0) |
 | End of speech | Say a wake command, then stop talking | About 770 ms of silence ends it (the VAD's chunking; the spec's 600 ms was ruled to 770 ms) |
 | Clients that hang up early | While the app runs, run `bash tests/app-handoff.sh` | The app is still running afterwards |
+| A Mac locked while a prompt is open | A session asks for an OK; lock the screen before Earshot's line ends | No window opens and the mic stays closed |
+| "Hey Earshot, yes" | With a prompt open, say "Hey Earshot, yes" | Earshot says "Hold the hotkey to answer it."; the prompt stays open |
+| A long hotkey command | Hold the hotkey and talk for more than 10 s | The closed chime at about 10 s, then "That was too long for me. Try a shorter command."; nothing is sent; letting go does nothing |
+| A session named earshot | Run a session in a folder named earshot, with the wake word on; let it ask for an OK | Its "Hey, earshot needs your OK" alert never wakes Earshot; the approval window opens after the line |
+| Upgrade onboarding | Start the app as a user who finished the 0.11 onboarding | Only the mic and wake word, hotkey, models and try it steps, once |
 | Diagnostics | Copy Diagnostics | Listening, models, permissions and claude path; no transcripts, no prompts |
