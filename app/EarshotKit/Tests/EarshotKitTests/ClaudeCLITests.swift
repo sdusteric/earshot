@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import EarshotKit
 
-@Suite struct ClaudeCLITests {
+@Suite(.serialized) struct ClaudeCLITests {
     /// The shape `claude agents --json` printed on 2026-10-11 (Claude Code 2.1.296).
     static let agentsJSON = #"""
     [
@@ -107,5 +107,39 @@ import Testing
     @Test func aMissingProgramFails() async {
         let r = await ClaudeCLI(path: "/nonexistent/claude").run(["--version"], cwd: nil, timeout: .seconds(1))
         #expect(r.status == -1)
+    }
+    /// Open pipes (FIFO descriptors), counted from /dev/fd. Other suites run in parallel and
+    /// open their own pipes, so the leak check allows slack; a leak here is 4 pipes per run.
+    static func openDescriptors() -> Int {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []
+        return names.reduce(0) { n, name in
+            guard let fd = Int32(name) else { return n }
+            var st = stat()
+            return fstat(fd, &st) == 0 && st.st_mode & S_IFMT == S_IFIFO ? n + 1 : n
+        }
+    }
+
+    /// A launch that fails must not keep its pipes open.
+    @Test func aMissingProgramLeaksNoDescriptors() async {
+        let cli = ClaudeCLI(path: "/nonexistent/claude")
+        _ = await cli.run(["--version"], cwd: nil, timeout: .seconds(1))   // warm up Foundation's own descriptors
+        let before = Self.openDescriptors()
+        for _ in 0..<50 {
+            let r = await cli.run(["--version"], cwd: nil, timeout: .seconds(1))
+            #expect(r.status == -1)
+        }
+        #expect(Self.openDescriptors() <= before + 20)
+    }
+
+    /// A launch that works must not keep its pipes open either.
+    @Test func aSuccessfulRunLeaksNoDescriptors() async {
+        let cli = ClaudeCLI(path: "/bin/echo")
+        _ = await cli.run(["warm"], cwd: nil, timeout: .seconds(5))
+        let before = Self.openDescriptors()
+        for _ in 0..<50 {
+            let r = await cli.run(["hi"], cwd: nil, timeout: .seconds(5))
+            #expect(r.status == 0)
+        }
+        #expect(Self.openDescriptors() <= before + 20)
     }
 }

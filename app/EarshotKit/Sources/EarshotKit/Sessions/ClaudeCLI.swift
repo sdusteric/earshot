@@ -77,6 +77,9 @@ enum BoundedRun {
                 job.failed(error.localizedDescription)
                 return
             }
+            // The child has its own copies now. Ours must close, or EOF never reaches the reader.
+            try? job.out.fileHandleForWriting.close()
+            try? job.err.fileHandleForWriting.close()
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { job.deadline() }
         }
     }
@@ -123,7 +126,8 @@ enum BoundedRun {
             maybeFinish()
         }
 
-        /// At the deadline: SIGTERM, then after the grace period SIGKILL and return what was read.
+        /// At the deadline: SIGTERM, then after the grace period SIGKILL (only while the child has not exited,
+        /// so a reaped pid is never signalled) and return what was read.
         func deadline() {
             let stillRunning = state.withLock { s -> Bool in
                 if s.exited { return false }
@@ -133,14 +137,32 @@ enum BoundedRun {
             guard stillRunning else { return }
             process.terminate()
             DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-                Darwin.kill(self.process.processIdentifier, SIGKILL)
+                self.state.withLock { s in
+                    if !s.exited { Darwin.kill(self.process.processIdentifier, SIGKILL) }
+                }
                 self.finish()
             }
         }
 
         func failed(_ message: String) {
             state.withLock { $0.resumed = true }
+            // No handler can be running on this path, so the read ends can close here.
+            for pipe in [out, err] {
+                pipe.fileHandleForReading.readabilityHandler = nil
+                try? pipe.fileHandleForReading.close()
+                try? pipe.fileHandleForWriting.close()
+            }
+            process.terminationHandler = nil
             cont.resume(returning: RunResult(status: -1, stderr: message))
+        }
+
+        /// Drops the handlers. The read ends close when this job is freed (a grandchild may
+        /// still be writing, so they are not closed under a running handler). Clearing the
+        /// termination handler also breaks the reference cycle through this job.
+        private func release() {
+            process.terminationHandler = nil
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
         }
 
         private func maybeFinish() {
@@ -157,8 +179,7 @@ enum BoundedRun {
                                  stderr: String(decoding: s.err, as: UTF8.self), timedOut: s.timedOut)
             }
             guard let result else { return }
-            out.fileHandleForReading.readabilityHandler = nil
-            err.fileHandleForReading.readabilityHandler = nil
+            release()
             cont.resume(returning: result)
         }
     }
