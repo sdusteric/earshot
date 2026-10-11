@@ -103,4 +103,45 @@ import Testing
         #expect(try String(contentsOfFile: "\(dir)/s2", encoding: .utf8) == "blog\nOther title\n")   // stale: left alone
         #expect(!FileManager.default.fileExists(atPath: "\(dir)/s3"))   // never created
     }
+    /// L1: the plugin globs the live folder, so no temp file may sit there beside the sessions.
+    @Test func noTempFileIsLeftBesideTheSessions() async throws {
+        let dir = NSTemporaryDirectory() + "ek-live-\(UUID().uuidString.prefix(6))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let title = "Orchestrator agent for multi-session voice control"
+        try "earshot\n\(title)\n".write(toFile: "\(dir)/s1", atomically: true, encoding: .utf8)
+        try "blog\nOther title\n".write(toFile: "\(dir)/s2", atomically: true, encoding: .utf8)
+        let l = Labeler(model: FixedModel(answer: "voice orchestrator"), liveDir: dir)
+        _ = await l.label(session: "s1", title: title)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir).sorted() == ["s1", "s2"])
+    }
+
+    /// L1: a write that cannot create its temp file leaves the folder as it was.
+    @Test func aFailedWriteLeavesNoTempFile() async throws {
+        let dir = NSTemporaryDirectory() + "ek-live-\(UUID().uuidString.prefix(6))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let title = "Orchestrator agent for multi-session voice control"
+        try "earshot\n\(title)\n".write(toFile: "\(dir)/s1", atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir) }
+        let l = Labeler(model: FixedModel(answer: "voice orchestrator"), liveDir: dir)
+        _ = await l.label(session: "s1", title: title)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir) == ["s1"])
+        #expect(try String(contentsOfFile: "\(dir)/s1", encoding: .utf8) == "earshot\n\(title)\n")
+    }
+
+    /// L2: the new content is built from the text the app read, and only while line 2 is still the title.
+    @Test func newLiveContentNeedsTheSameTitle() {
+        #expect(Labeler.liveContent("earshot\nNew\n", title: "New", label: "x") == "earshot\nNew\nx\n")
+        #expect(Labeler.liveContent("earshot\nOld\n", title: "New", label: "x") == nil)
+        #expect(Labeler.liveContent("earshot\n", title: "New", label: "x") == nil)
+    }
+
+    /// L3: a title the plugin would say as more than 3 words goes to the model, as it does for the plugin.
+    @Test func theLabelDecisionMatchesThePlugin() async {
+        let l = Labeler(model: FixedModel(answer: "voice control"), liveDir: NSTemporaryDirectory())
+        #expect(await l.label(session: "s", title: "multi-session voice control") == "voice control")
+        let short = Labeler(model: FixedModel(answer: "should not be asked"), liveDir: NSTemporaryDirectory())
+        #expect(await short.label(session: "s", title: "Fix RSS feed") == "Fix RSS feed")
+    }
 }

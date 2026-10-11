@@ -34,11 +34,16 @@ public enum SpokenNames {
     static let articles: Set<String> = ["a", "an", "the"]
     static let stops: Set<String> = ["for", "with", "and", "to", "in", "on", "of", "vs"]
 
-    /// speak.sh's label(): 1 to 3 words for a title.
-    public static func ruleLabel(_ title: String) -> String {
+    /// The title as speak.sh reads it: _ / - as spaces, a trailing " session" dropped.
+    static func plain(_ title: String) -> String {
         var t = title.map { "_/-".contains($0) ? " " : $0 }.reduce(into: "") { $0.append($1) }
         if t.lowercased().hasSuffix(" session") { t = String(t.dropLast(" session".count)) }
-        let w = t.split(separator: " ").map(String.init)
+        return t
+    }
+
+    /// speak.sh's label(): 1 to 3 words for a title.
+    public static func ruleLabel(_ title: String) -> String {
+        let w = plain(title).split(separator: " ").map(String.init)
         if w.count <= 3 { return w.joined(separator: " ") }
         var out: [String] = []
         for (i, word) in w.enumerated() {
