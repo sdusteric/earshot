@@ -46,4 +46,8 @@ public struct ListenStack: Sendable {
         }
         return ok
     }
+
+    /// The wake word stayed off or blocked: frees the spotter (and its share of
+    /// the CTC model). The VAD stays, for follow-up answers.
+    public func unloadWakeModels() async { await spotter.unload() }
 }

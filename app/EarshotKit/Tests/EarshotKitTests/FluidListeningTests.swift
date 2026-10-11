@@ -79,6 +79,40 @@ import Testing
         #expect(await flight.loads == 2)
     }
 
+    /// The CTC model is kept while the spotter or the boost holds it, and freed when neither does.
+    @Test func aSharedModelIsFreedWhenTheLastHolderLetsGo() async throws {
+        let shared = SharedLoad<Int> { 7 }
+        #expect(try await shared.acquire("spotter") == 7)
+        #expect(try await shared.acquire("boosting") == 7)
+        #expect(await shared.loads == 1)
+        await shared.release("spotter")
+        #expect(await shared.isLoaded)   // the boost still holds it
+        await shared.release("spotter")  // twice is once
+        #expect(await shared.isLoaded)
+        await shared.release("boosting")
+        #expect(!(await shared.isLoaded))
+        _ = try await shared.acquire("boosting")
+        #expect(await shared.loads == 2)
+    }
+
+    @Test func aSharedModelReleasedDuringItsLoadIsNotKept() async throws {
+        let shared = SharedLoad<Int> { try await Task.sleep(for: .milliseconds(50)); return 7 }
+        async let got = shared.acquire("spotter")
+        try await Task.sleep(for: .milliseconds(10))
+        await shared.release("spotter")
+        #expect(try await got == 7)
+        #expect(!(await shared.isLoaded))
+    }
+
+    @Test func aFailedSharedLoadHoldsNothing() async throws {
+        let n = LoadCounter()
+        let shared = SharedLoad<Int> { if await n.next() == 1 { throw LoadFailed() }; return 1 }
+        await #expect(throws: LoadFailed.self) { try await shared.acquire("spotter") }
+        _ = try await shared.acquire("boosting")
+        await shared.release("boosting")
+        #expect(!(await shared.isLoaded))   // the failed spotter left no hold behind
+    }
+
     @Test func prewarmAndTranscribeLoadTheTranscriberOnce() async throws {
         let t = ParakeetTranscriber(idle: .seconds(60)) {
             try await Task.sleep(for: .milliseconds(50))

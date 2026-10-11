@@ -29,6 +29,36 @@ actor SingleFlight<T: Sendable> {
     func clear() { value = nil; task = nil }
 }
 
+/// A model several parts use: loaded while any holder needs it, and let go
+/// when the last holder releases it, so its memory is freed.
+actor SharedLoad<T: Sendable> {
+    private let flight: SingleFlight<T>
+    private var holders: Set<String> = []
+
+    init(_ load: @escaping @Sendable () async throws -> T) { flight = SingleFlight(load) }
+
+    var isLoaded: Bool { get async { await flight.isLoaded } }
+    var loads: Int { get async { await flight.loads } }
+
+    func acquire(_ holder: String) async throws -> T {
+        holders.insert(holder)
+        do {
+            let v = try await flight.get()
+            // Everyone let go during the load: do not keep it.
+            if holders.isEmpty { await flight.clear() }
+            return v
+        } catch {
+            holders.remove(holder)
+            throw error
+        }
+    }
+
+    func release(_ holder: String) async {
+        guard holders.remove(holder) != nil, holders.isEmpty else { return }
+        await flight.clear()
+    }
+}
+
 /// Lets a repeated failure into the log once, then at most once a minute.
 struct FailureLog {
     private var last: ContinuousClock.Instant?
@@ -155,12 +185,15 @@ public actor SileroGate: SpeechGate {
 }
 
 /// The CTC model is shared: the wake word spotter and the vocabulary boost use it.
+/// It is freed when neither holds it.
 actor CtcShared {
+    enum Holder: String { case spotter, boosting }
     static let shared = CtcShared()
-    private let flight = SingleFlight<CtcModels> { try await CtcModels.downloadAndLoad(variant: .ctc110m) }
+    private let model = SharedLoad<CtcModels> { try await CtcModels.downloadAndLoad(variant: .ctc110m) }
     private var phraseTokens: [String: [Int]] = [:]
 
-    func models() async throws -> CtcModels { try await flight.get() }
+    func models(for holder: Holder) async throws -> CtcModels { try await model.acquire(holder.rawValue) }
+    func release(_ holder: Holder) async { await model.release(holder.rawValue) }
 
     func tokens(_ text: String) async throws -> [Int] {
         if let t = phraseTokens[text] { return t }
@@ -171,11 +204,12 @@ actor CtcShared {
     }
 }
 
-/// Stage 3: "Hey Earshot" in the first 2 s of a speech segment.
+/// Stage 3: "Hey Earshot" in the first 1.5 s of a speech segment (the
+/// listener spots when the segment reaches 1.5 s, or when it ends sooner).
 public actor CtcWakeSpotter: WakeSpotter {
     public static let phrase = "hey earshot"
     private let flight = SingleFlight<(spotter: CtcKeywordSpotter, vocab: CustomVocabularyContext)> {
-        let models = try await CtcShared.shared.models()
+        let models = try await CtcShared.shared.models(for: .spotter)
         let tokens = try await CtcShared.shared.tokens(CtcWakeSpotter.phrase)
         return (CtcKeywordSpotter(models: models, blankId: models.vocabulary.count),
                 CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.phrase, ctcTokenIds: tokens)]))
@@ -183,9 +217,27 @@ public actor CtcWakeSpotter: WakeSpotter {
     private var failures = FailureLog()
     private let log = Logger(subsystem: "com.earshot.app", category: "wake")
 
+    private var generation = 0
+
     public init() {}
 
-    public func load() async throws { _ = try await flight.get() }
+    public func load() async throws {
+        let g = generation
+        do { _ = try await flight.get() } catch {
+            await CtcShared.shared.release(.spotter)
+            throw error
+        }
+        // Unloaded while it loaded: do not keep it.
+        if g != generation { await unload() }
+    }
+
+    /// Frees the spotter and its hold on the CTC model (the wake word is off or blocked for a while).
+    public func unload() async {
+        generation += 1
+        await flight.clear()
+        await CtcShared.shared.release(.spotter)
+        log.info("unloaded the wake word model")
+    }
 
     /// Sensitivity 5 is FluidAudio's default spotter threshold (-15). Each
     /// step moves it by 1: higher wakes more easily.
@@ -269,6 +321,7 @@ public actor ParakeetTranscriber: Transcriber {
         idleTask?.cancel()
         idleTask = nil
         boosting = nil
+        await CtcShared.shared.release(.boosting)   // freed unless the wake word spotter holds it
         guard let old = asr else { return }
         log.info("unloaded the transcriber")
         asr = nil
@@ -290,7 +343,7 @@ public actor ParakeetTranscriber: Transcriber {
         if let b = boosting, b.names == names { return b.session }
         let terms = names.map { CustomVocabularyTerm(text: $0) }
         let s = try await VocabularyBoostingSession(vocabulary: CustomVocabularyContext(terms: terms),
-                                                    ctcModels: try await CtcShared.shared.models())
+                                                    ctcModels: try await CtcShared.shared.models(for: .boosting))
         boosting = (names, s)
         return s
     }

@@ -34,6 +34,9 @@ final class AppModel {
     @ObservationIgnored private var micInUse = false
     @ObservationIgnored private var wakeLoaded = false
     @ObservationIgnored private var lastWakeLoad: Date?
+    /// Frees the wake word model once the wake word has been off or blocked for 10 minutes.
+    @ObservationIgnored private var wakeUnloadTimer: Task<Void, Never>?
+    @ObservationIgnored private var wakeUnloading: Task<Void, Never>?
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
 
     static let muteFile = URL.earshotDir.appending(path: "mute")
@@ -151,6 +154,7 @@ final class AppModel {
         // Retry a failed load at most once a minute.
         if listenBlock == nil, !wakeLoaded, lastWakeLoad.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
             lastWakeLoad = Date()
+            await wakeUnloading?.value   // an unload still running must not undo this load
             wakeLoaded = await stack.loadWakeModels()
             wakeLoadFailed = !wakeLoaded
         }
@@ -160,6 +164,25 @@ final class AppModel {
         let fresh = ListenPolicy.wakeBlock(now)
         listenBlock = fresh
         await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
+        scheduleWakeUnload(blocked: fresh != nil)
+    }
+
+    /// The spotter and its share of the CTC model stay loaded only while the wake
+    /// word may listen, plus 10 minutes. The VAD stays: follow-ups need it.
+    private func scheduleWakeUnload(blocked: Bool) {
+        guard blocked else { wakeUnloadTimer?.cancel(); wakeUnloadTimer = nil; return }
+        guard wakeLoaded, wakeUnloadTimer == nil, let stack else { return }
+        wakeUnloadTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(600))
+            guard !Task.isCancelled, let self else { return }
+            self.wakeUnloadTimer = nil
+            guard self.listenBlock != nil, self.wakeLoaded else { return }
+            self.wakeLoaded = false
+            let unloading = Task { await stack.unloadWakeModels() }
+            self.wakeUnloading = unloading
+            await unloading.value
+            if self.wakeUnloading == unloading { self.wakeUnloading = nil }
+        }
     }
 
     private func listenInputs(_ c: EarshotConfig) -> ListenInputs {
