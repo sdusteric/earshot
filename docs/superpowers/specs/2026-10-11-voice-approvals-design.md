@@ -119,6 +119,10 @@ Plugin to app:
 - `secret` is only ever in this socket message (the socket is 0600 in the
   app's own folder), never in a file name, so listing the state folder is not
   enough to approve a prompt.
+- `app-send.zsh` adds `sent` (epoch ms) to every message. An `approval` the
+  app reads late may be refused like a late `say` line (the hook then sends
+  `closed unclaimed`), but a `closed` message must always be applied, however
+  late: dropping it would leave the app listening for a prompt that is gone.
 - `pid` is the waiting hook. If `closed` never arrives (the hook was killed
   with SIGKILL), the app can check it with `kill(pid, 0)` before it listens.
 - The app answers `{"ok":true}` to the first message only when it can listen
