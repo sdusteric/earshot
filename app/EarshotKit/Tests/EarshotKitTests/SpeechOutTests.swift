@@ -20,6 +20,23 @@ final class FakeMic: MicSource, @unchecked Sendable {
     }
 }
 
+/// A mic whose check is slow and sees the mic free up while it runs: it
+/// reports busy, but the "free" event arrives before the answer does.
+final class FreesDuringCheckMic: MicSource, @unchecked Sendable {
+    let inner = FakeMic()
+    private let lock = NSLock()
+    private var armed = true
+    var isBusy: Bool {
+        get async {
+            guard lock.withLock({ let a = armed; armed = false; return a }) else { return await inner.isBusy }
+            inner.set(false)
+            try? await Task.sleep(for: .milliseconds(50))
+            return true
+        }
+    }
+    func changes() -> AsyncStream<Bool> { inner.changes() }
+}
+
 /// Plays instantly, or holds each line until released, so a test can act mid-line.
 actor FakePlayer: LinePlayer {
     private(set) var played: [String] = []
@@ -29,7 +46,7 @@ actor FakePlayer: LinePlayer {
     /// hangs: play never returns and stop does nothing, like a playback
     /// start that blocks inside Core Audio.
     init(blocking: Bool = false, hangs: Bool = false) { self.blocking = blocking; self.hangs = hangs }
-    func play(_ url: URL) async -> Bool {
+    func play(_ url: URL, id: UUID) async -> Bool {
         played.append(url.lastPathComponent)
         if hangs {
             try? await Task.sleep(for: .seconds(3600))
@@ -38,7 +55,7 @@ actor FakePlayer: LinePlayer {
         guard blocking else { return true }
         return await withCheckedContinuation { waiter = $0 }
     }
-    func stop() async { waiter?.resume(returning: false); waiter = nil }
+    func stop(_ id: UUID) async { waiter?.resume(returning: false); waiter = nil }
     func finish() { waiter?.resume(returning: true); waiter = nil }
     func unblock() { blocking = false; finish() }
     var isPlaying: Bool { waiter != nil }
@@ -50,7 +67,13 @@ struct FakeSynth: Synthesizer {
 
 actor FakeDucker: Ducking {
     private(set) var begins = 0, ends = 0
-    func begin() async { begins += 1 }
+    private let beginDelay: Duration
+    /// beginDelay: begin takes this long, like creating the aggregate device.
+    init(beginDelay: Duration = .zero) { self.beginDelay = beginDelay }
+    func begin() async {
+        begins += 1
+        if beginDelay > .zero { try? await Task.sleep(for: beginDelay) }
+    }
     func end() async { ends += 1 }
 }
 
@@ -160,6 +183,49 @@ actor FakeDucker: Ducking {
         #expect(await player.played == ["one", "two"])
         #expect(await ducker.ends == 1)
         #expect(await s.state == .idle)
+    }
+
+    /// Review finding 2: the "free" event is handled before the line is held,
+    /// so nothing would start the catch-up.
+    @Test func aLineHeldAsTheMicFreesStillPlays() async {
+        let player = FakePlayer()
+        let racing = FreesDuringCheckMic()
+        racing.inner.set(true)
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: racing, ducker: ducker, answered: { _ in false },
+                          settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("held as the mic frees"))
+        await eventually { await player.played.count == 1 }
+        #expect(await player.played == ["held as the mic frees"])
+    }
+
+    /// Review finding 3: a call that starts while the ducking is being set up.
+    @Test func aCallThatStartsWhileDuckingStartsHoldsTheLine() async {
+        let player = FakePlayer()
+        let slowDucker = FakeDucker(beginDelay: .milliseconds(150))
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: slowDucker, answered: { _ in false },
+                          settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("first"))
+        await eventually { await slowDucker.begins == 1 }
+        mic.set(true)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await player.played.isEmpty)
+        mic.set(false)
+        await eventually { await player.played.count == 1 }
+        #expect(await player.played == ["first"])
+    }
+
+    /// Review finding 5: a Core Audio call that never returns must not stop the queue.
+    @Test func aDuckerThatHangsDoesNotStopTheLines() async {
+        let player = FakePlayer()
+        let stuck = FakeDucker(beginDelay: .seconds(3600))
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: stuck, answered: { _ in false },
+                          settle: .milliseconds(30), callTimeout: .milliseconds(100))
+        await s.start()
+        await s.enqueue(line("one")); await s.enqueue(line("two"))
+        await eventually { await player.played.count == 2 }
+        #expect(await player.played == ["one", "two"])
     }
 
     @Test func eachLineRenewsTheDucking() async {

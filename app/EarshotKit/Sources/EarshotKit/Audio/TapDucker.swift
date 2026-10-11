@@ -27,20 +27,26 @@ public actor TapDucker: Ducking {
     static let fade: Double = 0.2
     private let settings: @Sendable () -> (enabled: Bool, level: Float)
     private let maxDuck: Duration
+    private let startTimeout: Duration
     private let makeBackend: @Sendable (@escaping @Sendable () -> Void) -> any DuckBackend
     private let log = Logger(subsystem: "com.earshot.app", category: "duck")
     private var backend: (any DuckBackend)?
     private var generation = 0
     public private(set) var lastError: OSStatus?
+    /// Core Audio calls run here, never on the actor, so one that hangs
+    /// cannot stop the ducker from answering.
+    private static let audioQueue = DispatchQueue(label: "com.earshot.app.duck.calls")
 
     public init(settings: @escaping @Sendable () -> (enabled: Bool, level: Float)) {
-        self.init(settings: settings, maxDuck: .seconds(45)) { CoreAudioTap(onOutputChange: $0) }
+        self.init(settings: settings, maxDuck: .seconds(45), startTimeout: .seconds(2)) { CoreAudioTap(onOutputChange: $0) }
     }
 
     init(settings: @escaping @Sendable () -> (enabled: Bool, level: Float), maxDuck: Duration,
+         startTimeout: Duration = .seconds(2),
          makeBackend: @escaping @Sendable (@escaping @Sendable () -> Void) -> any DuckBackend) {
         self.settings = settings
         self.maxDuck = maxDuck
+        self.startTimeout = startTimeout
         self.makeBackend = makeBackend
     }
 
@@ -53,20 +59,54 @@ public actor TapDucker: Ducking {
         guard s.enabled else { return }
         if backend == nil {
             let b = makeBackend { [weak self] in Task { await self?.outputChanged() } }
-            do {
-                try b.start()
+            switch await start(b) {
+            case .started:
                 backend = b
                 lastError = nil
                 log.info("ducking on")
-            } catch {
-                lastError = (error as? DuckError)?.status ?? -1
-                log.error("ducking failed: \(String(describing: error), privacy: .public)")
-                b.stop()
+            case .failed(let status):
+                lastError = status
+                log.error("ducking failed: \(status)")
+                return
+            case .timedOut:
+                lastError = -2
+                log.error("ducking gave up: creating the tap took too long")
                 return
             }
         }
         backend?.setTarget(s.level)
         armCap(generation)
+    }
+
+    private enum StartResult: Sendable { case started, failed(OSStatus), timedOut }
+
+    /// Starts the backend on the audio queue, giving up after startTimeout. A
+    /// start that finishes after that is undone at once, so no tap is left behind.
+    private func start(_ b: any DuckBackend) async -> StartResult {
+        let once = Once()
+        let limit = startTimeout
+        let backend = b
+        return await withCheckedContinuation { (cont: CheckedContinuation<StartResult, Never>) in
+            Self.audioQueue.async {
+                let result: StartResult
+                do {
+                    try backend.start()
+                    result = .started
+                } catch {
+                    backend.stop()
+                    result = .failed((error as? DuckError)?.status ?? -1)
+                }
+                if once.claim() {
+                    cont.resume(returning: result)
+                } else if case .started = result {
+                    backend.stop()   // begin() already gave up on this one
+                }
+            }
+            Task {
+                try? await Task.sleep(for: limit)
+                if once.claim() { cont.resume(returning: .timedOut) }
+            }
+        }
     }
 
     public func end() async {
@@ -80,7 +120,14 @@ public actor TapDucker: Ducking {
     }
 
     /// Removes the tap at once, for quitting. Other apps play normally again.
-    public func shutdown() { teardown("ducking off (quit)") }
+    /// Waits for it, unlike the other teardowns: the app is about to exit.
+    public func shutdown() {
+        guard let b = backend else { return }
+        backend = nil
+        let held = b
+        Self.audioQueue.sync { held.stop() }
+        log.info("ducking off (quit)")
+    }
 
     private func outputChanged() {
         guard backend != nil else { return }
@@ -103,8 +150,9 @@ public actor TapDucker: Ducking {
 
     private func teardown(_ message: String) {
         guard let b = backend else { return }
-        b.stop()
         backend = nil
+        let held = b
+        Self.audioQueue.async { held.stop() }
         log.info("\(message, privacy: .public)")
     }
 

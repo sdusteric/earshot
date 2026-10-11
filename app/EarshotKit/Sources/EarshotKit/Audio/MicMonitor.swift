@@ -35,9 +35,13 @@ public final class MicMonitor: MicSource, @unchecked Sendable {
     /// after an app starts capturing, so decisions never rely on them alone.
     public var isBusy: Bool {
         get async {
-            queue.sync {
-                refresh()
-                return busy
+            // Hops to the monitor's queue instead of blocking a shared thread;
+            // SpeechOut puts a time limit on the answer.
+            await withCheckedContinuation { cont in
+                queue.async {
+                    self.refresh()
+                    cont.resume(returning: self.busy)
+                }
             }
         }
     }

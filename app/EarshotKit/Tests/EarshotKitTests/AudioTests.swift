@@ -17,24 +17,88 @@ let outputWorks: Bool = {
     return p.terminationStatus == 0
 }()
 
+/// Stands in for AVAudioPlayer: starting takes `delay` (blocking, like Core
+/// Audio), then it "plays" for `plays`.
+final class FakeStarter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _started = 0, _stopped = 0
+    let delay: Duration, plays: Duration
+    init(delay: Duration, plays: Duration = .milliseconds(10)) { self.delay = delay; self.plays = plays }
+    var started: Int { lock.withLock { _started } }
+    var stopped: Int { lock.withLock { _stopped } }
+
+    final class Handle: PlaybackHandle, @unchecked Sendable {
+        let owner: FakeStarter
+        let until: Date
+        init(owner: FakeStarter, until: Date) { self.owner = owner; self.until = until }
+        var isPlaying: Bool { Date() < until }
+        func stop() { owner.lock.withLock { owner._stopped += 1 } }
+    }
+
+    func start(_ url: URL, _ volume: Float) -> (any PlaybackHandle)? {
+        let c = delay.components
+        Thread.sleep(forTimeInterval: Double(c.seconds) + Double(c.attoseconds) / 1e18)
+        lock.withLock { _started += 1 }
+        let p = plays.components
+        return Handle(owner: self, until: Date().addingTimeInterval(Double(p.seconds) + Double(p.attoseconds) / 1e18))
+    }
+}
+
 @Suite(.serialized) struct AudioTests {
     let tink = URL(fileURLWithPath: "/System/Library/Sounds/Tink.aiff")
     let submarine = URL(fileURLWithPath: "/System/Library/Sounds/Submarine.aiff")
 
     @Test(.enabled(if: outputWorks)) func playsToTheEnd() async {
-        #expect(await AudioFilePlayer(volume: 0.05).play(tink))
+        #expect(await AudioFilePlayer(volume: 0.05).play(tink, id: UUID()))
     }
 
     @Test(.enabled(if: outputWorks)) func stopEndsPlayEarly() async {
         let player = AudioFilePlayer(volume: 0.05)
-        async let finished = player.play(submarine)
+        let id = UUID()
+        async let finished = player.play(submarine, id: id)
         try? await Task.sleep(for: .milliseconds(100))
-        await player.stop()
+        await player.stop(id)
         #expect(await finished == false)
     }
 
     @Test func aMissingFileDoesNotHang() async {
-        #expect(await AudioFilePlayer().play(URL(fileURLWithPath: "/nonexistent.wav")))
+        #expect(await AudioFilePlayer().play(URL(fileURLWithPath: "/nonexistent.wav"), id: UUID()))
+    }
+
+    /// Review finding 3: a stop that arrives before the play starts still counts.
+    @Test func aStopBeforeThePlayStartsCounts() async {
+        let fake = FakeStarter(delay: .zero)
+        let player = AudioFilePlayer(starter: fake.start)
+        let id = UUID()
+        await player.stop(id)
+        #expect(await player.play(tink, id: id) == false)
+        #expect(fake.started == 0)
+    }
+
+    /// Review finding 4: a start that returns long after it was given up on
+    /// must stop at once, not play out of turn.
+    @Test func aStartThatReturnsLateIsStopped() async throws {
+        let fake = FakeStarter(delay: .milliseconds(300))
+        let player = AudioFilePlayer(starter: fake.start)
+        let id = UUID()
+        let result = Task { await player.play(tink, id: id) }
+        try await Task.sleep(for: .milliseconds(50))
+        await player.stop(id)
+        #expect(await result.value == false)
+        #expect(fake.started == 1)
+        #expect(fake.stopped == 1)
+    }
+
+    /// Review finding 4: a stopped line's player is stopped, not left running.
+    @Test func stopStopsTheRunningPlayer() async throws {
+        let fake = FakeStarter(delay: .zero, plays: .seconds(5))
+        let player = AudioFilePlayer(starter: fake.start)
+        let id = UUID()
+        let result = Task { await player.play(tink, id: id) }
+        try await Task.sleep(for: .milliseconds(150))
+        await player.stop(id)
+        #expect(await result.value == false)
+        #expect(fake.stopped == 1)
     }
 
     @Test func alwaysOnListenersDoNotCount() {

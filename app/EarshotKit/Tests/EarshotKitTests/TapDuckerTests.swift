@@ -7,11 +7,17 @@ import Testing
 final class FakeBackend: DuckBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var _starts = 0, _stops = 0, _target: Float = 1
+    private let startDelay: TimeInterval
+    /// startDelay: start blocks this long, like a Core Audio call that hangs.
+    init(startDelay: TimeInterval = 0) { self.startDelay = startDelay }
     var starts: Int { lock.withLock { _starts } }
     var stops: Int { lock.withLock { _stops } }
     var target: Float { lock.withLock { _target } }
     var callbacks: Int { 0 }
-    func start() throws { lock.withLock { _starts += 1 } }
+    func start() throws {
+        if startDelay > 0 { Thread.sleep(forTimeInterval: startDelay) }
+        lock.withLock { _starts += 1 }
+    }
     func setTarget(_ gain: Float) { lock.withLock { _target = gain } }
     func stop() { lock.withLock { _stops += 1 } }
 }
@@ -110,6 +116,25 @@ final class FakeBackend: DuckBackend, @unchecked Sendable {
         #expect(await d.isActive)
         #expect(backend.starts == 1)
         await d.end()
+    }
+
+    /// Review finding 5: creating the tap can hang inside Core Audio. begin()
+    /// gives up quickly, and a tap that appears late is removed at once.
+    @Test func aTapStartThatHangsIsGivenUpAndRemovedWhenItReturns() async throws {
+        let backend = FakeBackend(startDelay: 0.4)
+        let box = ChangeBox()
+        let d = TapDucker(settings: { (true, 0.3) }, maxDuck: .seconds(45), startTimeout: .milliseconds(100)) { change in
+            box.set(change)
+            return backend
+        }
+        let t0 = Date()
+        await d.begin()
+        #expect(Date().timeIntervalSince(t0) < 0.3)
+        #expect(await d.isActive == false)
+        #expect(await d.lastError != nil)
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(backend.starts == 1)
+        #expect(backend.stops == 1)
     }
 
     @Test func anOutputDeviceChangeRemovesTheTap() async throws {

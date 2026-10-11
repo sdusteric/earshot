@@ -1,62 +1,92 @@
 import AVFoundation
 import os
 
-/// Plays one file at a time. AVAudioPlayer releases the output when it stops,
-/// so the audio hardware can sleep between lines. Watches isPlaying every
-/// 50 ms instead of relying on delegate callbacks, which need a main run loop.
+/// A started playback: AVAudioPlayer, or a stand-in in tests.
+public protocol PlaybackHandle: AnyObject {
+    var isPlaying: Bool { get }
+    func stop()
+}
+
+extension AVAudioPlayer: PlaybackHandle {}
+
+/// Plays one file per line. Each play and stop names its line, so a stop that
+/// arrives before the play has started still counts, and a start that returns
+/// after its line was given up on stops at once instead of playing out of turn.
+/// Watches isPlaying every 50 ms instead of relying on delegate callbacks,
+/// which need a main run loop. AVAudioPlayer releases the output when it
+/// stops, so the audio hardware can sleep between lines.
 public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
+    public typealias Starter = @Sendable (URL, Float) -> (any PlaybackHandle)?
+
     private let lock = NSLock()
-    private var player: AVAudioPlayer?
-    private var stopped = false
+    private var playing: [UUID: any PlaybackHandle] = [:]
+    private var stopped: [UUID] = []   // the most recent stops, oldest first
     private let volume: Float
+    private let starter: Starter
     private let log = Logger(subsystem: "com.earshot.app", category: "player")
 
-    public init(volume: Float = 1) { self.volume = volume }
+    public init(volume: Float = 1) {
+        self.volume = volume
+        starter = { url, volume in
+            guard let p = try? AVAudioPlayer(contentsOf: url) else { return nil }
+            p.volume = volume
+            return p.play() ? p : nil
+        }
+    }
 
-    public func play(_ url: URL) async -> Bool {
-        // Opening and starting the player can block inside Core Audio (seen
-        // while a Bluetooth headset switches mode), so both run on a dispatch
-        // thread, never on Swift's shared concurrency threads. SpeechOut gives
-        // up on a line that takes too long.
-        let volume = self.volume
-        lock.withLock { stopped = false }   // a stop from here on counts, even before the start
-        let started: AVAudioPlayer? = await withCheckedContinuation { cont in
+    init(volume: Float = 1, starter: @escaping Starter) {
+        self.volume = volume
+        self.starter = starter
+    }
+
+    public func play(_ url: URL, id: UUID) async -> Bool {
+        if isStopped(id) { return false }
+        // Opening and starting can block inside Core Audio (seen while a
+        // Bluetooth output switched mode), so both run on a dispatch thread,
+        // never on Swift's shared concurrency threads. SpeechOut gives up on a
+        // line that takes too long and stops it by id.
+        let volume = self.volume, starter = self.starter
+        let started: (any PlaybackHandle)? = await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let p = try? AVAudioPlayer(contentsOf: url) else {
-                    cont.resume(returning: nil)
-                    return
-                }
-                p.volume = volume
-                cont.resume(returning: p.play() ? p : nil)
+                nonisolated(unsafe) let handle = starter(url, volume)
+                cont.resume(returning: handle)
             }
         }
         guard let p = started else {
             log.error("couldn't play \(url.lastPathComponent, privacy: .public)")
             return true   // nothing to wait for; the queue moves on
         }
-        let stoppedEarly = lock.withLock {
-            player = p
-            return stopped
+        let stoppedAlready = lock.withLock {
+            if stopped.contains(id) { return true }
+            playing[id] = p
+            return false
         }
-        if stoppedEarly {
+        if stoppedAlready {
             p.stop()
             return false
         }
         while true {
             try? await Task.sleep(for: .milliseconds(50))
-            let (playing, wasStopped) = lock.withLock { (p.isPlaying, stopped) }
-            if wasStopped { return false }
-            if !playing { break }
+            let (isPlaying, wasStopped) = lock.withLock { (p.isPlaying, stopped.contains(id)) }
+            if wasStopped {
+                // stop(id) stops a player it finds; stop it here only if it did not.
+                lock.withLock { playing.removeValue(forKey: id) }?.stop()
+                return false
+            }
+            if !isPlaying { break }
         }
-        lock.withLock { if player === p { player = nil } }
+        lock.withLock { playing[id] = nil }
         return true
     }
 
-    public func stop() async {
-        lock.withLock {
-            stopped = true
-            player?.stop()
-            player = nil
+    public func stop(_ id: UUID) async {
+        let p: (any PlaybackHandle)? = lock.withLock {
+            stopped.append(id)
+            if stopped.count > 64 { stopped.removeFirst(stopped.count - 64) }
+            return playing.removeValue(forKey: id)
         }
+        p?.stop()
     }
+
+    private func isStopped(_ id: UUID) -> Bool { lock.withLock { stopped.contains(id) } }
 }
