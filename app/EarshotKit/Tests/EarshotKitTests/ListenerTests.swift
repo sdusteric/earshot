@@ -585,6 +585,47 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await observer.heard == [false])
     }
 
+    // MARK: - A locked or sleeping Mac
+
+    @Test func whileBlockedNoFollowUpOrHotkeyOpensTheMic() async {
+        let l = await make()
+        await l.setBlocked(true)
+        await l.listenFollowUp(.approval(id: "a1"))
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(await input.starts == 0)
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+        await l.hotkeyUp()
+    }
+
+    @Test func blockingMidCaptureDropsIt() async {
+        let l = await make()
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(60))
+        await input.push([1, 1])
+        await l.setBlocked(true)
+        await l.hotkeyUp()
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await heard.items.isEmpty)
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await observer.heard == [false])
+        #expect(await eventually { await !input.isOpen })
+    }
+
+    @Test func theArmedMicReopensWhenUnblocked() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setBlocked(true)
+        #expect(await eventually { await !input.isOpen })
+        await l.setWakeArmed(true)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await !input.isOpen)   // arming while blocked keeps it closed
+        await l.setBlocked(false)
+        #expect(await eventually { await input.isOpen })
+    }
+
     // MARK: - Earshot's own voice
 
     /// A session named "earshot": the plugin says "Hey, earshot needs your OK".

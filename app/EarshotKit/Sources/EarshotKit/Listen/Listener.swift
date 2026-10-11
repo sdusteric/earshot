@@ -86,6 +86,10 @@ public actor Listener {
     private var micOpen = false
     private var armed = false
     private var micBusy = false
+    /// The Mac is locked or asleep, or listening can't work now (see ListenPolicy.commandBlock).
+    private var blocked = false
+    /// The mic must stay closed: a call, or blocked.
+    private var refused: Bool { micBusy || blocked }
     private var sensitivity = 5
     private var vocabulary: [String] = []
     private var segmentStart: Int?
@@ -172,7 +176,7 @@ public actor Listener {
     }
 
     public func hotkeyDown() async {
-        guard !micBusy, !hotkeyHeld else { return }
+        guard !refused, !hotkeyHeld else { return }
         hotkeyHeld = true
         pressID += 1
         let press = pressID
@@ -189,17 +193,17 @@ public actor Listener {
     /// (Right Option types characters on some layouts) changes nothing. When
     /// the wake word already has the mic open, the last 0.3 s count too.
     private func holdConfirmed(_ press: Int) async {
-        guard hotkeyHeld, pressID == press, !micBusy else { return }
+        guard hotkeyHeld, pressID == press, !refused else { return }
         let wasOpen = micOpen
         await openMic()
         // Released, pressed again, or a call started, while the mic opened.
-        guard micOpen, hotkeyHeld, pressID == press, !micBusy else { await closeMicIfIdle(); return }
+        guard micOpen, hotkeyHeld, pressID == press, !refused else { await closeMicIfIdle(); return }
         if let c = capture {
             guard case .followUp = c.trigger else { return }
             // The hotkey takes over: end the follow-up before the new capture begins.
             capture = nil
             await observer?.captureEnded(heard: false)
-            guard micOpen, hotkeyHeld, pressID == press, !micBusy, capture == nil else {
+            guard micOpen, hotkeyHeld, pressID == press, !refused, capture == nil else {
                 await closeMicIfIdle()
                 settlePhase()
                 return
@@ -242,12 +246,12 @@ public actor Listener {
 
     /// Listens once without the wake word, for a few seconds.
     public func listenFollowUp(_ f: FollowUp, within: Duration? = nil) async {
-        guard !micBusy, capture == nil, !hotkeyHeld else { return }
+        guard !refused, capture == nil, !hotkeyHeld else { return }
         pendingOpens += 1
         await openMic()
         await gate.reset()
         pendingOpens -= 1
-        guard micOpen, !micBusy, capture == nil, !hotkeyHeld else {
+        guard micOpen, !refused, capture == nil, !hotkeyHeld else {
             await closeMicIfIdle()
             settlePhase()
             return
@@ -264,7 +268,18 @@ public actor Listener {
     /// Another app opened the mic: drop what is being heard and close the mic.
     public func setMicBusy(_ busy: Bool) async {
         micBusy = busy
-        guard busy else {
+        await refusalChanged()
+    }
+
+    /// The Mac locked or went to sleep, or listening can't work now: no
+    /// follow-up, no hotkey, and what is being heard is dropped, as for a call.
+    public func setBlocked(_ b: Bool) async {
+        blocked = b
+        await refusalChanged()
+    }
+
+    private func refusalChanged() async {
+        guard refused else {
             if armed { await openMic() }
             settlePhase()
             return
@@ -282,7 +297,7 @@ public actor Listener {
     /// is in flight waits for it, and starts another if that one gave up
     /// while the mic is still wanted.
     private func openMic() async {
-        while !micOpen, !micBusy {
+        while !micOpen, !refused {
             if openTask == nil { openTask = Task { await self.performOpen() } }
             let gaveUp = await openTask?.value ?? false
             guard gaveUp, micWanted else { return }
@@ -303,7 +318,7 @@ public actor Listener {
             spotted = false
             await gate.reset()
             // start() and reset() suspend: a call may have started, or nobody may want the mic any more.
-            guard !micBusy, micWanted else {
+            guard !refused, micWanted else {
                 // Clear this open before stopping, so a caller that comes during the stop starts its own.
                 openTask = nil
                 let stopping = Task { await self.input.stop() }
@@ -341,7 +356,7 @@ public actor Listener {
         await input.stop()
         await gate.reset()
         settlePhase()
-        guard micWanted, !micBusy else { return }
+        guard micWanted, !refused else { return }
         Task { [delay = timing.reopenDelay] in
             try? await Task.sleep(for: delay)
             await self.reopenAfterLoss()
@@ -350,7 +365,7 @@ public actor Listener {
 
     /// The one retry. If start() fails again the mic stays closed.
     private func reopenAfterLoss() async {
-        guard !micOpen, !micBusy, micWanted else { return }
+        guard !micOpen, !refused, micWanted else { return }
         await openMic()
         settlePhase()
     }
@@ -432,7 +447,7 @@ public actor Listener {
             if woke, ownBefore || ownVoiceWake {
                 // Earshot said the wake phrase itself (a session named "earshot"): not a wake, no barge-in.
                 falseWakes += 1
-            } else if woke, capture == nil, !micBusy, micOpen {
+            } else if woke, capture == nil, !refused, micOpen {
                 let c = Capture(trigger: .wake, start: s, waitingForSpeech: false)
                 capture = c
                 phase = .capturing(.wake)
@@ -462,8 +477,8 @@ public actor Listener {
             }
         }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A result that arrives after a call started is dropped.
-        let dropped = micBusy
+        // A result that arrives after a call started, or the Mac locked, is dropped.
+        let dropped = refused
         if c.trigger == .wake, !c.commandPhase {
             if repeatsOwnLine(text) {
                 // The mic heard Earshot's own line.
@@ -489,7 +504,7 @@ public actor Listener {
         await observer?.captureEnded(heard: heard)
         if heard {
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now))
-        } else if !micBusy, capture == nil {
+        } else if !refused, capture == nil {
             await chimes.play(.closed)
         }
         await closeMicIfIdle()

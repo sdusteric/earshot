@@ -143,6 +143,8 @@ final class AppModel {
         micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let i = listenInputs(c)
         core?.availability.canListen = ListenPolicy.canListen(i)
+        // Locked, asleep or without the mic: no approval window or hotkey may open it.
+        await stack.listener.setBlocked(ListenPolicy.commandBlock(i) != nil)
         listenBlock = ListenPolicy.wakeBlock(i)
         hotkeyTap?.setHotkey(c.hotkey)
         await stack.listener.setSensitivity(c.wakeSensitivity)
@@ -153,7 +155,9 @@ final class AppModel {
             wakeLoadFailed = !wakeLoaded
         }
         // The load took a while: arm from the state now, not the state before it.
-        let fresh = ListenPolicy.wakeBlock(listenInputs(configBox.value))
+        let now = listenInputs(configBox.value)
+        await stack.listener.setBlocked(ListenPolicy.commandBlock(now) != nil)
+        let fresh = ListenPolicy.wakeBlock(now)
         listenBlock = fresh
         await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
     }
