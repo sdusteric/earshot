@@ -7,6 +7,20 @@ struct MenuContent: View {
 
     var body: some View {
         if let error = model.startError { Text(error) }
+        switch model.modelState {
+        case .missing, .failed:
+            Button(model.modelState == .failed ? "Retry Downloading Speech Models" : "Download Speech Models (about 1 GB)") {
+                model.downloadModels()
+            }
+        case .downloading(let p):
+            Text("Downloading speech models: \(Int(p * 100))%")
+        case .ready:
+            if let b = model.listenBlock { Text(ListenPolicy.menuLine(b)) } else { Text("Listening for \u{201C}Hey Earshot\u{201D}") }
+        }
+        if model.config.hotkey != .off, !model.hotkeyAllowed {
+            Button("Allow the Hotkey…") { model.requestHotkeyAccess() }
+        }
+        Divider()
         if model.sessions.isEmpty {
             Text("No Claude Code sessions")
         } else {

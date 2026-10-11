@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Earshot lowers other apps' audio while it talks. It never records or saves that audio.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Earshot listens for "Hey Earshot" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved.</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/sdusteric/earshot/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>

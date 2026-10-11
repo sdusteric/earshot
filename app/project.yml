@@ -27,11 +27,13 @@ targets:
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.developer-tools
         NSAudioCaptureUsageDescription: "Earshot lowers other apps' audio while it talks. It never records or saves that audio."
+        NSMicrophoneUsageDescription: "Earshot listens for \"Hey Earshot\" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved."
         SUFeedURL: https://github.com/sdusteric/earshot/releases/latest/download/appcast.xml
         SUPublicEDKey: "$(SPARKLE_PUBLIC_KEY)"
     entitlements:
       path: Earshot/Earshot.entitlements
-      properties: {}
+      properties:
+        com.apple.security.device.audio-input: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.earshot.app

@@ -9,6 +9,8 @@ struct EarshotApp: App {
     @Environment(\.openWindow) private var openWindow
 
     init() {
+        // A client hanging up must never kill the app.
+        signal(SIGPIPE, SIG_IGN)
         // Another Earshot already runs.
         if !SingleInstance.claim() { exit(0) }
     }
