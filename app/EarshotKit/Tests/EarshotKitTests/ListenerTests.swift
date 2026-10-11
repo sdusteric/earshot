@@ -623,6 +623,55 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await observer.heard == [false])
     }
 
+    // MARK: - Edges of a capture
+
+    /// The chime and the tail of Earshot's line are not your answer.
+    @Test func speechInTheFirstMomentOfAFollowUpIsIgnored() async {
+        let st = ScriptTranscriber()
+        var timing = Listener.Timing.forTests
+        timing.followUp = .seconds(2)
+        timing.followUpSettle = .milliseconds(250)
+        let l = await make(timing, transcriber: st)
+        await l.listenFollowUp(.reply)
+        await input.push([0.75, 0, 0])   // right away: the tail of Earshot's line
+        try? await Task.sleep(for: .milliseconds(350))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played == [.listening])   // still listening
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(!(await st.clips.first ?? [0.75]).contains(0.75))
+    }
+
+    /// The last word often lands just after the key is let go.
+    @Test func aReleaseKeepsListeningBriefly() async {
+        let l = await make()
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(60))
+        await input.push([1, 1])
+        try? await Task.sleep(for: .milliseconds(30))
+        await l.hotkeyUp()
+        await input.push([3])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "what's everyone doing?")
+    }
+
+    @Test func reopeningTheMicForgetsTheOldAudio() async {
+        let st = ScriptTranscriber()
+        let l = await make(transcriber: st)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([0.25])
+        try? await Task.sleep(for: .milliseconds(30))
+        await l.setWakeArmed(false)
+        #expect(await eventually { await !input.isOpen })
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(!(await st.clips.first ?? [0.25]).contains(0.25))   // the pre-roll reached nothing from before
+    }
+
     // MARK: - A locked or sleeping Mac
 
     @Test func whileBlockedNoFollowUpOrHotkeyOpensTheMic() async {
@@ -768,7 +817,8 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
 
 extension Listener.Timing {
     static let forTests = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150),
-                                          minHold: .milliseconds(30), reopenDelay: .milliseconds(30))
+                                          minHold: .milliseconds(30), reopenDelay: .milliseconds(30),
+                                          followUpSettle: .zero)
 }
 
 extension Listener {

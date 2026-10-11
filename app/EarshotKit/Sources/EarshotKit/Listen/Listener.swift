@@ -43,17 +43,24 @@ public actor Listener {
         public var ownWakeGrace: Duration
         /// How long Earshot's lines are remembered, to drop a wake that repeats one.
         public var ownLineMemory: Duration
+        /// Speech that starts this soon after a follow-up's chime is the chime or the
+        /// tail of Earshot's line, not the answer.
+        public var followUpSettle: Duration
+        /// After the hotkey is let go, how long the capture goes on, for the last word.
+        public var releaseTail: Duration
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
                     preRollSamples: Int = 4_800, spotAtSamples: Int = 24_000, spotWindowSamples: Int = 32_000,
                     minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500),
-                    ownWakeGrace: Duration = .seconds(1), ownLineMemory: Duration = .seconds(10)) {
+                    ownWakeGrace: Duration = .seconds(1), ownLineMemory: Duration = .seconds(10),
+                    followUpSettle: Duration = .milliseconds(250), releaseTail: Duration = .milliseconds(200)) {
             self.wakeSilence = wakeSilence; self.followUp = followUp; self.minHold = minHold
             self.maxCommandSamples = maxCommandSamples; self.preRollSamples = preRollSamples
             self.spotAtSamples = spotAtSamples; self.spotWindowSamples = spotWindowSamples
             self.minClipSamples = minClipSamples; self.reopenDelay = reopenDelay
             self.ownWakeGrace = ownWakeGrace; self.ownLineMemory = ownLineMemory
+            self.followUpSettle = followUpSettle; self.releaseTail = releaseTail
         }
     }
 
@@ -66,6 +73,10 @@ public actor Listener {
         var waitingForSpeech: Bool
         /// After "Hey Earshot" alone: this clip is the command itself.
         var commandPhase = false
+        /// A follow-up takes speech only from here on (see Timing.followUpSettle).
+        var acceptFrom: ContinuousClock.Instant?
+        /// The hotkey was let go: the capture ends after Timing.releaseTail.
+        var released = false
     }
 
     private let input: any AudioInput
@@ -228,16 +239,27 @@ public actor Listener {
         hotkeyHeld = false
         holdTask?.cancel()
         holdTask = nil
-        if let c = capture, c.trigger == .hotkey {
-            ring.append(chunker.drain())
-            // Hotkey chunks skipped the gate, so reset it first: that clears stale VAD
-            // state without wiping a wake segment that starts during the transcription.
-            await dropSegment()
-            await finish(c, end: ring.total)
+        if var c = capture, c.trigger == .hotkey {
+            // Keep listening a moment: the last word often ends after the key comes up.
+            c.released = true
+            capture = c
+            Task { [tail = timing.releaseTail] in
+                try? await Task.sleep(for: tail)
+                await self.finishReleased(c.id)
+            }
         } else {
             await closeMicIfIdle()
             settlePhase()
         }
+    }
+
+    private func finishReleased(_ id: UUID) async {
+        guard let c = capture, c.id == id, c.released else { return }
+        ring.append(chunker.drain())
+        // Hotkey chunks skipped the gate, so reset it first: that clears stale VAD
+        // state without wiping a wake segment that starts during the transcription.
+        await dropSegment()
+        await finish(c, end: ring.total)
     }
 
     public func hotkeyCancel() async {
@@ -262,12 +284,15 @@ public actor Listener {
             settlePhase()
             return
         }
-        let c = Capture(trigger: .followUp(f), start: ring.total, waitingForSpeech: true)
+        var c = Capture(trigger: .followUp(f), start: ring.total, waitingForSpeech: true)
+        c.acceptFrom = .now + timing.followUpSettle
         capture = c
         phase = .capturing(c.trigger)
         startPrewarm()   // the model may have unloaded since the last command
         await observer?.captureBegan(c.trigger)
         scheduleTimeout(c.id, after: within ?? timing.followUp)
+        // Speech is taken only from a moment after the chime starts.
+        if capture?.id == c.id { capture?.acceptFrom = .now + timing.followUpSettle }
         await chimes.play(.listening)
     }
 
@@ -320,6 +345,8 @@ public actor Listener {
         do {
             let stream = try await input.start()
             _ = chunker.drain()
+            // Nothing from before the mic closed: no pre-roll reaches it, and the last command's audio is gone.
+            ring = SampleRing()
             segmentStart = nil
             spotted = false
             await gate.reset()
@@ -422,6 +449,14 @@ public actor Listener {
         let loud = energy.admit(chunk)
         guard loud || segmentStart != nil || capture != nil else { return }
         let edge = await gate.feed(chunk)
+        if edge == .start, var c = capture, c.waitingForSpeech, let from = c.acceptFrom, ContinuousClock.now < from {
+            // Too soon after a follow-up's chime: the chime or the tail of Earshot's line.
+            // Forget it, and reset the VAD so speech that goes on starts afresh.
+            c.start = ring.total
+            capture = c
+            await gate.reset()
+            return
+        }
         if edge == .start {
             // The VAD fires a little after speech starts: include the chunk before.
             segmentStart = max(ring.oldest, ring.total - 2 * chunk.count)
