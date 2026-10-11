@@ -171,6 +171,17 @@ actor FakeTransport: SessionTransport {
         #expect(await said.items.isEmpty)
     }
 
+    /// The session closed after the send: not a miss, and nothing to say.
+    @Test func aSessionGoneAtTheReceiptCheckIsNotAMiss() async {
+        let (d, runner, _) = make([agent("a", "billing-service", pid: 10), agent("b", "blog", pid: 11)], poll: .milliseconds(50))
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await runner.setAgents([agent("b", "blog", pid: 11)])
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+        _ = await d.run(.send(target: "blog", prompt: "y"))
+        #expect(await eventually { await said.items == ["Blog didn't pick it up."] })   // one miss, not two
+    }
+
     @Test func afterTwoMissesTheSocketIsSkippedAndTheBrokenLineIsSaidOnce() async {
         let (d, _, _) = make([agent("a", "billing-service")])
         _ = await d.run(.send(target: "billing", prompt: "1"))

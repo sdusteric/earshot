@@ -165,7 +165,9 @@ public actor Dispatcher {
                 await directory.refresh()
                 if await directory.lastRefreshSucceeded {
                     answered = true
-                    if let now = await directory.session(s.id), now.busy || now.waiting { misses = 0; return }
+                    // Gone from the list: the session closed. Not a miss, and nothing to say.
+                    guard let now = await directory.session(s.id) else { return }
+                    if now.busy || now.waiting { misses = 0; return }
                 }
             }
             try? await Task.sleep(for: .milliseconds(20))
@@ -173,7 +175,8 @@ public actor Dispatcher {
         await directory.refresh()
         if await directory.lastRefreshSucceeded {
             answered = true
-            if let now = await directory.session(s.id), now.busy || now.waiting { misses = 0; return }
+            guard let now = await directory.session(s.id) else { return }
+            if now.busy || now.waiting { misses = 0; return }
         }
         if await received(s.id, after: sentAt) { misses = 0; return }
         // Claude Code never answered: no evidence either way.
