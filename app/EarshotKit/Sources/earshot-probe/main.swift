@@ -3,8 +3,12 @@
 //   spot WAV...              VAD, then the keyword spotter once per speech segment
 //   transcribe WAV [TERM...] Parakeet TDT v2, then vocabulary rescoring with TERMs
 //   listen MINUTES           the live cascade on the mic, with CPU use per minute
+//   parse-eval TSV           the command parser on tests/eval/parser-cases.tsv
+//   wake-eval DIR            wake word and transcripts on recordings (DIR/manifest.tsv)
+//   send TARGET PROMPT       one prompt through the real directory and dispatcher
 import AVFoundation
 import Darwin
+import EarshotKit
 @preconcurrency import FluidAudio
 import Foundation
 
@@ -21,8 +25,11 @@ let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
         case "spot" where a.count >= 2: try await spot(a.dropFirst().map { URL(fileURLWithPath: $0) })
         case "transcribe" where a.count >= 2: try await transcribe(URL(fileURLWithPath: a[1]), terms: Array(a.dropFirst(2)))
         case "listen": try await listen(minutes: Double(a.count > 1 ? a[1] : "5") ?? 5)
+        case "parse-eval" where a.count == 2: try await parseEval(URL(fileURLWithPath: a[1]))
+        case "wake-eval" where a.count == 2: try await wakeEval(URL(fileURLWithPath: a[1]))
+        case "send" where a.count == 3: await send(target: a[1], prompt: a[2])
         default:
-            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES")
+            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | send TARGET PROMPT")
             exit(2)
         }
     }
@@ -221,4 +228,84 @@ func listen(minutes: Double) async throws {
         if Date() > end { break }
     }
     engine.stop()
+}
+
+// MARK: - Evals (plan 2, task 21)
+
+/// One line per case: transcript, expected. Expected is one of
+///   send|<target or empty>   status|<target or empty>   stop|<target or empty>
+///   start|<project>   answer|allow|<target or empty>   answer|deny|<target or empty>   unknown
+/// Action and target are scored, as the spec asks; the prompt is not.
+func parseEval(_ url: URL) async throws {
+    let sessions = ["billing service", "blog", "earshot", "finebrief", "refund rounding", "invoice export", "docs site"]
+    let parser = CommandParser(model: FoundationCommandModel())
+    var pass = 0, total = 0, grammar = 0
+    for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where !line.hasPrefix("#") {
+        let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2 else { continue }
+        total += 1
+        if Grammar.parse(parts[0], known: sessions) != nil { grammar += 1 }
+        let got = await parser.parse(parts[0], sessions: sessions)
+        if matches(got, parts[1]) { pass += 1 } else { print("MISS\t\(parts[0])\twant \(parts[1])\tgot \(got)") }
+    }
+    print(String(format: "%d of %d (%.0f%%), %d by the grammar", pass, total, Double(pass) / Double(max(total, 1)) * 100, grammar))
+}
+
+func matches(_ c: Command, _ want: String) -> Bool {
+    let w = want.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+    func same(_ got: String?, _ expected: String?) -> Bool {
+        let e = expected.flatMap { $0.isEmpty ? nil : $0 }
+        guard let e else { return got == nil || got!.isEmpty }
+        return got.map { NameMatch.score($0, e) >= 0.78 } ?? false
+    }
+    switch (c, w.first ?? "") {
+    case (.send(let t, _), "send"): return same(t, w.count > 1 ? w[1] : nil)
+    case (.status(let t), "status"): return same(t, w.count > 1 ? w[1] : nil)
+    case (.stop(let t, _), "stop"): return same(t, w.count > 1 ? w[1] : nil)
+    case (.start(let p, _), "start"): return same(p, w.count > 1 ? w[1] : nil)
+    case (.answer(let allow, let t), "answer"):
+        return (allow ? "allow" : "deny") == (w.count > 1 ? w[1] : "") && same(t, w.count > 2 ? w[2] : nil)
+    case (.unknown, "unknown"): return true
+    default: return false
+    }
+}
+
+/// DIR holds WAV files and manifest.tsv: file, 1 if it says the wake phrase
+/// else 0, words the transcript must contain (may be empty).
+func wakeEval(_ dir: URL) async throws {
+    let spotter = CtcWakeSpotter()
+    try await spotter.load()
+    let transcriber = ParakeetTranscriber()
+    var hits = 0, misses = 0, falseWakes = 0, words = 0, wordsTotal = 0
+    for line in try String(contentsOf: dir.appending(path: "manifest.tsv"), encoding: .utf8).split(separator: "\n") {
+        let p = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+        guard p.count >= 2 else { continue }
+        let samples = try AudioConverter().resampleAudioFile(dir.appending(path: p[0]))
+        let woke = await spotter.heardWake(Array(samples.prefix(32_000)), sensitivity: 5)
+        switch (p[1] == "1", woke) {
+        case (true, true): hits += 1
+        case (true, false): misses += 1; print("MISSED WAKE\t\(p[0])")
+        case (false, true): falseWakes += 1; print("FALSE WAKE\t\(p[0])")
+        default: break
+        }
+        if p.count > 2, !p[2].isEmpty {
+            wordsTotal += 1
+            let text = (try? await transcriber.transcribe(samples, vocabulary: ["billing service", "finebrief", "earshot", "blog"])) ?? ""
+            if text.lowercased().contains(p[2].lowercased()) { words += 1 } else { print("WORDS\t\(p[0])\twant \(p[2])\tgot \(text)") }
+        }
+    }
+    print("wake: \(hits) hit, \(misses) missed, \(falseWakes) false; transcripts: \(words) of \(wordsTotal) right")
+}
+
+/// Sends one prompt through the real directory and dispatcher, as a voice command would.
+func send(target: String, prompt: String) async {
+    guard let path = ClaudeCLI.locate() else { print("claude not found"); return }
+    let runner = ClaudeCLI(path: path)
+    let store = SessionStore()
+    let directory = SessionDirectory(runner: runner, store: store, labeler: Labeler(model: nil))
+    let dispatcher = Dispatcher(directory: directory, store: store, transport: CCSocketTransport(), runner: runner,
+                                approvals: ApprovalBook(), say: { print("later: \($0)") }, receiptTimeout: .seconds(8))
+    let o = await dispatcher.run(.send(target: target, prompt: prompt))
+    print(o.line ?? "(nothing said)")
+    try? await Task.sleep(for: .seconds(9))   // time for the receipt check
 }

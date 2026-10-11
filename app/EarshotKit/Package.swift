@@ -14,7 +14,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "EarshotKit", dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]),
-        .executableTarget(name: "earshot-probe", dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]),
+        .executableTarget(name: "earshot-probe", dependencies: ["EarshotKit", .product(name: "FluidAudio", package: "FluidAudio")]),
         .testTarget(name: "EarshotKitTests", dependencies: ["EarshotKit"]),
     ]
 )

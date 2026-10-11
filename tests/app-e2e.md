@@ -50,3 +50,44 @@ playback within 3 seconds (a speaker in standby).
 | Ducking stuck | Found and fixed: `AVAudioPlayer.play()` blocked in Core Audio and the app stayed ducked for over an hour. Now a 30 s line timeout, a 45 s ducking cap, and teardown when the output device changes. |
 | Speakers | Late in the run the default output (Audioengine 2+) could not start playback at all (`afplay`: AudioQueueStart failed, -66681, after 15 s). Outside Earshot; the app now survives it. |
 | Menu, Settings, First launch, Sleep and wake | Not checked: needs a person at the Mac. |
+
+## Listening (plan 2)
+
+### Automated, with the models downloaded
+
+```bash
+EARSHOT_TEST_MODELS=1 swift test --package-path app/EarshotKit --filter FluidListeningTests
+EARSHOT_TEST_FM=1 swift test --package-path app/EarshotKit --filter theRealModel
+EARSHOT_TEST_MIC=1 swift test --package-path app/EarshotKit --filter recordsAboutOneSecond
+bash scripts/eval-parser.sh
+bash scripts/eval-listener.sh
+bash scripts/send-integration.sh
+```
+
+### By hand
+
+| Check | How | Expected |
+|---|---|---|
+| Hotkey command | Hold Right Option: "what's everyone doing", release | Chime, orb "Listening" then "Working on it", the roll call |
+| Tap and chord | Tap Right Option; type Option+e | Nothing: no chime, no orb |
+| Wake word | Turn it on; "Hey Earshot, tell <a terminal session> to say hi" | "Sent to ..." and the terminal session answers |
+| Desktop session | The same, naming a Code tab session in the Claude app | The message appears in that conversation |
+| Two in one project | Two sessions in one folder; "tell <project> to run the tests" | "<Project> has two: ... Which one?", then a name works without the wake word |
+| Voice approval | A session asks to run a command; after "needs your OK", say "yes" | Short sound, "Approved.", the dialog closes, the command runs |
+| Late yes | Click the dialog, then say "yes" in the window | Nothing said, nothing written |
+| Own voice | Play a "needs your OK" line through speakers with the wake word on | No wake, no approval |
+| A call | FaceTime audio, then hold the hotkey | Nothing; the menu says another app uses the mic; lines wait for the catch-up |
+| Barge-in | While Earshot reads a long roll call, hold the hotkey | It stops at once; the line is not said again |
+| AirPods | Output on AirPods, wake word on | AirPods keep full quality (the built-in mic listens) |
+| Sleep and lock | Lock the screen, unlock; sleep, wake | The mic closes while locked or asleep and comes back |
+| Low Power Mode | Turn it on, on battery | The menu says the wake word is off in Low Power Mode; the hotkey still works |
+| Start | "Start a new session in <trusted folder> to say hi" | "Started a session in ..."; `claude agents` lists it |
+| Untrusted folder | Name a folder never opened in Claude | "... isn't trusted yet. Open it in Claude once first." |
+| Stop | "Stop <busy session>" | "... will stop after its current step."; it stops at the next step |
+| Secure input | In a password field, hold Right Option and type a character | No chime, no capture |
+| Orb with another app in front | Hold the hotkey while Safari or Terminal is frontmost | The orb shows at the top center |
+| First launch prompts | On a fresh install, start the app | No Input Monitoring prompt appears before onboarding's hotkey step |
+| Chimes and own lines | Play the listening chime and Earshot's own lines through the speakers with the wake word on (the own-*.wav recordings in the listener eval include one with the chime) | Never wakes it (wake 0) |
+| End of speech | Say a wake command, then stop talking | About 770 ms of silence ends it (the VAD's chunking; the spec's 600 ms was ruled to 770 ms) |
+| Clients that hang up early | While the app runs, run `bash tests/app-handoff.sh` | The app is still running afterwards |
+| Diagnostics | Copy Diagnostics | Listening, models, permissions and claude path; no transcripts, no prompts |

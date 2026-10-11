@@ -97,10 +97,19 @@ The blind votes are from the [Artificial Analysis Speech Arena](https://artifici
 Earshot for Mac is a menu bar app that works with the plugin. While it runs,
 it plays every line instead of the plugin:
 
-- It turns music and videos down while it talks, then back up.
+- It turns music and videos down while it talks or listens, then back up.
+- Hold Right Option and talk, or turn on the wake word, "Hey Earshot". You can:
+  - send a session a prompt: "tell billing service to run the tests"
+  - ask what is going on: "what's everyone doing?" or "what's billing doing?"
+  - stop a session: "stop billing", or "stop billing now" for a background session
+  - start a session: "start a new session in blog to fix the header"
+  - answer a permission prompt: after "billing service needs your OK", say "yes" or "no"
+- Everything it hears stays on your Mac. Audio is kept in memory for a few seconds and never saved or sent. Commands are understood on the Mac too (Apple Intelligence, with a fixed set of phrases when it is off).
 - The menu shows your open sessions, the ones that need you first.
 - "Mute for 1 hour" is in the menu.
-- Settings for the voice, the level and the style are in one place.
+- Settings for the voice, the level, the style and listening are in one place.
+
+Listening needs macOS 26, the microphone permission, Input Monitoring for the hotkey, and about 1 GB of speech models, downloaded once.
 
 It needs macOS 26 or later. The plugin works the same without it: when the app
 is not running, the plugin speaks for itself.
