@@ -11,6 +11,14 @@ struct OnboardingView: View {
     @State private var step = 0
     static let last = 6
 
+    private var keyName: String? {
+        switch model.config.hotkey {
+        case .rightOption: "Right Option"
+        case .rightCommand: "Right Command"
+        case .off: nil
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             switch step {
@@ -35,11 +43,15 @@ struct OnboardingView: View {
                     .disabled(!model.micAllowed)
             case 3:
                 Text("Hold to talk").font(.title2.bold())
-                Text("Hold Right Option, say the command, and let go. A quick tap or Option with another key does nothing. macOS asks to allow Input Monitoring so Earshot can see that key.")
-                if model.hotkeyAllowed {
-                    Label("The hotkey is allowed.", systemImage: "checkmark.circle")
+                if let key = keyName {
+                    Text("Hold \(key), say the command, and let go. A quick tap or \(key) with another key does nothing. macOS asks to allow Input Monitoring so Earshot can see that key.")
+                    if model.hotkeyAllowed {
+                        Label("The hotkey is allowed.", systemImage: "checkmark.circle")
+                    } else {
+                        Button("Allow the Hotkey") { model.requestHotkeyAccess() }
+                    }
                 } else {
-                    Button("Allow the Hotkey") { model.requestHotkeyAccess() }
+                    Text("The hold-to-talk hotkey is off. You can turn it on in Settings, under Listening.")
                 }
             case 4:
                 Text("Speech models").font(.title2.bold())
@@ -60,9 +72,13 @@ struct OnboardingView: View {
                        isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
             default:
                 Text("Try it").font(.title2.bold())
-                Text(model.config.wakeWord
-                     ? "Say: \u{201C}Hey Earshot, what's everyone doing?\u{201D}"
-                     : "Hold Right Option and say: \u{201C}What's everyone doing?\u{201D}")
+                if model.config.wakeWord {
+                    Text("Say: \u{201C}Hey Earshot, what's everyone doing?\u{201D}")
+                } else if let key = keyName {
+                    Text("Hold \(key) and say: \u{201C}What's everyone doing?\u{201D}")
+                } else {
+                    Text("Turn on the wake word or the hotkey in Settings, under Listening, to give Earshot a command.")
+                }
                 if let b = model.listenBlock, model.config.wakeWord { Text(ListenPolicy.menuLine(b)).foregroundStyle(.secondary) }
             }
             Spacer()
@@ -83,5 +99,6 @@ struct OnboardingView: View {
         }
         .padding(24)
         .frame(width: 480, height: 320)
+        .permissionRefresh(model)
     }
 }

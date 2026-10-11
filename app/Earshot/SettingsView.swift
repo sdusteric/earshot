@@ -1,6 +1,27 @@
 import EarshotKit
 import SwiftUI
 
+extension View {
+    /// Re-reads the permissions every 2 s while this view is on screen.
+    func permissionRefresh(_ model: AppModel) -> some View { modifier(PermissionRefresh(model: model)) }
+}
+
+private struct PermissionRefresh: ViewModifier {
+    let model: AppModel
+    @State private var timer: Timer?
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                model.refreshPermissions()
+                timer?.invalidate()
+                timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+                    MainActor.assumeIsolated { model.refreshPermissions() }
+                }
+            }
+            .onDisappear { timer?.invalidate(); timer = nil }
+    }
+}
+
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -114,6 +135,13 @@ private struct ListeningTab: View {
                 Toggle("Listen for \u{201C}Hey Earshot\u{201D}",
                        isOn: Binding(get: { model.config.wakeWord },
                                      set: { on in model.save { $0.set("EARSHOT_WAKE", on ? "on" : "off") } }))
+                if model.config.wakeWord {
+                    if let b = model.listenBlock {
+                        Text(ListenPolicy.menuLine(b)).font(.caption).foregroundStyle(.secondary)
+                    } else if model.wakeLoadFailed {
+                        Text("The wake word couldn't start. Retrying.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Picker("On battery", selection: Binding(get: { model.config.wakeOnBattery },
                                                         set: { v in model.save { $0.set("EARSHOT_WAKE_BATTERY", v.rawValue) } })) {
                     Text("Listen, except in Low Power Mode").tag(EarshotConfig.WakeBattery.lowpower)
@@ -160,6 +188,7 @@ private struct ListeningTab: View {
             model.reloadConfig()
             inputs = AudioDevices.all().filter(\.hasInput)
         }
+        .permissionRefresh(model)
     }
 }
 

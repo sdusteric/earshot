@@ -13,6 +13,8 @@ import SwiftUI
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 220, height: 44),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
         panel.level = .statusBar
+        panel.hidesOnDeactivate = false
+        panel.isFloatingPanel = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -28,11 +30,29 @@ import SwiftUI
             _ = model.speechState
         } onChange: { [weak self] in
             Task { @MainActor in
+                self?.announce()
                 self?.update()
                 self?.observe()
             }
         }
         update()
+    }
+
+    private var lastPhase: Listener.Phase = .off
+
+    /// VoiceOver does not see a panel that never takes focus, so say the phase.
+    private func announce() {
+        let phase = model.listenPhase
+        defer { lastPhase = phase }
+        guard phase != lastPhase else { return }
+        let text: String
+        switch phase {
+        case .capturing: text = "Listening"
+        case .transcribing: text = "Working on it"
+        default: return
+        }
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     private func update() {
@@ -59,6 +79,7 @@ private struct OrbView: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
+                .accessibilityHidden(true)
                 .font(.system(size: 18, weight: .semibold))
                 .symbolEffect(.pulse, isActive: !reduceMotion && isListening)
                 .foregroundStyle(isListening ? Color.accentColor : .primary)
@@ -67,7 +88,8 @@ private struct OrbView: View {
         .padding(.horizontal, 16)
         .frame(height: 44)
         .glassEffect(.regular, in: .capsule)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
     }
 
     private var isListening: Bool {

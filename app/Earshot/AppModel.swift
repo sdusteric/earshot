@@ -85,7 +85,12 @@ final class AppModel {
         }
         // Actions before the stack exists are ignored (hotkey(_:) checks it).
         hotkeyTap = HotkeyTap(hotkey: configBox.value.hotkey) { [weak self] action in self?.hotkey(action) }
-        hotkeyAllowed = hotkeyTap?.start() ?? false
+        // Creating the tap can show the Input Monitoring prompt, so wait for onboarding when not allowed yet.
+        hotkeyAllowed = HotkeyTap.allowed ? (hotkeyTap?.start() ?? false) : false
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshPermissions() }
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
                                                queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.shutdown() }
@@ -194,6 +199,17 @@ final class AppModel {
     func requestHotkeyAccess() {
         HotkeyTap.requestAccess()
         hotkeyAllowed = hotkeyTap?.start() ?? false
+    }
+
+    /// Re-reads the mic and Input Monitoring permissions, which change in System Settings.
+    func refreshPermissions() {
+        var changed = false
+        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if mic != micAllowed { micAllowed = mic; changed = true }
+        var hot = HotkeyTap.allowed
+        if hot { hot = hotkeyTap?.start() ?? false }
+        if hot != hotkeyAllowed { hotkeyAllowed = hot; changed = true }
+        if changed { Task { await listeningChanged() } }
     }
 
     func downloadModels() {
