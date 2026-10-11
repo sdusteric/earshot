@@ -128,6 +128,26 @@ actor CountingSpeaker: LineSpeaker {
         #expect(try String(contentsOfFile: "\(approvalsDir)/answer-s1-1-1-1", encoding: .utf8) == "allow \(secret)\n")
     }
 
+    /// The spec: the wake word does not approve on its own.
+    @Test func aWakeWordYesDoesNotApprove() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("Yes.", .wake))
+        #expect(await eventually { await player.played == ["Hold the hotkey to answer it."] })
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+        #expect(await r.book.current.count == 1)
+    }
+
+    @Test func aHotkeyYesApproves() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("Yes.", .hotkey))
+        #expect(await eventually { await player.played == ["Approved."] })
+        #expect(FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+    }
+
     @Test func yesAfterTheDialogClosedSaysNothing() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())

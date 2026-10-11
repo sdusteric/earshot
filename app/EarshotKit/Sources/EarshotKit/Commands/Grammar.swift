@@ -130,6 +130,8 @@ public enum Grammar {
                                           "yes go ahead", "yeah go ahead"]
     static let denyWords: Set<String> = ["no", "nope", "deny", "deny it", "don't", "dont", "don't do it", "stop",
                                          "cancel", "no thanks", "no thank you", "nah"]
+    /// A no to a prompt outside its window: "stop" and "cancel" are the Stop command there.
+    static let plainDenyWords = denyWords.subtracting(["stop", "cancel"])
 
     static let everyone: Set<String> = [
         "what's everyone doing", "what is everyone doing", "whats everyone doing", "what's everybody doing",

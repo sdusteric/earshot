@@ -128,7 +128,12 @@ public actor VoiceLoop: ListenObserver {
             let c = await parser.parse(u.text, sessions: await directory.vocabulary())
             signposter.emitEvent("command")
             await events.add("command \(Self.kind(c))")
-            await apply(await dispatcher.run(c), after: u)
+            if u.trigger == .wake, case .answer = c {
+                // The wake word alone never answers a prompt; the hotkey and the approval window do.
+                await say("Hold the hotkey to answer it.", after: u)
+            } else {
+                await apply(await dispatcher.run(c), after: u)
+            }
         }
         if endsOwed > 0 {
             endsOwed -= 1

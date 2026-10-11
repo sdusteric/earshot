@@ -96,7 +96,19 @@ actor FakeModel: CommandModel {
         let no = FakeModel(answer: .answer(allow: true, target: "billing"))
         #expect(await CommandParser(model: no).parse("nope billing", sessions: ["billing"])
                 == .answer(allow: false, target: "billing"))
+        let nah = FakeModel(answer: .answer(allow: false, target: "billing"))
+        #expect(await CommandParser(model: nah).parse("nah billing", sessions: ["billing"])
+                == .answer(allow: false, target: "billing"))
         let unheard = FakeModel(answer: .answer(allow: true, target: "payments"))
         #expect(await CommandParser(model: unheard).parse("yeah, the other one", sessions: ["payments"]) == .unknown)
+    }
+
+    /// Outside the window "stop" and "cancel" are the Stop command, never a no to a prompt.
+    @Test func stopAndCancelAreNotAModelDeny() async {
+        let deny = FakeModel(answer: .answer(allow: false, target: "billing"))
+        #expect(await CommandParser(model: deny).parse("cancel billing", sessions: ["billing"]) == .unknown)
+        #expect(await CommandParser(model: deny).parse("billing, cancel", sessions: ["billing"]) == .unknown)
+        #expect(await CommandParser(model: deny).parse("no billing", sessions: ["billing"])
+                == .answer(allow: false, target: "billing"))
     }
 }

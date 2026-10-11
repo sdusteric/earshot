@@ -24,7 +24,8 @@ public struct CommandParser: Sendable {
 
     /// Keeps a model answer only when the user's words back it up: every content word of
     /// the target and prompt must have been said (M1), and an approval needs a clear
-    /// approval word in what was said, with the target's words taken out (M2).
+    /// approval word in what was said, with the target's words taken out (M2). Outside
+    /// the window "stop" and "cancel" are the Stop command, so they never deny.
     static func accept(_ c: Command, heard text: String) -> Command {
         let said = words(text)
         switch c {
@@ -38,7 +39,9 @@ public struct CommandParser: Sendable {
             guard backed([target], by: said) else { return .unknown }
             let targetWords = Set(Grammar.Words(target ?? "").keys)
             let rest = Grammar.Words(text).keys.filter { !targetWords.contains($0) }.joined(separator: " ")
-            guard let approves = Grammar.approvalWord(rest) else { return .unknown }
+            guard let approves = Grammar.approvalWord(rest), approves || Grammar.plainDenyWords.contains(rest) else {
+                return .unknown
+            }
             return .answer(allow: approves, target: target)
         case .unknown:
             return .unknown
