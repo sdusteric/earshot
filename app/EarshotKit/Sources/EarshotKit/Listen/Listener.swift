@@ -114,6 +114,8 @@ public actor Listener {
     private var segmentOwn = false
     private var spotted = false
     private var capture: Capture?
+    /// Where the last capture's audio ended in the ring, so the next one never starts before it.
+    private var lastCaptureEnd = 0
     private var hotkeyHeld = false
     private var holdTask: Task<Void, Never>?
     private var pressID = 0
@@ -140,6 +142,9 @@ public actor Listener {
         utterances = stream
         utteranceCont = cont
     }
+
+    /// Samples received since the mic opened (tests wait on it).
+    var capturedSamples: Int { ring.total }
 
     public func setObserver(_ o: any ListenObserver) { observer = o }
     public func setSensitivity(_ s: Int) { sensitivity = s }
@@ -199,7 +204,15 @@ public actor Listener {
         if let c = capture, c.trigger == .hotkey, c.released {
             // A press inside the release tail: what was said is done, so the tail
             // ends now and this press starts the next command.
-            Task { await self.finishReleased(c.id) }
+            // The capture is taken here, so the new hold never finds it.
+            ring.append(chunker.drain())
+            capture = nil
+            let end = ring.total
+            lastCaptureEnd = end
+            Task {
+                await self.dropSegment()
+                await self.finish(c, end: end, claimed: true)
+            }
         }
         hotkeyHeld = true
         pressID += 1
@@ -233,7 +246,7 @@ public actor Listener {
                 return
             }
         }
-        let start = wasOpen ? max(ring.oldest, ring.total - timing.preRollSamples) : ring.total
+        let start = wasOpen ? max(ring.oldest, ring.total - timing.preRollSamples, lastCaptureEnd) : ring.total
         capture = Capture(trigger: .hotkey, start: start, waitingForSpeech: false)
         phase = .capturing(.hotkey)
         startPrewarm()
@@ -354,6 +367,7 @@ public actor Listener {
             _ = chunker.drain()
             // Nothing from before the mic closed: no pre-roll reaches it, and the last command's audio is gone.
             ring = SampleRing()
+            lastCaptureEnd = 0
             segmentStart = nil
             spotted = false
             await gate.reset()
@@ -510,10 +524,14 @@ public actor Listener {
     // MARK: - Ending a capture
 
     /// Stage 4: transcribes the clip and hands it on.
-    private func finish(_ c: Capture, end: Int) async {
-        guard capture?.id == c.id else { return }
-        capture = nil
-        phase = .transcribing
+    /// `claimed`: the capture was already taken off `capture` (a new press during the tail).
+    private func finish(_ c: Capture, end: Int, claimed: Bool = false) async {
+        guard claimed || capture?.id == c.id else { return }
+        if !claimed {
+            capture = nil
+            phase = .transcribing
+        }
+        lastCaptureEnd = max(lastCaptureEnd, end)
         let clip = ring.samples(from: c.start, to: end)
         var text = ""
         if clip.count >= timing.minClipSamples {
@@ -564,6 +582,7 @@ public actor Listener {
     private func tooLong(_ c: Capture) async {
         guard capture?.id == c.id else { return }
         capture = nil
+        lastCaptureEnd = ring.total
         await dropSegment()
         var heard = true
         if c.trigger == .wake, !c.commandPhase {

@@ -581,17 +581,40 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         await l.hotkeyDown()
         #expect(await eventually { await observer.events == ["began"] })
         await input.push([1, 1])
-        try? await Task.sleep(for: .milliseconds(20))   // the chunks arrive
+        #expect(await eventually { await l.capturedSamples == 2 * 4096 })
         await l.hotkeyUp()
         await l.hotkeyDown()   // inside the tail
         try? await Task.sleep(for: .milliseconds(200))   // well before the tail would end
         #expect(await heard.items.map(\.text) == ["run the tests"])
         #expect(await observer.events == ["began", "ended", "began"])
         await input.push([1, 1])
-        try? await Task.sleep(for: .milliseconds(20))
+        #expect(await eventually { await l.capturedSamples == 4 * 4096 })
         await l.hotkeyUp()
         #expect(await eventually { await heard.items.count == 2 })
         #expect(await observer.events == ["began", "ended", "began", "ended"])
+    }
+
+    /// Two commands never share audio: the second starts where the first ended, not 0.3 s before.
+    @Test func aSecondCommandDoesNotReuseTheFirstOnesAudio() async {
+        var timing = Listener.Timing.forTests
+        timing.releaseTail = .milliseconds(600)
+        let st = ScriptTranscriber(fixed: "words")
+        let l = await make(timing, transcriber: st)
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([1, 1])
+        #expect(await eventually { await l.capturedSamples == 2 * 4096 })
+        await l.hotkeyUp()
+        await l.hotkeyDown()   // inside the tail
+        #expect(await eventually { await observer.events == ["began", "ended", "began"] })
+        await input.push([3, 3])
+        #expect(await eventually { await l.capturedSamples == 4 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 2 })
+        let clips = await st.clips
+        #expect(clips.count == 2)
+        #expect(clips[1].allSatisfy { $0 == 3 })   // none of the first command's audio
+        #expect(clips[1].count == 2 * 4096)
     }
 
     @Test func armingDuringAGiveUpStopStillOpensTheMic() async {
