@@ -321,12 +321,14 @@ public actor ParakeetTranscriber: Transcriber {
         idleTask?.cancel()
         idleTask = nil
         boosting = nil
-        await CtcShared.shared.release(.boosting)   // freed unless the wake word spotter holds it
-        guard let old = asr else { return }
-        log.info("unloaded the transcriber")
-        asr = nil
-        await flight.clear()
-        await old.cleanup()   // releases FluidAudio's shared cache too
+        if let old = asr {
+            log.info("unloaded the transcriber")
+            asr = nil
+            await flight.clear()
+            await old.cleanup()   // releases FluidAudio's shared cache too
+        }
+        // The CTC model is freed unless the wake word spotter holds it, or a command since made a new boost.
+        if boosting == nil { await CtcShared.shared.release(.boosting) }
     }
 
     private func loaded() async throws -> AsrManager {
