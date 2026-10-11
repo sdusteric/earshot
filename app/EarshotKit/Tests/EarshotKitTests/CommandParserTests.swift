@@ -13,6 +13,15 @@ actor FakeModel: CommandModel {
     func parse(_ text: String, sessions: [String]) async -> Command? { asked.append(text); return answer }
 }
 
+actor SlowCommandModel: CommandModel {
+    var isAvailable: Bool { true }
+    func prewarm(sessions: [String]) async {}
+    func parse(_ text: String, sessions: [String]) async -> Command? {
+        try? await Task.sleep(for: .seconds(5))
+        return .status(target: nil)
+    }
+}
+
 @Suite struct CommandParserTests {
     @Test func theGrammarWinsWithoutAskingTheModel() async {
         let model = FakeModel(answer: .unknown)
@@ -110,5 +119,24 @@ actor FakeModel: CommandModel {
         #expect(await CommandParser(model: deny).parse("billing, cancel", sessions: ["billing"]) == .unknown)
         #expect(await CommandParser(model: deny).parse("no billing", sessions: ["billing"])
                 == .answer(allow: false, target: "billing"))
+    }
+
+    /// "Hold on a second" must not stop the only session.
+    @Test func aModelStopNeedsAStopWord() async {
+        let stop = FakeModel(answer: .stop(target: nil, now: false))
+        #expect(await CommandParser(model: stop).parse("hold on a second", sessions: ["billing"]) == .unknown)
+        #expect(await CommandParser(model: stop).parse("could you pause for a moment", sessions: ["billing"])
+                == .stop(target: nil, now: false))
+        let named = FakeModel(answer: .stop(target: "billing", now: false))
+        #expect(await CommandParser(model: named).parse("billing should hold off for now", sessions: ["billing"]) == .unknown)
+        #expect(await CommandParser(model: named).parse("billing should wait for now", sessions: ["billing"])
+                == .stop(target: "billing", now: false))
+    }
+
+    @Test func aSlowModelGivesUpAfterItsLimit() async {
+        let p = CommandParser(model: SlowCommandModel(), timeout: .milliseconds(50))
+        let start = ContinuousClock.now
+        #expect(await p.parse("Could billing maybe run the tests.", sessions: ["billing"]) == .unknown)
+        #expect(ContinuousClock.now - start < .seconds(1))
     }
 }

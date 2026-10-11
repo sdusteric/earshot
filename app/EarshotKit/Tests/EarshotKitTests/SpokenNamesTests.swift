@@ -89,6 +89,21 @@ import Testing
         #expect(await none.label(session: "s", title: "Create guest confirmation email with event details") == "guest confirmation email")
     }
 
+    struct SlowModel: LabelModel {
+        func label(for title: String) async -> String? {
+            try? await Task.sleep(for: .seconds(5))
+            return "voice orchestrator"
+        }
+    }
+
+    /// The directory awaits each label, so a stuck model must not hold up a refresh.
+    @Test func aSlowModelFallsBackToTheRuleInTime() async {
+        let l = Labeler(model: SlowModel(), liveDir: NSTemporaryDirectory(), timeout: .milliseconds(50))
+        let start = ContinuousClock.now
+        #expect(await l.label(session: "s", title: "Create guest confirmation email with event details") == "guest confirmation email")
+        #expect(ContinuousClock.now - start < .seconds(1))
+    }
+
     /// The plugin keeps line 3 while the title is the same.
     @Test func theLabelIsWrittenToThePluginsLiveFile() async throws {
         let dir = NSTemporaryDirectory() + "ek-live-\(UUID().uuidString.prefix(6))"

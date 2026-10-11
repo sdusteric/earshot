@@ -31,11 +31,15 @@ public struct FoundationLabelModel: LabelModel {
 public actor Labeler {
     private let model: (any LabelModel)?
     private let liveDir: String
+    /// How long the model may take before the rule label is used.
+    private let timeout: Duration
     private var cache: [String: String] = [:]
 
-    public init(model: (any LabelModel)?, liveDir: String = ApprovalBook.defaultStateDir + "/live") {
+    public init(model: (any LabelModel)?, liveDir: String = ApprovalBook.defaultStateDir + "/live",
+                timeout: Duration = .seconds(3)) {
         self.model = model
         self.liveDir = liveDir
+        self.timeout = timeout
     }
 
     public func label(session: String, title: String) async -> String {
@@ -46,7 +50,7 @@ public actor Labeler {
         var label: String
         if SpokenNames.ruleLabel(title) == plain {
             label = SpokenNames.ruleLabel(title)
-        } else if let m = await model?.label(for: title), Self.usable(m) {
+        } else if let model, let m = await bounded(timeout, String?.none, { await model.label(for: title) }), Self.usable(m) {
             label = m.trimmingCharacters(in: .whitespacesAndNewlines)
             writeLiveLabel(session: session, title: title, label: label)
         } else {

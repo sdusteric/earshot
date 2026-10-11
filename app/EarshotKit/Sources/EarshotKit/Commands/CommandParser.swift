@@ -13,12 +13,19 @@ public protocol CommandModel: Sendable {
 
 public struct CommandParser: Sendable {
     let model: (any CommandModel)?
+    /// How long the model may take before the command counts as not understood.
+    let timeout: Duration
 
-    public init(model: (any CommandModel)?) { self.model = model }
+    public init(model: (any CommandModel)?, timeout: Duration = .seconds(2)) { self.model = model; self.timeout = timeout }
 
     public func parse(_ text: String, sessions: [String]) async -> Command {
         if let c = Grammar.parse(text, known: sessions) { return c }
-        guard let model, await model.isAvailable, let c = await model.parse(text, sessions: sessions) else { return .unknown }
+        guard let model else { return .unknown }
+        let answer = await bounded(timeout, Command?.none) {
+            guard await model.isAvailable else { return nil }
+            return await model.parse(text, sessions: sessions)
+        }
+        guard let c = answer else { return .unknown }
         return Self.accept(c, heard: text)
     }
 
@@ -33,8 +40,11 @@ public struct CommandParser: Sendable {
             return backed([target, prompt], by: said) ? c : .unknown
         case .start(let project, let prompt):
             return backed([project, prompt], by: said) ? c : .unknown
-        case .status(let target), .stop(let target, _):
+        case .status(let target):
             return backed([target], by: said) ? c : .unknown
+        case .stop(let target, _):
+            // "Hold on a second" is not a stop: one of the stop words must have been said.
+            return backed([target], by: said) && said.contains(where: saysStop) ? c : .unknown
         case .answer(_, let target):
             guard backed([target], by: said) else { return .unknown }
             let targetWords = Set(Grammar.Words(target ?? "").keys)
@@ -46,6 +56,13 @@ public struct CommandParser: Sendable {
         case .unknown:
             return .unknown
         }
+    }
+
+    static let stopWords = ["stop", "halt", "pause", "wait", "cancel", "interrupt", "kill", "end"]
+
+    /// A stop word, or one of its forms ("stopping", "paused", "cancelled").
+    static func saysStop(_ w: String) -> Bool {
+        stopWords.contains { w == $0 || (w.hasPrefix($0) && w.count <= $0.count + 3) }
     }
 
     /// Words that count as said: letters and digits, lowercased.
