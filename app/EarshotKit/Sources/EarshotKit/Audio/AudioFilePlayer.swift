@@ -14,19 +14,34 @@ public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
     public init(volume: Float = 1) { self.volume = volume }
 
     public func play(_ url: URL) async -> Bool {
-        let p: AVAudioPlayer
-        do {
-            p = try AVAudioPlayer(contentsOf: url)
-        } catch {
-            log.error("couldn't play \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        // Opening and starting the player can block inside Core Audio (seen
+        // while a Bluetooth headset switches mode), so both run on a dispatch
+        // thread, never on Swift's shared concurrency threads. SpeechOut gives
+        // up on a line that takes too long.
+        let volume = self.volume
+        lock.withLock { stopped = false }   // a stop from here on counts, even before the start
+        let started: AVAudioPlayer? = await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let p = try? AVAudioPlayer(contentsOf: url) else {
+                    cont.resume(returning: nil)
+                    return
+                }
+                p.volume = volume
+                cont.resume(returning: p.play() ? p : nil)
+            }
+        }
+        guard let p = started else {
+            log.error("couldn't play \(url.lastPathComponent, privacy: .public)")
             return true   // nothing to wait for; the queue moves on
         }
-        p.volume = volume
-        lock.withLock {
+        let stoppedEarly = lock.withLock {
             player = p
-            stopped = false
+            return stopped
         }
-        guard p.play() else { return true }
+        if stoppedEarly {
+            p.stop()
+            return false
+        }
         while true {
             try? await Task.sleep(for: .milliseconds(50))
             let (playing, wasStopped) = lock.withLock { (p.isPlaying, stopped) }

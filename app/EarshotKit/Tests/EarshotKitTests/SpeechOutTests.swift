@@ -24,10 +24,17 @@ final class FakeMic: MicSource, @unchecked Sendable {
 actor FakePlayer: LinePlayer {
     private(set) var played: [String] = []
     private var blocking: Bool
+    private let hangs: Bool
     private var waiter: CheckedContinuation<Bool, Never>?
-    init(blocking: Bool = false) { self.blocking = blocking }
+    /// hangs: play never returns and stop does nothing, like a playback
+    /// start that blocks inside Core Audio.
+    init(blocking: Bool = false, hangs: Bool = false) { self.blocking = blocking; self.hangs = hangs }
     func play(_ url: URL) async -> Bool {
         played.append(url.lastPathComponent)
+        if hangs {
+            try? await Task.sleep(for: .seconds(3600))
+            return true
+        }
         guard blocking else { return true }
         return await withCheckedContinuation { waiter = $0 }
     }
@@ -68,13 +75,12 @@ actor FakeDucker: Ducking {
         }
     }
 
-    @Test func playsInOrderAndDucksOncePerRun() async {
+    @Test func playsInOrderAndEndsDuckingOncePerRun() async {
         let player = FakePlayer()
         let s = await make(player)
         await s.enqueue(line("one")); await s.enqueue(line("two"))
         await s.waitUntilIdle()
         #expect(await player.played == ["one", "two"])
-        #expect(await ducker.begins == 1)
         #expect(await ducker.ends == 1)
     }
 
@@ -142,6 +148,27 @@ actor FakeDucker: Ducking {
         mic.set(false)
         await eventually { await player.played == ["done"] }
         #expect(await player.played == ["done"])
+    }
+
+    @Test func aLineThatNeverFinishesIsAbandonedAndDuckingEnds() async {
+        let player = FakePlayer(hangs: true)
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: ducker, answered: { _ in false },
+                          settle: .milliseconds(30), lineTimeout: .milliseconds(100))
+        await s.start()
+        await s.enqueue(line("one", .done, "a")); await s.enqueue(line("two", .done, "b"))
+        await eventually { await ducker.ends == 1 }
+        #expect(await player.played == ["one", "two"])
+        #expect(await ducker.ends == 1)
+        #expect(await s.state == .idle)
+    }
+
+    @Test func eachLineRenewsTheDucking() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        await s.enqueue(line("one")); await s.enqueue(line("two")); await s.enqueue(line("three"))
+        await s.waitUntilIdle()
+        #expect(await ducker.begins == 3)
+        #expect(await ducker.ends == 1)
     }
 
     @Test func aBriefMicBlipDoesNotStartTheCatchUp() async {

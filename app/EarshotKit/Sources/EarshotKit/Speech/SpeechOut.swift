@@ -24,6 +24,19 @@ public protocol Ducking: Sendable {
     func end() async
 }
 
+/// True for the first caller only.
+final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.withLock {
+            if done { return false }
+            done = true
+            return true
+        }
+    }
+}
+
 /// The one speaker all sessions share: lines take turns, wait while another
 /// app uses the mic, and are said in a catch-up afterwards.
 public actor SpeechOut {
@@ -39,6 +52,7 @@ public actor SpeechOut {
     private let answered: @Sendable (SpokenLine) -> Bool
     private let settle: Duration
     private let maxWait: TimeInterval
+    private let lineTimeout: Duration
     private let clock: @Sendable () -> Date
 
     private var queue: [SpokenLine] = []
@@ -56,10 +70,11 @@ public actor SpeechOut {
 
     public init(synth: any Synthesizer, player: any LinePlayer, mic: any MicSource, ducker: any Ducking,
                 answered: @escaping @Sendable (SpokenLine) -> Bool = SpokenLine.transcriptAnswered,
-                settle: Duration = .seconds(4), maxWait: TimeInterval = 60,
+                settle: Duration = .seconds(4), maxWait: TimeInterval = 60, lineTimeout: Duration = .seconds(30),
                 clock: @escaping @Sendable () -> Date = Date.init) {
         self.synth = synth; self.player = player; self.mic = mic; self.ducker = ducker
-        self.answered = answered; self.settle = settle; self.maxWait = maxWait; self.clock = clock
+        self.answered = answered; self.settle = settle; self.maxWait = maxWait
+        self.lineTimeout = lineTimeout; self.clock = clock
     }
 
     /// Starts following the mic. Later calls do nothing.
@@ -129,11 +144,23 @@ public actor SpeechOut {
             let url = await synth.audio(for: line) ?? Self.errorTone
             // A call may have started while the audio was made.
             if line.kind != .roll, await mic.isBusy { hold(line); continue }
-            if !ducked { await ducker.begin(); ducked = true }
+            // Every line renews the ducking, so its safety cap never cuts a long run short.
+            await ducker.begin()
+            ducked = true
             interrupted = false
             playing = true
             state = .speaking
-            let finished = await player.play(url)
+            let finished: Bool
+            if let done = await playWithTimeout(url) {
+                finished = done
+            } else {
+                // Playback did not finish in time, for example a start that hangs
+                // inside Core Audio while a headset switches mode. Move on, so the
+                // queue and the ducking never stay stuck.
+                log.error("a line did not finish in time; skipped it")
+                await player.stop()
+                finished = true
+            }
             playing = false
             if !finished && interrupted {
                 // A call started mid-line: say this line and the rest later.
@@ -148,6 +175,24 @@ public actor SpeechOut {
         let waiters = idleWaiters
         idleWaiters.removeAll()
         waiters.forEach { $0.resume() }
+    }
+
+    /// The player's result, or nil when it took longer than lineTimeout. A
+    /// player stuck in a blocking call is left behind; it cannot hold the queue.
+    private func playWithTimeout(_ url: URL) async -> Bool? {
+        let player = self.player
+        let timeout = lineTimeout
+        let once = Once()
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool?, Never>) in
+            Task {
+                let result = await player.play(url)
+                if once.claim() { cont.resume(returning: result) }
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                if once.claim() { cont.resume(returning: nil) }
+            }
+        }
     }
 
     private func micChanged(_ busy: Bool) async {

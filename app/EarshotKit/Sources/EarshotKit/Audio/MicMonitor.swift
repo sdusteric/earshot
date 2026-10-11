@@ -31,7 +31,16 @@ public final class MicMonitor: MicSource, @unchecked Sendable {
         !ignored.contains { !bundleID.isEmpty && bundleID.hasPrefix($0) }
     }
 
-    public var isBusy: Bool { get async { queue.sync { busy } } }
+    /// Asks Core Audio now. Change notifications can arrive a second or more
+    /// after an app starts capturing, so decisions never rely on them alone.
+    public var isBusy: Bool {
+        get async {
+            queue.sync {
+                refresh()
+                return busy
+            }
+        }
+    }
 
     public func changes() -> AsyncStream<Bool> {
         let (stream, cont) = AsyncStream<Bool>.makeStream()
