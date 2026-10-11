@@ -104,6 +104,22 @@ import Testing
         #expect(await eventually { !(await t.isLoaded) })
     }
 
+    @Test func anUnloadDuringATranscriptionWaitsForIt() async throws {
+        let t = ParakeetTranscriber(idle: .milliseconds(30), load: { AsrManager(config: .default) }, run: { _, _ in
+            try await Task.sleep(for: .milliseconds(150))
+            return ASRResult(text: "run the tests", confidence: 1, duration: 1, processingTime: 0.1)
+        })
+        let unloads = Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            await t.unload()   // as the idle timer or memory pressure would
+        }
+        let text = try await t.transcribe([0, 0, 0], vocabulary: [])
+        #expect(text == "run the tests")
+        #expect(await t.isLoaded)   // still there right after: the unload was skipped
+        await unloads.value
+        #expect(await eventually { !(await t.isLoaded) })   // and the idle timer unloads it after
+    }
+
     @Test func theGateLoadsItselfOnTheFirstChunkAndDoesNotRetryAtOnce() async {
         let n = LoadCounter()
         let g = SileroGate(retryAfter: .seconds(60)) { _ = await n.next(); throw LoadFailed() }

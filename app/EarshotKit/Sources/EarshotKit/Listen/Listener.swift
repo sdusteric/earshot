@@ -177,8 +177,10 @@ public actor Listener {
         holdTask = nil
         if let c = capture, c.trigger == .hotkey {
             ring.append(chunker.drain())
-            await finish(c, end: ring.total)
+            // Hotkey chunks skipped the gate, so reset it first: that clears stale VAD
+            // state without wiping a wake segment that starts during the transcription.
             await dropSegment()
+            await finish(c, end: ring.total)
         } else {
             await closeMicIfIdle()
             settlePhase()
@@ -210,6 +212,7 @@ public actor Listener {
         let c = Capture(trigger: .followUp(f), start: ring.total, waitingForSpeech: true)
         capture = c
         phase = .capturing(c.trigger)
+        startPrewarm()   // the model may have unloaded since the last command
         await observer?.captureBegan(c.trigger)
         scheduleTimeout(c.id, after: within ?? timing.followUp)
         await chimes.play(.listening)

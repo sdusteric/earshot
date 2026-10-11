@@ -225,6 +225,12 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await gate.resets > before)
     }
 
+    @Test func aFollowUpWindowPrewarmsTheTranscriber() async {
+        let l = await make()
+        await l.listenFollowUp(.reply)
+        #expect(await eventually { await transcriber.prewarms == 1 })
+    }
+
     @Test func speechWithoutTheWakePhraseIsIgnored() async {
         let l = await make()
         await l.setWakeArmed(true)

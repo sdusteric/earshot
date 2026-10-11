@@ -218,13 +218,23 @@ public actor ParakeetTranscriber: Transcriber {
     private var idleTask: Task<Void, Never>?
     private var pressure: DispatchSourceMemoryPressure?
     private let idle: Duration
+    private let run: @Sendable (AsrManager, [Float]) async throws -> ASRResult
+    /// Transcriptions in progress: the model is not unloaded under them.
+    private var busy = 0
     private let log = Logger(subsystem: "com.earshot.app", category: "transcriber")
 
-    public init() { self.init(idle: .seconds(600), load: ParakeetTranscriber.loadModels) }
+    public init() { self.init(idle: .seconds(600), load: ParakeetTranscriber.loadModels, run: ParakeetTranscriber.recognize) }
 
-    init(idle: Duration, load: @escaping @Sendable () async throws -> AsrManager) {
+    init(idle: Duration, load: @escaping @Sendable () async throws -> AsrManager,
+         run: @escaping @Sendable (AsrManager, [Float]) async throws -> ASRResult = ParakeetTranscriber.recognize) {
         self.idle = idle
+        self.run = run
         flight = SingleFlight(load)
+    }
+
+    @Sendable static func recognize(_ asr: AsrManager, _ samples: [Float]) async throws -> ASRResult {
+        var decoder = TdtDecoderState.make()
+        return try await asr.transcribe(samples, decoderState: &decoder)
     }
 
     @Sendable static func loadModels() async throws -> AsrManager {
@@ -238,21 +248,24 @@ public actor ParakeetTranscriber: Transcriber {
     var loads: Int { get async { await flight.loads } }
 
     public func prewarm() async {
+        idleTask?.cancel()
         guard (try? await loaded()) != nil else { return }
         scheduleUnload()   // a prewarm that no transcribe follows must not keep the model
     }
 
     public func transcribe(_ samples: [Float], vocabulary: [String]) async throws -> String {
-        defer { scheduleUnload() }
+        idleTask?.cancel()
+        busy += 1
+        defer { busy -= 1; scheduleUnload() }
         let asr = try await loaded()
-        var decoder = TdtDecoderState.make()
-        let result = try await asr.transcribe(samples, decoderState: &decoder)
+        let result = try await run(asr, samples)
         guard !vocabulary.isEmpty, !result.text.isEmpty, let timings = result.tokenTimings else { return result.text }
         let session = try await boostingSession(vocabulary)
         return await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text ?? result.text
     }
 
     public func unload() async {
+        guard busy == 0 else { return }   // the idle timer or memory pressure came during a transcription
         idleTask?.cancel()
         idleTask = nil
         boosting = nil
