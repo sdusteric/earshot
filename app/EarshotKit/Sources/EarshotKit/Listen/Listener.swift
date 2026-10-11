@@ -110,6 +110,8 @@ public actor Listener {
     private var sensitivity = 5
     private var vocabulary: [String] = []
     private var segmentStart: Int?
+    /// The segment began while Earshot said the wake phrase (or just after): its own voice.
+    private var segmentOwn = false
     private var spotted = false
     private var capture: Capture?
     private var hotkeyHeld = false
@@ -461,6 +463,7 @@ public actor Listener {
             // The VAD fires a little after speech starts: include the chunk before.
             segmentStart = max(ring.oldest, ring.total - 2 * chunk.count)
             spotted = false
+            segmentOwn = ownVoiceWake   // a short line is spotted at its end, after Earshot went quiet
             if var c = capture, c.waitingForSpeech, let s = segmentStart {
                 c.start = max(c.start, s)   // never reach back before the window opened
                 c.waitingForSpeech = false
@@ -483,7 +486,7 @@ public actor Listener {
             let window = ring.samples(from: s, to: s + timing.spotWindowSamples)
             let ownBefore = ownVoiceWake
             let woke = await spotter.heardWake(window, sensitivity: sensitivity)
-            if woke, ownBefore || ownVoiceWake {
+            if woke, segmentOwn || ownBefore || ownVoiceWake {
                 // Earshot said the wake phrase itself (a session named "earshot"): not a wake, no barge-in.
                 falseWakes += 1
             } else if woke, capture == nil, !refused, micOpen {

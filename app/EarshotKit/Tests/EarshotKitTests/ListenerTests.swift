@@ -743,6 +743,25 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await l.falseWakes == 1)
     }
 
+    /// A short line is spotted only when its segment ends, which can be over a second after it.
+    @Test func aShortLineWithThePhraseIsIgnoredWhenItsSegmentEndsLater() async {
+        var timing = Listener.Timing.forTests
+        timing.ownWakeGrace = .milliseconds(20)
+        let l = await make(timing)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Earshot finished.")
+        await input.push([2])
+        try? await Task.sleep(for: .milliseconds(30))
+        await l.setSpeaking(nil)
+        try? await Task.sleep(for: .milliseconds(60))   // past the grace
+        await input.push([0, 0])
+        #expect(await eventually { await spotter.calls == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await observer.events.isEmpty)
+        #expect(await l.falseWakes == 1)
+    }
+
     /// The spec: the wake word stops the line that is playing.
     @Test func aWakeDuringAnotherLineBargesIn() async {
         let l = await make()
