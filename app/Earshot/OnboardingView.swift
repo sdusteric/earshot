@@ -3,13 +3,20 @@ import SwiftUI
 
 /// First launch, in the spec's order: what Earshot does, the voice, the
 /// mic and the wake word, the hotkey, the speech models, lowering other
-/// audio, and a first command.
+/// audio, and a first command. Someone who finished an older onboarding
+/// sees only the listening steps, once.
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismissWindow) private var dismissWindow
     @AppStorage("onboarded") private var onboarded = false
-    @State private var step = 0
-    static let last = 6
+    @AppStorage("onboardingVersion") private var onboardingVersion = 0
+    @State private var plan: [OnboardingStep] = []
+    @State private var index = 0
+
+    private var steps: [OnboardingStep] { plan.isEmpty ? OnboardingStep.allCases : plan }
+    private var step: OnboardingStep { steps[min(index, steps.count - 1)] }
+    private var isLast: Bool { index >= steps.count - 1 }
+    private var upgrading: Bool { steps.first == .mic }
 
     private var keyName: String? {
         switch model.config.hotkey {
@@ -21,15 +28,18 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if upgrading, index == 0 {
+                Text("New: Earshot can listen. Set it up in a few steps.").foregroundStyle(.secondary)
+            }
             switch step {
-            case 0:
+            case .intro:
                 Text("Earshot reads Claude Code updates aloud, and takes commands by voice").font(.title2.bold())
                 Text("It tells you when a session needs your OK, might be stuck, or finishes. Say \u{201C}Hey Earshot\u{201D} or hold a key to send a session a prompt, ask what everyone is doing, stop a session, start one, or answer a permission prompt with yes or no.")
-            case 1:
+            case .voice:
                 Text("Voice").font(.title2.bold())
                 Text("Earshot uses the voice you set up with the plugin: \(model.config.engine.rawValue). You can change it in Settings.")
                 Button("Play a Test Line") { model.playTestLine() }
-            case 2:
+            case .mic:
                 Text("Microphone and wake word").font(.title2.bold())
                 Text("Earshot hears you on this Mac only. Audio is kept in memory for a few seconds and never saved or sent.")
                 if model.micAllowed {
@@ -41,7 +51,7 @@ struct OnboardingView: View {
                        isOn: Binding(get: { model.config.wakeWord },
                                      set: { on in model.save { $0.set("EARSHOT_WAKE", on ? "on" : "off") } }))
                     .disabled(!model.micAllowed)
-            case 3:
+            case .hotkey:
                 Text("Hold to talk").font(.title2.bold())
                 if let key = keyName {
                     Text("Hold \(key), say the command, and let go. A quick tap or \(key) with another key does nothing. macOS asks to allow Input Monitoring so Earshot can see that key.")
@@ -53,7 +63,7 @@ struct OnboardingView: View {
                 } else {
                     Text("The hold-to-talk hotkey is off. You can turn it on in Settings, under Listening.")
                 }
-            case 4:
+            case .models:
                 Text("Speech models").font(.title2.bold())
                 Text("Listening needs about 1 GB of speech models, downloaded once. Earshot keeps speaking while they download.")
                 switch model.modelState {
@@ -62,7 +72,7 @@ struct OnboardingView: View {
                 case .missing: Button("Download") { model.downloadModels() }
                 case .failed: Button("Try Again") { model.downloadModels() }
                 }
-            case 5:
+            case .ducking:
                 Text("Lower other audio").font(.title2.bold())
                 Text("While Earshot talks or listens, it can turn music and videos down to \(Int(model.config.duckLevel * 100))%. macOS will ask for permission to capture system audio. Earshot only plays other apps back quieter; it never records or saves their audio.")
                 Toggle("Lower other apps while Earshot talks",
@@ -70,7 +80,7 @@ struct OnboardingView: View {
                                      set: { on in model.save { $0.set("EARSHOT_DUCK", on ? nil : "off") } }))
                 Toggle("Open Earshot when you log in",
                        isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
-            default:
+            case .tryIt:
                 Text("Try it").font(.title2.bold())
                 if model.config.wakeWord {
                     Text("Say: \u{201C}Hey Earshot, what's everyone doing?\u{201D}")
@@ -83,14 +93,15 @@ struct OnboardingView: View {
             }
             Spacer()
             HStack {
-                if step > 0 { Button("Back") { step -= 1 } }
+                if index > 0 { Button("Back") { index -= 1 } }
                 Spacer()
-                Button(step < Self.last ? "Continue" : "Done") {
-                    if step < Self.last {
-                        if step == 5, model.config.duckEnabled { model.playTestLine() }   // the first tap: macOS asks now
-                        step += 1
+                Button(isLast ? "Done" : "Continue") {
+                    if !isLast {
+                        if step == .ducking, model.config.duckEnabled { model.playTestLine() }   // the first tap: macOS asks now
+                        index += 1
                     } else {
                         onboarded = true
+                        onboardingVersion = Onboarding.version
                         dismissWindow(id: "onboarding")
                     }
                 }
@@ -99,6 +110,9 @@ struct OnboardingView: View {
         }
         .padding(24)
         .frame(width: 480, height: 320)
+        .onAppear {
+            if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
+        }
         .permissionRefresh(model)
     }
 }

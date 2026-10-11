@@ -97,3 +97,15 @@ import Testing
         }
     }
 }
+
+@Suite struct OnboardingTests {
+    @Test func aNewUserSeesEveryStep() {
+        #expect(Onboarding.steps(onboarded: false, storedVersion: 0) == OnboardingStep.allCases)
+    }
+
+    /// Finished the onboarding before listening existed: only the listening steps, once.
+    @Test func anUpgraderSeesOnlyTheListeningSteps() {
+        #expect(Onboarding.steps(onboarded: true, storedVersion: 0) == [.mic, .hotkey, .models, .tryIt])
+        #expect(Onboarding.steps(onboarded: true, storedVersion: Onboarding.version).isEmpty)
+    }
+}
