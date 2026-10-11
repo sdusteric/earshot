@@ -34,6 +34,9 @@ final class AppModel {
     @ObservationIgnored private let watch = SystemWatch()
     @ObservationIgnored private var hotkeyTap: HotkeyTap?
     @ObservationIgnored private var micInUse = false
+    /// Sessions `claude agents` lists: the plugin is silent while /voice is off or muted.
+    @ObservationIgnored private var directorySessions = 0
+    @ObservationIgnored private var lastDirectoryCheck: Date?
     @ObservationIgnored private var wakeLoaded = false
     @ObservationIgnored private var lastWakeLoad: Date?
     /// Frees the wake word model once the wake word has been off or blocked for 10 minutes.
@@ -81,6 +84,13 @@ final class AppModel {
             Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
+            // A session opened while the plugin is silent arms the wake word within a minute.
+            Task {
+                while true {
+                    try? await Task.sleep(for: .seconds(60))
+                    if listenBlock == .noSessions { await listeningChanged() }
+                }
+            }
             Task {
                 for await busy in live.mic.changes() {
                     micInUse = busy
@@ -148,10 +158,17 @@ final class AppModel {
         guard let stack else { return }
         let c = configBox.value
         micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        let i = listenInputs(c)
+        var i = listenInputs(c)
         core?.availability.canListen = ListenPolicy.canListen(i)
         // Locked, asleep or without the mic: no approval window or hotkey may open it.
         await stack.listener.setBlocked(ListenPolicy.commandBlock(i) != nil)
+        // At most once a minute: a failing `claude agents` is not cached by the directory.
+        if stack.claudePath != nil, lastDirectoryCheck.map({ Date().timeIntervalSince($0) >= 60 }) ?? true {
+            lastDirectoryCheck = Date()
+            await stack.directory.refresh(ifOlderThan: 60)
+        }
+        directorySessions = await stack.directory.sessions.count
+        i = listenInputs(c)
         listenBlock = ListenPolicy.wakeBlock(i)
         hotkeyTap?.setHotkey(c.hotkey)
         await stack.listener.setSensitivity(c.wakeSensitivity)
@@ -201,7 +218,7 @@ final class AppModel {
         i.locked = watch.state.locked
         i.asleep = watch.state.asleep
         i.micInUse = micInUse
-        i.liveSessions = sessions.count
+        i.liveSessions = max(sessions.count, directorySessions)
         i.hotkey = c.hotkey
         return i
     }

@@ -8,7 +8,7 @@ public struct ListenInputs: Sendable, Equatable {
     public var battery: EarshotConfig.WakeBattery = .lowpower
     public var onBattery = false
     public var lowPower = false
-    /// Open Claude Code sessions the plugin reported.
+    /// Open Claude Code sessions: as many as the plugin or `claude agents` knows, whichever is more.
     public var liveSessions = 0
     public var locked = false
     public var asleep = false
