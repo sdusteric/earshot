@@ -208,6 +208,17 @@ actor FakeTransport: SessionTransport {
         #expect(await d.reply("docs", to: p) == Dispatcher.Outcome())
     }
 
+    @Test func aLateChoiceOfTheClosedPromptSaysNothingAndWritesNothing() async {
+        let (d, _, book) = make([agent("s1", "billing-service"), agent("s2", "docs")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        await book.apply(approval("s2", "2-2-2", "docs"))
+        guard let p = await d.run(.answer(allow: true, target: nil)).pending else { Issue.record("no question"); return }
+        _ = await book.answer("2-2-2", allow: true)
+        #expect(await d.reply("docs", to: p) == Dispatcher.Outcome())
+        #expect(await book.current.map(\.id) == ["1-1-1"])
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+    }
+
     // MARK: Status, stop, start
 
     @Test func statusForEveryoneIsTheRollCall() async {

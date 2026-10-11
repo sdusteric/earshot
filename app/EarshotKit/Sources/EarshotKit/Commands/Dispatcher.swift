@@ -87,6 +87,8 @@ public actor Dispatcher {
             let open = await approvals.current.filter { ids.contains($0.id) }
             if open.isEmpty { return Outcome() }
             let hits = open.filter { NameMatch.score(text, $0.name) >= SessionDirectory.threshold }
+            // The named prompt closed since the question (answered on screen): a late answer says nothing.
+            if hits.isEmpty, open.count < ids.count { return Outcome() }
             guard hits.count == 1 else { return Outcome(line: "I didn't catch which one.") }
             return await write(hits[0], allow: allow)
         }

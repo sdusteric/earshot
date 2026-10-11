@@ -130,7 +130,6 @@ public actor SessionDirectory {
         let r = await runner.run(["agents", "--json"], cwd: nil, timeout: .seconds(3))
         let succeeded = r.status == 0 && !r.timedOut
             && (try? JSONSerialization.jsonObject(with: r.stdout)) is [Any]
-        lastRefreshSucceeded = succeeded
         let agents = succeeded ? AgentEntry.decodeList(r.stdout) : []
         let previous = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let reported = Dictionary(await store.sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -153,12 +152,13 @@ public actor SessionDirectory {
             let label = title.isEmpty ? "" : await labeler.label(session: id, title: title)
             merged.append(LiveSession(id: id, pid: old?.pid, kind: old?.kind ?? "unknown", cwd: old?.cwd ?? "", project: info.project ?? info.name,
                                       title: title, label: label, name: info.name, busy: info.state == .working,
-                                      waiting: info.state == .needs || info.state == .reply, state: info.state,
+                                      waiting: info.state == .needs, state: info.state,
                                       detail: info.detail, since: info.updated))
         }
         let names = SpokenNames.names(merged.map { .init(id: $0.id, project: $0.project, title: $0.title, label: $0.label) })
         for i in merged.indices { merged[i].name = names[merged[i].id] ?? merged[i].project }
         list = merged
+        lastRefreshSucceeded = succeeded
         if succeeded { refreshedAt = clock() }
     }
 

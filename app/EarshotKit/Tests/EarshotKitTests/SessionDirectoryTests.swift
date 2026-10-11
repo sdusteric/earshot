@@ -60,6 +60,17 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         #expect(names == ["blog", "the Fix refund rounding session", "the Invoice export session"])
     }
 
+    @Test func aReplyStateIsNotWaitingInTheFallbackList() async {
+        await store.apply(.init(session: "a", state: .reply, detail: "asked", name: "billing service"))
+        let (d, runner) = await directory([agent("a", "billing-service")])
+        await runner.setFail(true)
+        await d.refresh()
+        #expect(await d.lastRefreshSucceeded == false)
+        let s = await d.session("a")
+        #expect(s?.state == .reply)
+        #expect(s?.waiting == false)
+    }
+
     @Test func thePluginsStatusAndTitleWin() async {
         await store.apply(.init(session: "a", state: .needs, detail: "needs your OK to run the migration",
                                 name: "billing service", project: "billing service", title: "Refund rounding"))
