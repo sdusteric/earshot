@@ -71,4 +71,32 @@ actor FakeModel: CommandModel {
         #expect(target?.lowercased().contains("billing") == true)
         #expect(prompt.lowercased().contains("integration tests"))
     }
+
+    // Round 1 (M1): the model may only use words the user said.
+    @Test func modelWordsMustBeHeard() async {
+        let heard = "could billing run the integration tests again"
+        let sessions = ["billing service", "blog"]
+        let grounded = FakeModel(answer: .send(target: "billing", prompt: "run the integration tests"))
+        #expect(await CommandParser(model: grounded).parse(heard, sessions: sessions)
+                == .send(target: "billing", prompt: "run the integration tests"))
+        let invented = FakeModel(answer: .send(target: "billing", prompt: "deploy to production"))
+        #expect(await CommandParser(model: invented).parse(heard, sessions: sessions) == .unknown)
+        let wrongTarget = FakeModel(answer: .send(target: "payments", prompt: "run the integration tests"))
+        #expect(await CommandParser(model: wrongTarget).parse(heard, sessions: sessions) == .unknown)
+    }
+
+    // Round 1 (M2): a model approval counts only when the transcript holds a clear approval word.
+    @Test func modelApprovalNeedsAClearWord() async {
+        let stray = FakeModel(answer: .answer(allow: true, target: nil))
+        #expect(await CommandParser(model: stray).parse("yes but use the other file instead of this", sessions: [])
+                == .unknown)
+        let yes = FakeModel(answer: .answer(allow: true, target: "billing"))
+        #expect(await CommandParser(model: yes).parse("yeah billing", sessions: ["billing"])
+                == .answer(allow: true, target: "billing"))
+        let no = FakeModel(answer: .answer(allow: true, target: "billing"))
+        #expect(await CommandParser(model: no).parse("nope billing", sessions: ["billing"])
+                == .answer(allow: false, target: "billing"))
+        let unheard = FakeModel(answer: .answer(allow: true, target: "payments"))
+        #expect(await CommandParser(model: unheard).parse("yeah, the other one", sessions: ["payments"]) == .unknown)
+    }
 }

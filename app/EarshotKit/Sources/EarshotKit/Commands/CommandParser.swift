@@ -19,7 +19,51 @@ public struct CommandParser: Sendable {
     public func parse(_ text: String, sessions: [String]) async -> Command {
         if let c = Grammar.parse(text, known: sessions) { return c }
         guard let model, await model.isAvailable, let c = await model.parse(text, sessions: sessions) else { return .unknown }
-        return c
+        return Self.accept(c, heard: text)
+    }
+
+    /// Keeps a model answer only when the user's words back it up: every content word of
+    /// the target and prompt must have been said (M1), and an approval needs a clear
+    /// approval word in what was said, with the target's words taken out (M2).
+    static func accept(_ c: Command, heard text: String) -> Command {
+        let said = words(text)
+        switch c {
+        case .send(let target, let prompt):
+            return backed([target, prompt], by: said) ? c : .unknown
+        case .start(let project, let prompt):
+            return backed([project, prompt], by: said) ? c : .unknown
+        case .status(let target), .stop(let target, _):
+            return backed([target], by: said) ? c : .unknown
+        case .answer(_, let target):
+            guard backed([target], by: said) else { return .unknown }
+            let targetWords = Set(Grammar.Words(target ?? "").keys)
+            let rest = Grammar.Words(text).keys.filter { !targetWords.contains($0) }.joined(separator: " ")
+            guard let approves = Grammar.approvalWord(rest) else { return .unknown }
+            return .answer(allow: approves, target: target)
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    /// Words that count as said: letters and digits, lowercased.
+    static func words(_ s: String) -> [String] {
+        s.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+    }
+
+    /// Words of a model field that must be heard: 3 or more characters, not a filler word.
+    static let unbackedWords: Set<String> = ["the", "and", "for", "with", "that", "this", "its", "you", "your", "please"]
+
+    /// True when every content word of each field was said. A said word matches
+    /// when it is the same, or one is a prefix of the other ("tests" and "test").
+    static func backed(_ fields: [String?], by said: [String]) -> Bool {
+        fields.allSatisfy { field in
+            guard let field else { return true }
+            return words(field).allSatisfy { w in
+                w.count < 3 || unbackedWords.contains(w) || said.contains { h in
+                    h.hasPrefix(w) || (h.count >= 3 && w.hasPrefix(h))
+                }
+            }
+        }
     }
 
     public func prewarm(sessions: [String]) async { await model?.prewarm(sessions: sessions) }
