@@ -19,6 +19,19 @@ import Testing
         #expect(c["EARSHOT_STYLE"] == "cheeky")
     }
 
+    /// What setup.sh really writes for non-ASCII values: bash's printf %q.
+    @Test func readsBashPrintfQForNonASCII() throws {
+        for value in ["Amélie", "Jorge (Español)", "tab\there", "it's", "日本"] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            p.arguments = ["-c", "printf 'EARSHOT_SAY_VOICE=%q\\n' \"$1\"", "_", value]
+            let pipe = Pipe(); p.standardOutput = pipe
+            try p.run(); p.waitUntilExit()
+            let line = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            #expect(EarshotConfig(text: line)["EARSHOT_SAY_VOICE"] == value, "bash wrote \(line)")
+        }
+    }
+
     @Test func lastLineWins() {
         let c = EarshotConfig(text: "EARSHOT_LEVEL=quiet\nEARSHOT_LEVEL=all\n")
         #expect(c.level == "all")

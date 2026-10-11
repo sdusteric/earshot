@@ -101,47 +101,99 @@ public struct EarshotConfig: Sendable, Equatable {
         return (String(key), unquote(line[line.index(after: eq)...]))
     }
 
+    /// Works on bytes: bash's $'...' writes non-ASCII text as octal escapes of
+    /// its UTF-8 bytes ("Amélie" is $'Am\303\251lie').
     static func unquote(_ s: Substring) -> String {
-        var out = ""
-        var i = s.startIndex
-        func next(_ j: String.Index) -> String.Index { s.index(after: j) }
-        while i < s.endIndex {
-            let c = s[i]
-            if c == "'" {
-                i = next(i)
-                while i < s.endIndex, s[i] != "'" { out.append(s[i]); i = next(i) }
-            } else if c == "$", next(i) < s.endIndex, s[next(i)] == "'" {
-                i = s.index(i, offsetBy: 2)
-                while i < s.endIndex, s[i] != "'" {
-                    if s[i] == "\\", next(i) < s.endIndex {
-                        i = next(i)
-                        switch s[i] {
-                        case "n": out.append("\n")
-                        case "t": out.append("\t")
-                        default: out.append(s[i])
-                        }
+        let b = Array(s.utf8)
+        var out: [UInt8] = []
+        var i = 0
+        let quote = UInt8(ascii: "'"), dquote = UInt8(ascii: "\""), backslash = UInt8(ascii: "\\")
+        while i < b.count {
+            let c = b[i]
+            if c == quote {
+                i += 1
+                while i < b.count, b[i] != quote { out.append(b[i]); i += 1 }
+                i += 1
+            } else if c == UInt8(ascii: "$"), i + 1 < b.count, b[i + 1] == quote {
+                i += 2
+                while i < b.count, b[i] != quote {
+                    if b[i] == backslash, i + 1 < b.count {
+                        i += 1
+                        i = ansiEscape(b, i, into: &out)
                     } else {
-                        out.append(s[i])
+                        out.append(b[i])
+                        i += 1
                     }
-                    i = next(i)
                 }
-            } else if c == "\"" {
-                i = next(i)
-                while i < s.endIndex, s[i] != "\"" {
-                    if s[i] == "\\", next(i) < s.endIndex { i = next(i) }
-                    out.append(s[i])
-                    i = next(i)
+                i += 1
+            } else if c == dquote {
+                i += 1
+                while i < b.count, b[i] != dquote {
+                    if b[i] == backslash, i + 1 < b.count { i += 1 }
+                    out.append(b[i])
+                    i += 1
                 }
-            } else if c == "\\", next(i) < s.endIndex {
-                i = next(i)
-                out.append(s[i])
-            } else if c == " " || c == "\t" {
+                i += 1
+            } else if c == backslash, i + 1 < b.count {
+                out.append(b[i + 1])
+                i += 2
+            } else if c == UInt8(ascii: " ") || c == UInt8(ascii: "\t") {
                 break   // the end of the word; anything after is a comment or another command
             } else {
                 out.append(c)
+                i += 1
             }
-            if i < s.endIndex { i = next(i) }
         }
-        return out
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    /// One escape inside $'...', starting just after the backslash. Returns
+    /// the index after it.
+    private static func ansiEscape(_ b: [UInt8], _ start: Int, into out: inout [UInt8]) -> Int {
+        var i = start
+        let c = b[i]
+        let simple: [UInt8: UInt8] = [
+            UInt8(ascii: "n"): 10, UInt8(ascii: "t"): 9, UInt8(ascii: "r"): 13, UInt8(ascii: "a"): 7,
+            UInt8(ascii: "b"): 8, UInt8(ascii: "e"): 27, UInt8(ascii: "E"): 27, UInt8(ascii: "f"): 12,
+            UInt8(ascii: "v"): 11,
+        ]
+        if let v = simple[c] {
+            out.append(v)
+            return i + 1
+        }
+        if (UInt8(ascii: "0")...UInt8(ascii: "7")).contains(c) {
+            var value = 0
+            var n = 0
+            while n < 3, i < b.count, (UInt8(ascii: "0")...UInt8(ascii: "7")).contains(b[i]) {
+                value = value * 8 + Int(b[i] - UInt8(ascii: "0"))
+                i += 1
+                n += 1
+            }
+            out.append(UInt8(truncatingIfNeeded: value))
+            return i
+        }
+        if c == UInt8(ascii: "x") {
+            i += 1
+            var value = 0
+            var n = 0
+            while n < 2, i < b.count, let d = hexDigit(b[i]) {
+                value = value * 16 + d
+                i += 1
+                n += 1
+            }
+            if n > 0 { out.append(UInt8(value)) } else { out.append(UInt8(ascii: "x")) }
+            return i
+        }
+        out.append(c)   // \\ \' \" and anything else: the character itself
+        return i + 1
+    }
+
+    private static func hexDigit(_ c: UInt8) -> Int? {
+        switch c {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): Int(c - UInt8(ascii: "0"))
+        case UInt8(ascii: "a")...UInt8(ascii: "f"): Int(c - UInt8(ascii: "a")) + 10
+        case UInt8(ascii: "A")...UInt8(ascii: "F"): Int(c - UInt8(ascii: "A")) + 10
+        default: nil
+        }
     }
 }
