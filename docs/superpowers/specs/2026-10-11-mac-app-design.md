@@ -263,7 +263,9 @@ The label is 1 to 3 words:
 - In the app, the Foundation Model turns the title into a 1 to 3 word noun
   phrase ("Orchestrator agent for multi-session voice control" becomes "voice
   orchestrator"). It is cached by session id and title, and written to the
-  plugin's live file as line 3, so the plugin uses it too.
+  plugin's live file as line 3, so the plugin uses it too. `speak.sh` keeps
+  line 3 when it rewrites the file, and drops it when the title changes, so a
+  stale label is never said.
 - Without the app or the model, a rule in `speak.sh`: drop a leading verb (fix,
   add, create, make, update, build, write, check, debug, refactor, implement),
   drop "a", "an", "the", then keep words up to the first of "for", "with", "and",
