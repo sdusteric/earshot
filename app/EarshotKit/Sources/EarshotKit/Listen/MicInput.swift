@@ -145,15 +145,16 @@ public actor MicInput: AudioInput {
         let choice = AudioDevices.chooseInput(setting: deviceUID(), inputs: AudioDevices.all().filter(\.hasInput),
                                               outputIsBluetooth: AudioDevices.defaultOutputIsBluetooth())
         if let uid = choice, var id = AudioDevices.deviceID(uid: uid), let unit = input.audioUnit {
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id,
-                                 UInt32(MemoryLayout<AudioObjectID>.size))
+            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                              &id, UInt32(MemoryLayout<AudioObjectID>.size))
+            if status != noErr { log.error("couldn't choose the mic, status \(status, privacy: .public)") }
         }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0, let resampler = Resampler(from: format) else {
             throw Failure.noInput
         }
         let cont = self.cont
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
             let s = resampler.convert(buffer)
             if !s.isEmpty { cont?.yield(s) }
         }

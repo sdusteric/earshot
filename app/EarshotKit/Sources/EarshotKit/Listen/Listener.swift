@@ -31,15 +31,17 @@ public actor Listener {
         public var spotAtSamples: Int
         public var spotWindowSamples: Int
         public var minClipSamples: Int
+        /// How long to wait before reopening a mic that ended on its own.
+        public var reopenDelay: Duration
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
                     preRollSamples: Int = 4_800, spotAtSamples: Int = 24_000, spotWindowSamples: Int = 32_000,
-                    minClipSamples: Int = 4_800) {
+                    minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500)) {
             self.wakeSilence = wakeSilence; self.followUp = followUp; self.minHold = minHold
             self.maxCommandSamples = maxCommandSamples; self.preRollSamples = preRollSamples
             self.spotAtSamples = spotAtSamples; self.spotWindowSamples = spotWindowSamples
-            self.minClipSamples = minClipSamples
+            self.minClipSamples = minClipSamples; self.reopenDelay = reopenDelay
         }
     }
 
@@ -74,6 +76,7 @@ public actor Listener {
     private var chunker = Chunker()
     private var energy = EnergyGate()
     private var streamTask: Task<Void, Never>?
+    private var streamID = 0
     private var micOpen = false
     private var armed = false
     private var micBusy = false
@@ -263,14 +266,46 @@ public actor Listener {
                 return true
             }
             micOpen = true
+            streamID += 1
+            let id = streamID
             streamTask = Task { [weak self] in
                 for await samples in stream { await self?.receive(samples) }
+                // Cancelled means closeMic ended it. Otherwise the input gave up.
+                if !Task.isCancelled { await self?.streamEnded(id) }
             }
         } catch {
             log.error("couldn't open the mic: \(error.localizedDescription, privacy: .public)")
         }
         openTask = nil
         return false
+    }
+
+    /// The input ended its stream without being asked (a failed rebuild after
+    /// a device change). Treat it as the mic closing, then try once to reopen.
+    private func streamEnded(_ id: Int) async {
+        guard id == streamID, micOpen else { return }
+        log.error("the mic stopped on its own")
+        micOpen = false
+        streamTask = nil
+        _ = chunker.drain()
+        segmentStart = nil
+        spotted = false
+        if let c = capture { await drop(c) }
+        await input.stop()
+        await gate.reset()
+        settlePhase()
+        guard micWanted, !micBusy else { return }
+        Task { [delay = timing.reopenDelay] in
+            try? await Task.sleep(for: delay)
+            await self.reopenAfterLoss()
+        }
+    }
+
+    /// The one retry. If start() fails again the mic stays closed.
+    private func reopenAfterLoss() async {
+        guard !micOpen, !micBusy, micWanted else { return }
+        await openMic()
+        settlePhase()
     }
 
     private func startPrewarm() {

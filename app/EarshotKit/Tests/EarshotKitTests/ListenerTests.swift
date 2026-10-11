@@ -8,8 +8,14 @@ actor FakeInput: AudioInput {
     private var cont: AsyncStream<[Float]>.Continuation?
     private(set) var starts = 0, stops = 0
     var isOpen: Bool { cont != nil }
+    private var failing = false
+    struct Down: Error {}
+    func failStarts(_ on: Bool) { failing = on }
+    /// The input ends its stream by itself, as MicInput does when a rebuild fails.
+    func endStream() { cont?.finish(); cont = nil }
     func start() async throws -> AsyncStream<[Float]> {
         starts += 1
+        if failing { throw Down() }
         let (s, c) = AsyncStream<[Float]>.makeStream()
         cont = c
         return s
@@ -448,6 +454,38 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         await l.hotkeyUp()
     }
 
+    @Test func aMicThatEndsByItselfIsReopenedOnce() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.endStream()
+        #expect(await eventually { let n = await input.starts; let o = await input.isOpen; return n == 2 && o })
+        #expect(await eventually { await l.currentPhase == .waiting })
+    }
+
+    @Test func aFailedReopenLeavesTheListenerClosedWithoutSpinning() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.failStarts(true)
+        await input.endStream()
+        #expect(await eventually { await input.starts == 2 })
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(await input.starts == 2)
+        #expect(await l.currentPhase == .off)
+    }
+
+    @Test func aMicThatEndsMidCaptureDropsTheCapture() async {
+        let l = await make()
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(60))
+        await input.push([1, 1])
+        await input.endStream()
+        #expect(await eventually { await observer.events == ["began", "ended"] })
+        #expect(await heard.items.isEmpty)
+        await l.hotkeyUp()
+    }
+
     @Test func aSecondPressDoesNotConfirmTheFirstOnesHold() async {
         let slow = SlowInput()
         let timing = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150),
@@ -532,5 +570,15 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
 
 extension Listener.Timing {
     static let forTests = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150),
-                                          minHold: .milliseconds(30))
+                                          minHold: .milliseconds(30), reopenDelay: .milliseconds(30))
+}
+
+extension Listener {
+    /// The phase right now: the stream's first value.
+    var currentPhase: Phase {
+        get async {
+            for await p in phaseChanges() { return p }
+            return .off
+        }
+    }
 }
