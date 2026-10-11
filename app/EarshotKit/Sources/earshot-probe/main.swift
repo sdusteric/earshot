@@ -15,7 +15,7 @@ import Foundation
 
 let wakePhrase = "hey earshot"
 let segmentSpotAt = 24_000          // 1.5 s: spot a segment this long, or when it ends
-let spotWindow = 32_000             // the first 2 s of a segment
+let spotWindow = 32_000             // at most 2 s; at the 1.5 s spot only the first 1.5 s is there
 let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
 
 @main struct Probe {
@@ -88,7 +88,7 @@ struct Spotter {
 }
 
 /// Energy gate and VAD over a sample stream. Calls `onSegment` once per speech
-/// segment with its first 2 s, at 1.5 s or at its end.
+/// segment with its first 1.5 s: when it reaches 1.5 s, or all of it when it ends sooner.
 actor Segmenter {
     let vad: VadManager
     var state: VadStreamState
@@ -287,6 +287,8 @@ func wakeEval(_ dir: URL) async throws {
         guard p.count >= 2 else { continue }
         rows += 1
         let samples = try AudioConverter().resampleAudioFile(dir.appending(path: p[0]))
+        // The first 2 s of the recording. The live listener spots on the first 1.5 s of a
+        // speech segment, so a recording should start with the wake phrase.
         var woke = await spotter.heardWake(Array(samples.prefix(32_000)), sensitivity: 5)
         // Column 4: the line Earshot was saying. The listener ignores the spotter while Earshot
         // says the wake phrase itself. Any other line it would cut off, so that counts as a false wake.
