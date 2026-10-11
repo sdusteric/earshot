@@ -882,14 +882,19 @@ decide)
     '{v: 1, type: "approval", session: $s, id: $i, name: $n, what: $w, answer: $a}')" || exit 0
   # closed <by>: the app stops listening for this prompt. In the background,
   # and away from stdout, which carries the decision.
-  closed() {
-    app_send "$(jq -nc --arg s "$sid" --arg i "$id" --arg b "$1" '{v: 1, type: "approval", session: $s, id: $i, state: "closed", by: $b}')" \
-      </dev/null >/dev/null 2>&1 &
-  }
+  closed_msg() { jq -nc --arg s "$sid" --arg i "$id" --arg b "$1" '{v: 1, type: "approval", session: $s, id: $i, state: "closed", by: $b}'; }
+  closed() { app_send "$(closed_msg "$1")" </dev/null >/dev/null 2>&1 & }
+  # Esc on the dialog: Claude Code stops this hook. Tell the app before going,
+  # in the foreground, since the whole process group may be stopping.
+  trap 'app_send "$(closed_msg screen)" </dev/null >/dev/null 2>&1; exit 0' TERM INT HUP
   deadline=$((now + DECIDE_SECS)); n=0
   while :; do
-    if [ -e "$ans" ]; then
-      a=$(head -c 16 "$ans" | tr -d '[:space:]'); rm -f "$ans"
+    if [ -e "$ans" ] || [ -L "$ans" ]; then
+      # Trusted only as a plain file of yours that nobody else can write.
+      a=
+      [ -f "$ans" ] && [ ! -L "$ans" ] && [ -O "$ans" ] && [ $((0$(stat -f %Lp "$ans") & 022)) = 0 ] \
+        && a=$(head -c 16 "$ans" | tr -d '[:space:]')
+      rm -f "$ans"
       if [ "$a" = allow ] || [ "$a" = deny ]; then
         # After a deny no tool runs, so nothing else would stop the reminders.
         clear_wait

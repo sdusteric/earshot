@@ -240,6 +240,11 @@ command in a shell under its own process, with the command in the shell's
 arguments, so Earshot looks for it there: once the command runs, the reminders
 stop, the roll call says the session is working, and "still on it" updates start.
 
+A second `PermissionRequest` hook lets Earshot for Mac answer a prompt by voice.
+When the app runs and can listen, the hook offers it the prompt and waits for
+your spoken yes or no. The dialog stays on screen while it waits, and the first
+answer wins: a click, Esc, or your voice. Without the app the hook ends at once.
+
 Earshot looks for three signs that Claude is stuck. It uses the same patterns as
 the stuck detector in OpenHands:
 
@@ -315,6 +320,7 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 - If the owner of a Voice Library voice removes it, that voice stops working. Premade voices do not have this risk.
 - Earshot cannot tell a call from other apps that use the microphone, such as a voice recorder. It waits for any of them. Siri and Voice Control do not count, and neither does macOS dictation (Fn Fn), because Voice Control uses the same process. Claude Code's `/voice` does count.
 - A line held for more than 4 hours is dropped.
+- Voice answers work for about an hour after a prompt shows. When subagents in one session ask at the same time, only the newest prompt can be answered by voice.
 - Per-app microphone checks need macOS 14.2 or later. On older versions, Earshot does not wait during calls.
 - After an update, Earshot rebuilds its microphone check in the background. If the build fails, for example because Xcode needs attention, Earshot does not wait during calls until you run `/earshot:setup` again. `setup.sh --status` shows when this happens.
 

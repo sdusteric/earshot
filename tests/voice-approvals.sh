@@ -37,7 +37,7 @@ prompt() {
 answer() {
   local f; f=$(grep -- "\"session\":\"$1\"" "$APPLOG" | grep '"answer"' | tail -1 | jq -r .answer)
   [ -n "$f" ] || { echo "no answer path for $1" >&2; return 1; }
-  printf '%s\n' "$2" > "$f.tmp" && mv "$f.tmp" "$f"
+  ( umask 077; printf '%s\n' "$2" > "$f.tmp" ) && mv "$f.tmp" "$f"
 }
 # done_within <session> <seconds>: decide ended in time.
 done_within() { local i; for ((i = 0; i < $2 * 10; i++)); do [ -f "$D/rc-$1" ] && return 0; sleep 0.1; done; return 1; }
@@ -89,6 +89,11 @@ f=$(grep '"session":"v3"' "$APPLOG" | grep '"answer"' | tail -1 | jq -r .answer)
 printf 'allow\n' > "${f%-*}-999-1-1"; sleep 1
 alive && ok "an answer for another prompt id is ignored" || bad "an answer for another prompt id is ignored"
 rm -f "${f%-*}-999-1-1"
+printf 'allow\n' > "$D/elsewhere"; ln -s "$D/elsewhere" "$f"; sleep 1
+alive && ok "an answer file that is a link is ignored" || bad "an answer file that is a link is ignored"
+expect "and removed" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^answer-v3')" 0
+rm -f "$f"; printf 'allow\n' > "$f.tmp"; chmod 666 "$f.tmp"; mv "$f.tmp" "$f"; sleep 1
+alive && ok "an answer file others can write is ignored" || bad "an answer file others can write is ignored"
 answer v3 allow; done_within v3 2; expect "a later allow still works" "$(decision v3)" allow
 
 echo "Answered some other way"
@@ -114,6 +119,11 @@ fakerun "sleep 30 # pnpm run db:migrate --env staging"
 done_within s4 3 && ok "the command runs (clicked yes on a long one): decide ends" || bad "the command runs (clicked yes on a long one): decide ends"
 expect "and prints nothing" "$(wc -c < "$D/out-s4" | tr -d ' ')" 0
 kill "$fakecmd" 2>/dev/null
+
+: > "$APPLOG"; prompt s6
+pkill -TERM -f "speak.sh decide"; done_within s6 2
+sleep 0.3; expect "Claude Code stops the hook (Esc): the app hears it closed" "$(took '"session":"s6".*"state":"closed".*"by":"screen"')" 1
+expect "and it prints nothing" "$(wc -c < "$D/out-s6" | tr -d ' ')" 0
 
 : > "$APPLOG"; EARSHOT_DECIDE_SECS=1 prompt s5
 done_within s5 3 && ok "the deadline ends decide" || bad "the deadline ends decide"
