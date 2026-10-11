@@ -79,9 +79,9 @@ open_session w9 "$Q"; finish w1; ping w1
 check "two projects: the summary says the project" 1 "^From billing service: Fixed it.$"
 check "two projects: no title needed" 0 "Refund"
 open_session w2; ping w1
-check "same project: the title, 6 words at most" 1 "^Hey, the Refund rounding fix for EU invoices session in billing service needs your OK"
+check "same project: a short label, no project when the label is unique" 1 "^Hey, the Refund rounding fix session needs your OK"
 ping w2; finish w2
-check "same project: a /rename title wins" 2 "the Tax export session in billing service"
+check "same project: a /rename title wins, the project left out" 2 "the Tax export session\( needs\|:\)"
 EARSHOT_SESSION_NAME=never finish w2; EARSHOT_SESSION_NAME=never ping w2
 check "EARSHOT_SESSION_NAME=never: no names" 0 "Tax export\|From billing"
 hook end w2 '{}'; hook end w9 '{}'; finish w1
@@ -89,6 +89,25 @@ check "closed sessions stop counting" 1 "^Fixed it.$"
 R=$(dirname "$P")/invoiceApi_v2; mkdir -p "$R"
 hook fail w9 "$(jq -nc --arg c "$R" '{cwd: $c}')"; hook end w9 '{}'
 check "folder names are said as words" 1 "^Invoice Api v2 hit an error."
+# Labels: 1 to 3 words from the title.
+for pair in "Create guest confirmation email with event details|guest confirmation email" \
+            "Orchestrator agent for multi-session voice control|Orchestrator agent" \
+            "Fix the flaky refund test|flaky refund test" \
+            "Tax export|Tax export" \
+            "Plugin vs Mac app architecture|Plugin" \
+            "Refactor|Refactor"; do
+  got=$(EARSHOT_LABEL_TEST="${pair%%|*}" bash "$S" label)
+  if [ "$got" = "${pair#*|}" ]; then pass=$((pass + 1)); echo "  ok    label: ${pair%%|*}"
+  else fail=$((fail + 1)); echo "  FAIL  label: ${pair%%|*} (got '$got')"; fi
+done
+# Three sessions titled "Tax export", two in billing service and one in invoice
+# api: the label alone would be ambiguous, so the project is added.
+for s in c1 c2 c3; do printf '%s\n' "{\"type\":\"custom-title\",\"customTitle\":\"Tax export\",\"sessionId\":\"$s\"}" > "$T/$s.jsonl"; done
+open_session c1; open_session c2; open_session c3 "$Q"
+finish c2; finish c3; : > "$OUT"   # a finished turn records each session's title
+ping c1
+check "clashing labels: the project is added" 1 "the Tax export session in billing service needs your OK"
+for s in c1 c2 c3; do hook end "$s" '{}'; done
 
 echo "Permission prompts say what they ask for"
 hook ask pp1 '{"tool_name":"Bash","tool_input":{"command":"x","description":"Run the invoice tests"}}'
@@ -362,7 +381,7 @@ printf '%s\n%s\n' "billing service" "Tax export" > "$EARSHOT_LIVE_DIR/n1"
 printf '%s\n%s\n' "billing service" "Refund rounding" > "$EARSHOT_LIVE_DIR/n2"
 printf '%s\n%s\n' "docs site" "Broken links" > "$EARSHOT_LIVE_DIR/n3"
 : > "$OUT"; roll
-order_check "two sessions in one project are told apart by title" "Three sessions. Docs site is open. The refund rounding session in billing service is open. The tax export session in billing service is open.|"
+order_check "two sessions in one project are told apart by their labels" "Three sessions. Docs site is open. The Refund rounding session is open. The Tax export session is open.|"
 printf '%s\n%s\n%s\n%s\n' working "" "docs site" "" > "$EARSHOT_STATE_DIR/status-n3"
 : > "$OUT"; roll
 at_least "a damaged status file reads as just started" 1 "Docs site is working, just started"

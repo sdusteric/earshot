@@ -367,12 +367,69 @@ if [ "$1" = longbeat ]; then
   exit 0
 fi
 
+# --- Session names ----------------------------------------------------------------
+# The folder name tells sessions in different projects apart. When another open
+# session shares the folder, a short label from the session's title is added.
+# The title is the name in /resume and in the Mac app's session list.
+LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}   # one file per open session: project, title, [app label]
+SESSION_NAME=${EARSHOT_SESSION_NAME:-auto}   # auto | always | never
+
+# short_label "<title>": 1 to 3 words for a session title, to say it often.
+# Drops a leading verb and "a", "an", "the", and stops at the first of "for",
+# "with", "and", "to", "in", "on", "of", "vs": "Create guest confirmation
+# email with event details" becomes "guest confirmation email".
+short_label() {
+  tr '_/-' '   ' <<<"$1" | sed 's/ [Ss]ession$//' | awk '{
+    n = 0; out = ""
+    for (i = 1; i <= NF; i++) {
+      w = $i; lw = tolower(w)
+      if (i == 1 && NF > 1 && lw ~ /^(fix|add|create|make|update|build|write|check|debug|refactor|implement)$/) continue
+      if (lw ~ /^(a|an|the)$/) continue
+      if (n > 0 && lw ~ /^(for|with|and|to|in|on|of|vs)$/) break
+      out = out (n ? " " : "") w
+      if (++n == 3) break
+    }
+    print out }'
+}
+
+# label_of <live file>: the app's label for the session (line 3), or short_label of its title.
+label_of() {
+  local l; l=$(sed -n 3p "$1" 2>/dev/null)
+  [ -n "$l" ] || l=$(short_label "$(sed -n 2p "$1" 2>/dev/null)")
+  printf '%s' "$l"
+}
+
+# name_for <session>: how lines name the session, as two lines: who ("the tax
+# export session") and on ("tax export"). The shortest name that is unique:
+# the project; else the label, when no other open session has the same label;
+# else the label and the project.
+name_for() {
+  local f="$LIVE/$1" p t g twins=0 label clash=0 lc
+  { read -r p; read -r t; } < "$f" 2>/dev/null
+  for g in "$LIVE"/*; do
+    [ "$g" = "$f" ] || [ ! -f "$g" ] && continue
+    [ "$(head -1 "$g")" = "$p" ] && twins=$((twins + 1))
+  done
+  if [ -z "$t" ] || [ "$SESSION_NAME" = never ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" = 0 ]; }; then
+    printf '%s\n%s\n' "$p" "$p"; return
+  fi
+  label=$(label_of "$f"); lc=$(tr '[:upper:]' '[:lower:]' <<<"$label")
+  for g in "$LIVE"/*; do
+    [ "$g" = "$f" ] || [ ! -f "$g" ] && continue
+    [ "$(label_of "$g" | tr '[:upper:]' '[:lower:]')" = "$lc" ] && clash=1
+  done
+  if [ "$SESSION_NAME" = auto ] && [ "$clash" = 0 ]; then printf 'the %s session\n%s\n' "$label" "$label"
+  else printf 'the %s session in %s\n%s in %s\n' "$label" "$p" "$label" "$p"
+  fi
+}
+
+[ "$1" = label ] && { short_label "$EARSHOT_LABEL_TEST"; exit 0; }
+
 # --- Roll call --------------------------------------------------------------------
 # rollcall [--print]: says what every open session is doing, the ones that need
 # you first. From a hotkey or /earshot:rollcall; --print also prints the line.
 count_words=(No One Two Three Four Five Six Seven Eight Nine)
 if [ "$1" = rollcall ]; then
-  LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}
   find "$LIVE" -type f -mmin +360 -delete 2>/dev/null
   now=$(date +%s); rows=""
   for f in "$LIVE"/*; do
@@ -382,10 +439,8 @@ if [ "$1" = rollcall ]; then
     { read -r st; read -r since; read -r _; read -r detail; } 2>/dev/null < "$STATE/status-$s"
     [ "$st" = needs ] && approved "$s" && st=working
     # The name as the alerts say it, worked out now, so a second session in
-    # the same project is told apart by its title.
-    { read -r name; read -r title; } < "$f"
-    twins=0; for g in "$LIVE"/*; do [ "$(head -1 "$g")" = "$name" ] && twins=$((twins + 1)); done
-    [ -n "$title" ] && [ "$twins" -gt 1 ] && name="the $(lower_first "$(tr '_/-' '   ' <<<"$title" | sed 's/ [Ss]ession$//')") session in $name"
+    # the same project is told apart by its label.
+    name=$(name_for "$s" | head -1)
     Name=$(upper_first "$name")
     case "$st" in
       needs) r=0; text="$Name $detail." ;;
@@ -527,12 +582,7 @@ else proj=$(basename "$root" | tr '_.-' '   ' | sed 's/\([a-z]\)\([A-Z]\)/\1 \2/
 state="$STATE/turn-$sid"
 
 # --- Which session is talking ---------------------------------------------------
-# The folder name tells sessions in different projects apart. When another open
-# session would sound the same, the session's title is added, e.g. "billing
-# service, refund rounding". The title is the name in /resume and in the Mac
-# app's session list.
-LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}   # one file per open session: name, title
-SESSION_NAME=${EARSHOT_SESSION_NAME:-auto}   # auto | always | never
+# See "Session names" above for how a session is named.
 
 # The newest title in the transcript, at most 6 words: a /rename title or the
 # one Claude Code made. Reading from the end stops at the first match. The
@@ -549,13 +599,20 @@ find "$LIVE" -type f -mmin +360 -delete 2>/dev/null   # sessions quiet for 6 hou
 # Hooks that run on every tool call only mark the session as active. The title
 # is looked up when a session starts, once per prompt, and when a turn ends.
 title=$(sed -n 2p "$LIVE/$sid" 2>/dev/null)
+old_title=$title; old_label=$(sed -n 3p "$LIVE/$sid" 2>/dev/null)
+# write_live: this session's live file. The app's label (line 3) stays while
+# the title is the same, and goes when it changes, so a stale label is never said.
+write_live() {
+  if [ "$title" = "$old_title" ] && [ -n "$old_label" ]; then printf '%s\n%s\n%s\n' "$proj" "$title" "$old_label"
+  else printf '%s\n%s\n' "$proj" "$title"; fi > "$LIVE/$sid"
+}
 case "$1" in
   begin) t=$(jq -r '.session_title // empty' <<<"$input"); [ -n "$t" ] && title=$t ;;
   start|stop) t=$(transcript_title); [ -n "$t" ] && title=$t ;;
 esac
 case "$1" in
-  begin|start|stop) printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid" ;;
-  *) if [ -f "$LIVE/$sid" ]; then touch "$LIVE/$sid"; else printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid"; fi ;;
+  begin|start|stop) write_live ;;
+  *) if [ -f "$LIVE/$sid" ]; then touch "$LIVE/$sid"; else write_live; fi ;;
 esac
 others=0; twins=0
 for f in "$LIVE"/*; do
@@ -566,17 +623,14 @@ done
 # name and do not have it yet look it up; tool calls never do.
 if [ -z "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
   case "$1" in
-    ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && printf '%s\n%s\n' "$proj" "$title" > "$LIVE/$sid" ;;
+    ask|question|notify|idle|fail) title=$(transcript_title); [ -n "$title" ] && write_live ;;
   esac
 fi
-# who names the session as a speaker ("the tax export session in billing
-# service needs your OK"), on names the work ("still on tax export in billing
-# service"). Without a title, both are the project.
+# who names the session as a speaker ("the tax export session needs your OK"),
+# on names the work ("still on tax export"). Without a title, both are the
+# project. See name_for.
 who=$proj; on=$proj
-if [ -n "$title" ] && { [ "$SESSION_NAME" = always ] || { [ "$SESSION_NAME" = auto ] && [ "$twins" -gt 0 ]; }; }; then
-  task=$(tr '_/-' '   ' <<<"$title" | sed 's/ [Ss]ession$//')
-  who="the $task session in $proj"; on="$task in $proj"
-fi
+[ -f "$LIVE/$sid" ] && { read -r who; read -r on; } < <(name_for "$sid")
 # drop_held: you answered, so this session's held "needs you" and "waiting on
 # your answer" lines are stale.
 drop_held() {
