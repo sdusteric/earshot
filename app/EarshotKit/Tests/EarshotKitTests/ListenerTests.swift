@@ -476,6 +476,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(!clip.contains(0.25))
     }
 
+    /// Cut off mid-sentence, the command would be sent half said: it is dropped instead.
     @Test func aLongHoldEndsAtTheCap() async {
         let t = ScriptTranscriber()
         let l = await make(transcriber: t)
@@ -483,8 +484,45 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         try? await Task.sleep(for: .milliseconds(60))
         await input.push([Float](repeating: 1, count: 45))   // 11.5 s, the ring holds 10 s
         #expect(await eventually { await heard.items.count == 1 })
-        #expect(await t.clips.first?.count == 38 * 4096)   // 10 s less the pre-roll, to a whole chunk
+        let u = await heard.items.first
+        #expect(u?.tooLong == true)
+        #expect(u?.text == "")
+        #expect(await t.clips.isEmpty)   // the cut text is never transcribed
+        #expect(await chimes.played == [.listening, .closed])
+        #expect(await observer.heard == [true])   // a line follows: listening ends after it
         await l.hotkeyUp()
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await heard.items.count == 1)   // the later release does nothing
+        #expect(await chimes.played == [.listening, .closed])
+        #expect(await eventually { await !input.isOpen })
+    }
+
+    @Test func aLongWakeCommandIsTooLong() async {
+        let t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30))
+        let l = await make(t)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 3])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.tooLong == true)
+        #expect(await heard.items.first?.trigger == .wake)
+    }
+
+    /// Talk that only seemed to start with the wake word stays silent at the cap.
+    @Test func aFalseWakeAtTheCapSaysNothing() async {
+        let st = ScriptTranscriber(fixed: "and then the tests ran")
+        let t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30))
+        let l = await make(t, transcriber: st)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 3])
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await l.falseWakes == 1)
+        #expect(await observer.heard == [false])
     }
 
     @Test func aMicThatEndsByItselfIsReopenedOnce() async {

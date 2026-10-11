@@ -89,6 +89,18 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await transport.sent.map(\.text) == ["deploy"])
     }
 
+    @Test func aCommandOverTheCapIsNotSent() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        await r.loop.captureBegan(.hotkey)
+        await r.loop.captureEnded(heard: true)
+        r.heard.yield(.init(text: "", trigger: .hotkey, endedAt: .now, tooLong: true))
+        #expect(await eventually { await player.played == ["That was too long for me. Try a shorter command."] })
+        #expect(await transport.sent.isEmpty)
+        await r.speech.waitUntilIdle()
+        #expect(await ducker.ends == 1)   // its listening was paid
+    }
+
     @Test func notUnderstoodSendsNothing() async {
         let r = await rig([agent("b", "blog")])
         let player = r.player

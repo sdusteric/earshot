@@ -18,6 +18,12 @@ public actor Listener {
         public let text: String
         public let trigger: Trigger
         public let endedAt: ContinuousClock.Instant
+        /// The command ran past the length cap: it was dropped, and text is empty.
+        public let tooLong: Bool
+
+        public init(text: String, trigger: Trigger, endedAt: ContinuousClock.Instant, tooLong: Bool = false) {
+            self.text = text; self.trigger = trigger; self.endedAt = endedAt; self.tooLong = tooLong
+        }
     }
 
     public enum Phase: Sendable, Equatable { case off, waiting, capturing(Trigger), transcribing }
@@ -409,10 +415,7 @@ public actor Listener {
     private func process(_ chunk: [Float]) async {
         ring.append(chunk)
         if let c = capture, c.trigger == .hotkey {
-            if ring.total - c.start >= maxCommand {
-                await finish(c, end: ring.total)
-                await dropSegment()
-            }
+            if ring.total - c.start >= maxCommand { await tooLong(c) }
             return
         }
         // Stage 1: quiet audio skips the VAD, unless something is being heard.
@@ -430,10 +433,11 @@ public actor Listener {
             }
         }
         if let c = capture, !c.waitingForSpeech {
-            if edge == .end || ring.total - c.start >= maxCommand {
+            if edge == .end {
                 segmentStart = nil
                 await finish(c, end: ring.total)
-                if edge != .end { await gate.reset() }
+            } else if ring.total - c.start >= maxCommand {
+                await tooLong(c)
             }
             return
         }
@@ -507,6 +511,34 @@ public actor Listener {
         } else if !refused, capture == nil {
             await chimes.play(.closed)
         }
+        await closeMicIfIdle()
+        settlePhase()
+    }
+
+    /// The command ran past the cap while you were still talking. Sending it cut off
+    /// would send half of it, so it is dropped and Earshot says it was too long. Only
+    /// a wake capture's first seconds are transcribed, to check it was the wake word.
+    private func tooLong(_ c: Capture) async {
+        guard capture?.id == c.id else { return }
+        capture = nil
+        await dropSegment()
+        var heard = true
+        if c.trigger == .wake, !c.commandPhase {
+            phase = .transcribing
+            let head = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
+            var text = ""
+            do { text = try await transcriber.transcribe(head, vocabulary: []) } catch {
+                log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
+            }
+            if repeatsOwnLine(text) || Self.stripWake(text) == nil {
+                falseWakes += 1
+                heard = false
+            }
+        }
+        if refused { heard = false }
+        if !refused, capture == nil { await chimes.play(.closed) }
+        await observer?.captureEnded(heard: heard)
+        if heard { utteranceCont.yield(Utterance(text: "", trigger: c.trigger, endedAt: .now, tooLong: true)) }
         await closeMicIfIdle()
         settlePhase()
     }

@@ -104,6 +104,14 @@ public actor VoiceLoop: ListenObserver {
     private func handle(_ u: Listener.Utterance) async {
         signposter.emitEvent("transcript")
         if !awaiting.isEmpty { awaiting.removeFirst(); endsOwed += 1 }
+        if u.tooLong { await tooLong(u) } else { await respond(to: u) }
+        if endsOwed > 0 {
+            endsOwed -= 1
+            await speech.endListening()
+        }
+    }
+
+    private func respond(to u: Listener.Utterance) async {
         switch u.trigger {
         case .followUp(.approval(let id)):
             // Only a clear yes or no. Anything else leaves the prompt as it is.
@@ -135,10 +143,18 @@ public actor VoiceLoop: ListenObserver {
                 await apply(await dispatcher.run(c), after: u)
             }
         }
-        if endsOwed > 0 {
-            endsOwed -= 1
-            await speech.endListening()
+    }
+
+    /// Cut off at the length cap, so nothing is sent. In an approval window anything
+    /// but yes or no is ignored, so nothing is said there either.
+    private func tooLong(_ u: Listener.Utterance) async {
+        switch u.trigger {
+        case .followUp(.approval): return
+        case .followUp(.reply): pending = nil
+        case .wake, .hotkey: pending = nil; afterLine.removeAll()
         }
+        await events.add("command too long")
+        await say("That was too long for me. Try a shorter command.", after: u)
     }
 
     private func apply(_ o: Dispatcher.Outcome, after u: Listener.Utterance) async {
