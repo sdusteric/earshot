@@ -168,7 +168,11 @@ public actor VoiceLoop: ListenObserver {
     private func say(_ text: String, after u: Listener.Utterance, then followUp: Listener.FollowUp? = nil) async {
         let line = SpokenLine(text: text, kind: .confirm, session: "")
         commandEnded[line.id] = u.endedAt
-        if let followUp { afterLine[line.id] = followUp }
+        if let followUp {
+            afterLine[line.id] = followUp
+            // Marked before the line can start, so even a line that ends at once is held.
+            await speech.holdAfter(line.id)
+        }
         await speech.enqueue(line)
     }
 
@@ -177,14 +181,14 @@ public actor VoiceLoop: ListenObserver {
     private func lineEvent(_ e: SpeechOut.LineEvent) async {
         switch e {
         case .started(let line):
-            await followUps.setSpeaking(line.text)
             // A window is due after this line: keep the queue from moving on until it is open.
-            var due = afterLine[line.id] != nil
+            // Lines with a question were marked when enqueued; a need line is decided here,
+            // before anything else is awaited.
             if line.kind == .need, !line.session.isEmpty, let a = await approvals.latest(session: line.session) {
                 needPrompt[line.id] = a.id
-                due = true
+                await speech.holdAfter(line.id)
             }
-            if due { await speech.holdAfter(line.id) }
+            await followUps.setSpeaking(line.text)
             if let ended = commandEnded.removeValue(forKey: line.id) {
                 let d = ContinuousClock.now - ended
                 let ms = Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)

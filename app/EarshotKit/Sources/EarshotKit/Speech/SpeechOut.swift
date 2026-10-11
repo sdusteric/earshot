@@ -77,8 +77,8 @@ public actor SpeechOut {
     private var bargedIn = false
     /// A listening begin ducked other audio and nobody has ended it yet.
     private var owed = false
-    /// The line after which the queue waits (see holdAfter), and whether it is waiting now.
-    private var holdID: UUID?
+    /// The lines after which the queue waits (see holdAfter), and whether it is waiting now.
+    private var holdIDs: Set<UUID> = []
     private var holdActive = false
     private var holdGeneration = 0
     private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
@@ -171,8 +171,9 @@ public actor SpeechOut {
     /// When this line finishes playing, nothing else starts and the ducking
     /// stays on until releaseHold (or the safety timeout), so a follow-up
     /// window can open before the next line. A line that does not finish
-    /// (stopped, dropped) creates no hold.
-    public func holdAfter(_ id: UUID) { holdID = id }
+    /// (stopped, dropped) creates no hold. It may be called before the line
+    /// is enqueued, so a line that ends at once is still held.
+    public func holdAfter(_ id: UUID) { holdIDs.insert(id) }
 
     public func releaseHold() {
         guard holdActive else { return }
@@ -279,7 +280,7 @@ public actor SpeechOut {
             }
             currentLine = nil
             if playedToEnd, made != nil {
-                if holdID == line.id { holdID = nil; startHold() }
+                if holdIDs.remove(line.id) != nil { startHold() }
                 emit(.finished(line))
             }
             emit(.ended(line))

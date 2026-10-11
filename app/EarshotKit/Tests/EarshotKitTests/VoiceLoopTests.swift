@@ -14,7 +14,13 @@ actor FakeFollowUps: FollowUpListening {
     }
     func setVocabulary(_ v: [String]) async { vocabulary = v }
     private(set) var speaking: [String?] = []
-    func setSpeaking(_ text: String?) async { speaking.append(text) }
+    private var speakingDelay: Duration = .zero
+    /// Telling the listener what is said takes this long, like a busy actor.
+    func slowSpeaking(_ d: Duration) { speakingDelay = d }
+    func setSpeaking(_ text: String?) async {
+        if text != nil, speakingDelay > .zero { try? await Task.sleep(for: speakingDelay) }
+        speaking.append(text)
+    }
 }
 
 /// Counts the loop's begin and end calls on the real SpeechOut.
@@ -270,6 +276,21 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await eventually { await player.isPlaying })
         await player.finish()
         #expect(await eventually { await followUps.calls.count == 2 })
+    }
+
+    /// A line that finishes the moment it starts still holds the queue until its window is open.
+    @Test func aVeryShortQuestionStillHoldsTheQueue() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        await followUps.slow(.milliseconds(300))
+        await followUps.slowSpeaking(.milliseconds(150))
+        let player = r.player
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await player.played.count == 1 })
+        await r.speech.enqueue(SpokenLine(text: "next line", kind: .roll, session: ""))
+        #expect(await eventually { await player.played.count == 2 })
+        // The second line began only after the window opened.
+        #expect(await followUps.calls == [.reply])
     }
 
     @Test func listeningIsNeverEndedMoreOftenThanItBegan() async {
