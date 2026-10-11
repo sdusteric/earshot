@@ -50,6 +50,47 @@ import Testing
         #expect(try send(p, "garbage") == #"{"ok":false,"reason":"unreadable"}"#)
     }
 
+    /// The plugin gave up after 0.2 s and said the line itself, so the app
+    /// must not say it again when it reads the line late.
+    @Test func aLineReadLateIsRefusedNotPlayed() async throws {
+        let player = FakePlayer()
+        let speech = SpeechOut(synth: FakeSynth(), player: player, mic: FakeMic(), ducker: FakeDucker())
+        let p = path()
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog())
+        try await core.start()
+        defer { core.stop() }
+        let old = Int(Date().timeIntervalSince1970 * 1000) - 1000
+        let fresh = Int(Date().timeIntervalSince1970 * 1000)
+        #expect(try send(p, #"{"sent":\#(old),"v":1,"type":"say","text":"late","kind":"done","session":"s"}"#)
+            == #"{"ok":false,"reason":"late"}"#)
+        #expect(try send(p, #"{"sent":\#(fresh),"v":1,"type":"say","text":"fresh","kind":"done","session":"s"}"#)
+            == #"{"ok":true}"#)
+        await speech.waitUntilIdle()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await player.played == ["fresh"])
+    }
+
+    /// The plugin stopped waiting before the answer was written: the app must
+    /// not keep the line.
+    @Test func aLineWhoseAnswerCannotBeDeliveredIsDropped() async throws {
+        let delivered = Counter()
+        let p = path()
+        let server = LineServer(path: p) { _ in
+            Thread.sleep(forTimeInterval: 0.3)
+            return LineServer.Answer(reply: Data("ok".utf8)) { Task { await delivered.bump() } }
+        }
+        try server.start()
+        defer { server.stop() }
+        #expect(throws: LineClient.Failure.timeout) {
+            try LineClient.send(path: p, line: Data("x".utf8), timeout: 0.1)
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(await delivered.n == 0)
+        _ = try LineClient.send(path: p, line: Data("y".utf8), timeout: 1)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await delivered.n == 1)
+    }
+
     @Test func theCoreFollowsTheMic() async throws {
         let player = FakePlayer(), mic = FakeMic()
         let speech = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: FakeDucker(),

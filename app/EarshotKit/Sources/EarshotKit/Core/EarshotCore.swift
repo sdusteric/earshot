@@ -8,6 +8,9 @@ public final class EarshotCore: Sendable {
             .appending(path: "Library/Application Support/Earshot/earshot.sock").path
     }
 
+    /// Lines older than this when read are refused; the plugin waits 200 ms.
+    static let lateAfterMs: Double = 150
+
     public let speech: SpeechOut
     public let sessions: SessionStore
     public let events: EventLog
@@ -22,15 +25,24 @@ public final class EarshotCore: Sendable {
         let (stream, inbox) = AsyncStream<AppMessage>.makeStream()
         self.stream = stream
         self.inbox = inbox
-        server = LineServer(path: socketPath) { line in
+        server = LineServer(path: socketPath) { (line: Data) -> LineServer.Answer in
+            let message: AppMessage
             do {
-                inbox.yield(try AppMessage.decode(line))
-                return AppReply(ok: true).encoded
+                message = try AppMessage.decode(line)
             } catch AppMessage.DecodeError.version {
-                return AppReply(ok: false, reason: "version").encoded
+                return LineServer.Answer(reply: AppReply(ok: false, reason: "version").encoded)
             } catch {
-                return AppReply(ok: false, reason: "unreadable").encoded
+                return LineServer.Answer(reply: AppReply(ok: false, reason: "unreadable").encoded)
             }
+            // The plugin waits 0.2 s, then says the line itself. A line read
+            // later than this was (or is about to be) said already.
+            if case .say(let s) = message, let sent = s.sent,
+               Date().timeIntervalSince1970 * 1000 - sent > EarshotCore.lateAfterMs {
+                return LineServer.Answer(reply: AppReply(ok: false, reason: "late").encoded)
+            }
+            // Kept only once the plugin has the answer: if it stopped waiting,
+            // it says the line itself.
+            return LineServer.Answer(reply: AppReply(ok: true).encoded) { inbox.yield(message) }
         }
     }
 

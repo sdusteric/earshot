@@ -27,6 +27,7 @@ sleep 0.3
 expect "the app takes the finished line" "$(took '"type":"say".*Fixed the rounding bug')" 1
 expect "the plugin stays silent when the app took it" "$(said 'Fixed the rounding bug')" 0
 expect "the line carries its kind" "$(took '"kind":"done"')" 1
+expect "the line carries the time it was sent, in ms" "$(took '^{"sent":[0-9]\{13\},"v":1,"type":"say"')" 1
 [ "$(took '"type":"status".*"state":"done"')" -ge 1 ] && ok "status changes reach the app" || bad "status changes reach the app"
 
 fake reject; : > "$OUT"; : > "$APPLOG"

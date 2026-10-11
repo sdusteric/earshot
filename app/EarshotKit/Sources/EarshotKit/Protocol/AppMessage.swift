@@ -41,10 +41,13 @@ public enum AppMessage: Sendable, Equatable {
         public var session: String
         public var name: String?
         public var transcript: String?
+        /// When the plugin sent it, in epoch milliseconds (app-send.zsh adds it).
+        public var sent: Double?
 
-        public init(text: String, kind: LineKind, session: String, name: String? = nil, transcript: String? = nil) {
+        public init(text: String, kind: LineKind, session: String, name: String? = nil, transcript: String? = nil,
+                    sent: Double? = nil) {
             self.text = text; self.kind = kind; self.session = session
-            self.name = name; self.transcript = transcript
+            self.name = name; self.transcript = transcript; self.sent = sent
         }
 
         public init(from decoder: any Decoder) throws {
@@ -54,6 +57,7 @@ public enum AppMessage: Sendable, Equatable {
             session = try c.decodeIfPresent(String.self, forKey: .session) ?? ""
             name = try c.decodeIfPresent(String.self, forKey: .name)
             transcript = try c.decodeIfPresent(String.self, forKey: .transcript)
+            sent = try c.decodeIfPresent(Double.self, forKey: .sent)
         }
     }
 

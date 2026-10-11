@@ -7,17 +7,32 @@ import Foundation
 public final class LineServer: @unchecked Sendable {
     public enum Failure: Error { case pathTooLong, socket(Int32), bind(Int32) }
 
+    /// A reply, and what to do once it has reached the client. The client may
+    /// have stopped waiting, so whatever the line asks for happens only then.
+    public struct Answer: Sendable {
+        public var reply: Data
+        public var onDelivered: (@Sendable () -> Void)?
+        public init(reply: Data, onDelivered: (@Sendable () -> Void)? = nil) {
+            self.reply = reply
+            self.onDelivered = onDelivered
+        }
+    }
+
     private let path: String
-    private let handler: @Sendable (Data) -> Data
+    private let handler: @Sendable (Data) -> Answer
     private let queue = DispatchQueue(label: "com.earshot.app.lineserver")
     private var listenSource: DispatchSourceRead?
     private var clients: [Int32: DispatchSourceRead] = [:]
     private var buffers: [Int32: Data] = [:]
     private static let maxLine = 1 << 16
 
-    public init(path: String, handler: @escaping @Sendable (Data) -> Data) {
+    public init(path: String, handler: @escaping @Sendable (Data) -> Answer) {
         self.path = path
         self.handler = handler
+    }
+
+    public convenience init(path: String, handler: @escaping @Sendable (Data) -> Data) {
+        self.init(path: path) { (line: Data) -> Answer in Answer(reply: handler(line)) }
     }
 
     public func start() throws {
@@ -75,10 +90,13 @@ public final class LineServer: @unchecked Sendable {
         while let buffer = buffers[fd], let nl = buffer.firstIndex(of: 10) {
             let line = Data(buffer[buffer.startIndex..<nl])
             buffers[fd] = Data(buffer[buffer.index(after: nl)...])
-            var reply = handler(line)
+            let answer = handler(line)
+            var reply = answer.reply
             reply.append(10)
-            // Replies are a few bytes, well under the socket buffer.
-            _ = reply.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            // Replies are a few bytes, well under the socket buffer. A client
+            // that already hung up makes the write fail (EPIPE).
+            let written = reply.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            if written == reply.count { answer.onDelivered?() }
         }
         if (buffers[fd]?.count ?? 0) > Self.maxLine { drop(fd) }
     }
