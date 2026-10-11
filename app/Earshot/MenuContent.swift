@@ -15,7 +15,9 @@ struct MenuContent: View {
         case .downloading(let p):
             Text("Downloading speech models: \(Int(p * 100))%")
         case .ready:
-            if let b = model.listenBlock { Text(ListenPolicy.menuLine(b)) } else { Text("Listening for \u{201C}Hey Earshot\u{201D}") }
+            if let b = model.listenBlock { Text(ListenPolicy.menuLine(b)) }
+            else if model.wakeLoadFailed { Text("The wake word couldn't start. Retrying.") }
+            else { Text("Listening for \u{201C}Hey Earshot\u{201D}") }
         }
         if model.config.hotkey != .off, !model.hotkeyAllowed {
             Button("Allow the Hotkey…") { model.requestHotkeyAccess() }

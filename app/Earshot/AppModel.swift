@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import EarshotKit
 import Observation
 import ServiceManagement
@@ -11,9 +12,10 @@ final class AppModel {
     var speechState: SpeechOut.State = .idle
     var listenPhase: Listener.Phase = .off
     var listenBlock: ListenBlock?
-    var modelState: ListenModels.State = .missing
+    var modelState: ListenModels.State = ListenModelFiles.present ? .ready : .missing
     var micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     var hotkeyAllowed = HotkeyTap.allowed
+    var wakeLoadFailed = false
     var mutedUntil: Date?
     var config = EarshotConfig.load()
     var startError: String?
@@ -31,6 +33,7 @@ final class AppModel {
     @ObservationIgnored private var hotkeyTap: HotkeyTap?
     @ObservationIgnored private var micInUse = false
     @ObservationIgnored private var wakeLoaded = false
+    @ObservationIgnored private var lastWakeLoad: Date?
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
 
     static let muteFile = URL.earshotDir.appending(path: "mute")
@@ -63,7 +66,7 @@ final class AppModel {
             // Kokoro takes about 12 s to load cold, so load it before the first line.
             await live.synth.prepare()
         }
-        Task { for await list in await live.core.sessions.changes() { sessions = list } }
+        Task { for await list in await live.core.sessions.changes() { sessions = list; await listeningChanged() } }
         Task { for await s in await live.core.speech.stateChanges() { speechState = s; updateActivity() } }
         Task {
             let stack = await ListenStack.live(core: live.core) { box.value }
@@ -71,7 +74,6 @@ final class AppModel {
             Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
-            Task { for await _ in await live.core.sessions.changes() { await listeningChanged() } }
             Task {
                 for await busy in live.mic.changes() {
                     micInUse = busy
@@ -134,6 +136,24 @@ final class AppModel {
         guard let stack else { return }
         let c = configBox.value
         micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let i = listenInputs(c)
+        core?.availability.canListen = ListenPolicy.canListen(i)
+        listenBlock = ListenPolicy.wakeBlock(i)
+        hotkeyTap?.setHotkey(c.hotkey)
+        await stack.listener.setSensitivity(c.wakeSensitivity)
+        // Retry a failed load at most once a minute.
+        if listenBlock == nil, !wakeLoaded, lastWakeLoad.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
+            lastWakeLoad = Date()
+            wakeLoaded = await stack.loadWakeModels()
+            wakeLoadFailed = !wakeLoaded
+        }
+        // The load took a while: arm from the state now, not the state before it.
+        let fresh = ListenPolicy.wakeBlock(listenInputs(configBox.value))
+        listenBlock = fresh
+        await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
+    }
+
+    private func listenInputs(_ c: EarshotConfig) -> ListenInputs {
         var i = ListenInputs()
         i.micAllowed = micAllowed
         i.modelsReady = modelState == .ready
@@ -147,15 +167,7 @@ final class AppModel {
         i.micInUse = micInUse
         i.liveSessions = sessions.count
         i.hotkey = c.hotkey
-        core?.availability.canListen = ListenPolicy.canListen(i)
-        let wake = ListenPolicy.wakeBlock(i)
-        listenBlock = wake
-        hotkeyTap?.setHotkey(c.hotkey)
-        await stack.listener.setSensitivity(c.wakeSensitivity)
-        if wake == nil, !wakeLoaded {
-            wakeLoaded = await stack.loadWakeModels()
-        }
-        await stack.listener.setWakeArmed(wake == nil)
+        return i
     }
 
     private func hotkey(_ action: HotkeyDetector.Action) {
@@ -166,6 +178,8 @@ final class AppModel {
             i.micAllowed = micAllowed; i.modelsReady = modelState == .ready; i.micInUse = micInUse
             i.locked = watch.state.locked; i.asleep = watch.state.asleep
             guard ListenPolicy.commandBlock(i) == nil else { return }
+            // Secure input may hide key presses from the tap, so a chord could look like a hold.
+            guard !IsSecureEventInputEnabled() else { return }
             Task { await listener.hotkeyDown() }
         case .up: Task { await listener.hotkeyUp() }
         case .cancel: Task { await listener.hotkeyCancel() }

@@ -27,6 +27,10 @@ import Foundation
         guard h != currentHotkey else { return }
         currentHotkey = h
         detector = HotkeyDetector(hotkey: h)
+        if held {
+            held = false
+            onAction(.cancel)
+        }
     }
 
     /// False when Input Monitoring is not allowed yet.
