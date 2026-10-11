@@ -15,6 +15,8 @@ final class AppModel {
     var modelState: ListenModels.State = ListenModelFiles.present ? .ready : .missing
     var micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     var hotkeyAllowed = HotkeyTap.allowed
+    /// Another app has secure keyboard entry on, so the hotkey is refused.
+    var secureInput = IsSecureEventInputEnabled()
     var wakeLoadFailed = false
     var mutedUntil: Date?
     var config = EarshotConfig.load()
@@ -38,6 +40,8 @@ final class AppModel {
     @ObservationIgnored private var wakeUnloadTimer: Task<Void, Never>?
     @ObservationIgnored private var wakeUnloading: Task<Void, Never>?
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
+    /// The closed chime for a hold refused under secure input, once it is a real hold.
+    @ObservationIgnored private var refusedHold: Task<Void, Never>?
 
     static let muteFile = URL.earshotDir.appending(path: "mute")
 
@@ -211,10 +215,24 @@ final class AppModel {
             i.locked = watch.state.locked; i.asleep = watch.state.asleep
             guard ListenPolicy.commandBlock(i) == nil else { return }
             // Secure input may hide key presses from the tap, so a chord could look like a hold.
-            guard !IsSecureEventInputEnabled() else { return }
+            // Refused, but not silently: a hold past the minimum gets the closed chime.
+            if IsSecureEventInputEnabled() {
+                secureInput = true
+                refusedHold?.cancel()
+                refusedHold = Task { [stack] in
+                    try? await Task.sleep(for: .milliseconds(200))
+                    guard !Task.isCancelled else { return }
+                    await stack?.play(.closed)
+                }
+                return
+            }
             Task { await listener.hotkeyDown() }
-        case .up: Task { await listener.hotkeyUp() }
-        case .cancel: Task { await listener.hotkeyCancel() }
+        case .up:
+            refusedHold?.cancel()
+            Task { await listener.hotkeyUp() }
+        case .cancel:
+            refusedHold?.cancel()
+            Task { await listener.hotkeyCancel() }
         }
     }
 
@@ -228,8 +246,11 @@ final class AppModel {
         hotkeyAllowed = hotkeyTap?.start() ?? false
     }
 
-    /// Re-reads the mic and Input Monitoring permissions, which change in System Settings.
+    /// Re-reads the mic and Input Monitoring permissions, which change in System
+    /// Settings, and whether another app has secure keyboard entry on.
     func refreshPermissions() {
+        let secure = IsSecureEventInputEnabled()
+        if secure != secureInput { secureInput = secure }
         var changed = false
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         if mic != micAllowed { micAllowed = mic; changed = true }

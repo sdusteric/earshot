@@ -10,6 +10,7 @@ public struct ListenStack: Sendable {
     public let claudePath: String?
     let gate: SileroGate
     let spotter: CtcWakeSpotter
+    let chimes: SystemChimes
 
     public static func live(core: EarshotCore, config: @escaping @Sendable () -> EarshotConfig) async -> ListenStack {
         let gate = SileroGate(), spotter = CtcWakeSpotter(), transcriber = ParakeetTranscriber(), chimes = SystemChimes()
@@ -27,7 +28,7 @@ public struct ListenStack: Sendable {
         await listener.setObserver(loop)
         await loop.start(utterances: listener.utterances)
         return ListenStack(listener: listener, loop: loop, directory: directory, models: ListenModels(),
-                           claudePath: claudePath, gate: gate, spotter: spotter)
+                           claudePath: claudePath, gate: gate, spotter: spotter, chimes: chimes)
     }
 
     /// The VAD and the spotter, which stay loaded while the wake word may listen.
@@ -46,6 +47,8 @@ public struct ListenStack: Sendable {
         }
         return ok
     }
+
+    public func play(_ chime: Chime) async { await chimes.play(chime) }
 
     /// The wake word stayed off or blocked: frees the spotter (and its share of
     /// the CTC model). The VAD stays, for follow-up answers.

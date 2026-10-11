@@ -61,6 +61,10 @@ public enum ListenPolicy {
         return nil
     }
 
+    /// Shown in the menu and in Settings while another app keeps secure input on.
+    public static let secureInputLine =
+        "The hotkey is paused while another app uses secure keyboard entry (for example Terminal's Secure Keyboard Entry)."
+
     public static func menuLine(_ b: ListenBlock) -> String {
         switch b {
         case .micPermission: "Listening is off: Earshot can't use the mic. Allow it in System Settings, Privacy & Security, Microphone."

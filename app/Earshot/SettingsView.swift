@@ -168,6 +168,9 @@ private struct ListeningTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Allow the Hotkey…") { model.requestHotkeyAccess() }
                 }
+                if model.config.hotkey != .off, model.secureInput {
+                    Text(ListenPolicy.secureInputLine).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section {
                 Picker("Microphone", selection: Binding(get: { model.config.inputDevice ?? "" },

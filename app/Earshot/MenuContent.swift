@@ -22,6 +22,7 @@ struct MenuContent: View {
         if model.config.hotkey != .off, !model.hotkeyAllowed {
             Button("Allow the Hotkey…") { model.requestHotkeyAccess() }
         }
+        if model.config.hotkey != .off, model.secureInput { Text(ListenPolicy.secureInputLine) }
         Divider()
         if model.sessions.isEmpty {
             Text("No Claude Code sessions")
@@ -43,6 +44,7 @@ struct MenuContent: View {
             openSettings()
         }
         .keyboardShortcut(",")
+        .onAppear { model.refreshPermissions() }   // the menu opened: secure input may have changed
         if model.updater.canCheck { Button("Check for Updates…") { model.updater.check() } }
         Button("Copy Diagnostics") { model.copyDiagnostics() }
         Divider()
