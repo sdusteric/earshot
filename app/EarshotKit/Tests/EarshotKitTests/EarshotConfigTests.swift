@@ -82,4 +82,35 @@ import Testing
     @Test func missingFileIsEmpty() {
         #expect(EarshotConfig.load(from: URL(fileURLWithPath: "/nonexistent/config")).text == "")
     }
+
+    @Test func listeningDefaults() {
+        let c = EarshotConfig(text: "")
+        #expect(c.wakeWord == false)
+        #expect(c.wakeOnBattery == .lowpower)
+        #expect(c.wakeSensitivity == 5)
+        #expect(c.hotkey == .rightOption)
+        #expect(c.inputDevice == nil)
+    }
+
+    @Test func listeningValues() {
+        let c = EarshotConfig(text: """
+        EARSHOT_WAKE=on
+        EARSHOT_WAKE_BATTERY=power
+        EARSHOT_WAKE_SENSITIVITY=12
+        EARSHOT_HOTKEY=right_command
+        EARSHOT_INPUT='BuiltInMicrophoneDevice'
+        """)
+        #expect(c.wakeWord)
+        #expect(c.wakeOnBattery == .power)
+        #expect(c.wakeSensitivity == 10)   // clamped
+        #expect(c.hotkey == .rightCommand)
+        #expect(c.inputDevice == "BuiltInMicrophoneDevice")
+    }
+
+    @Test func unknownListeningValuesFallBack() {
+        let c = EarshotConfig(text: "EARSHOT_WAKE_BATTERY=sometimes\nEARSHOT_HOTKEY=fn\nEARSHOT_WAKE_SENSITIVITY=x\n")
+        #expect(c.wakeOnBattery == .lowpower)
+        #expect(c.hotkey == .rightOption)
+        #expect(c.wakeSensitivity == 5)
+    }
 }

@@ -13,6 +13,10 @@ extension URL {
 /// (plain, backslash escapes, '...', "...", $'...') and writes '...'.
 public struct EarshotConfig: Sendable, Equatable {
     public enum Engine: String, Sendable, CaseIterable { case kokoro, elevenlabs, say }
+    public enum WakeBattery: String, Sendable, CaseIterable { case always, power, lowpower }
+    public enum Hotkey: String, Sendable, CaseIterable {
+        case rightOption = "right_option", rightCommand = "right_command", off
+    }
 
     private var lines: [String]
 
@@ -81,6 +85,19 @@ public struct EarshotConfig: Sendable, Equatable {
         guard let s = self["EARSHOT_DUCK_LEVEL"], let p = Int(s) else { return 0.3 }
         return Float(min(max(p, 10), 90)) / 100
     }
+    /// App only: listen for "Hey Earshot". Off until you turn it on.
+    public var wakeWord: Bool { self["EARSHOT_WAKE"] == "on" }
+    /// App only: on battery, listen always, never (power), or unless Low Power Mode is on.
+    public var wakeOnBattery: WakeBattery { nonEmpty("EARSHOT_WAKE_BATTERY").flatMap(WakeBattery.init) ?? .lowpower }
+    /// App only: 1 (fewer false wakes) to 10 (fewer missed wakes).
+    public var wakeSensitivity: Int {
+        guard let s = self["EARSHOT_WAKE_SENSITIVITY"], let v = Int(s) else { return 5 }
+        return min(max(v, 1), 10)
+    }
+    /// App only: the key you hold to talk.
+    public var hotkey: Hotkey { nonEmpty("EARSHOT_HOTKEY").flatMap(Hotkey.init) ?? .rightOption }
+    /// App only: the mic's Core Audio UID; nil picks one (see MicInput).
+    public var inputDevice: String? { nonEmpty("EARSHOT_INPUT") }
 
     private func nonEmpty(_ key: String) -> String? {
         guard let v = self[key], !v.isEmpty else { return nil }
