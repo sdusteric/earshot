@@ -101,11 +101,11 @@ public actor TapDucker: Ducking {
         teardown("ducking off: no line renewed it in time")
     }
 
-    private func teardown(_ message: StaticString) {
+    private func teardown(_ message: String) {
         guard let b = backend else { return }
         b.stop()
         backend = nil
-        log.info("\(message)")
+        log.info("\(message, privacy: .public)")
     }
 
     /// Gain for each frame: a straight line from `from` to `to` over `fade` seconds.
