@@ -19,8 +19,16 @@ enum UnixAddress {
         }
     }
 
-    static func noSigPipe(_ fd: Int32) {
+    /// False when the option could not be set (on macOS, an accepted socket whose client has already hung up).
+    @discardableResult
+    static func noSigPipe(_ fd: Int32) -> Bool {
         var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        return setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size)) == 0
+    }
+
+    static func hasNoSigPipe(_ fd: Int32) -> Bool {
+        var on: Int32 = 0
+        var len = socklen_t(MemoryLayout<Int32>.size)
+        return getsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, &len) == 0 && on != 0
     }
 }

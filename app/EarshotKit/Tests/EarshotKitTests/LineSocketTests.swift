@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import EarshotKit
@@ -55,5 +56,32 @@ import Testing
         try server.start()
         server.stop()
         #expect(!FileManager.default.fileExists(atPath: path))
+    }
+    /// A client that writes a line and hangs up before the server accepts it must not
+    /// kill the process (the reply write would raise SIGPIPE on macOS).
+    @Test func aClientThatHangsUpFirstDoesNotKillTheProcess() throws {
+        let path = tempPath()
+        let server = LineServer(path: path) { $0 }
+        try server.start(); defer { server.stop() }
+        var hungUp = 0, attempts = 0
+        while hungUp < 200 && attempts < 5000 {
+            attempts += 1
+            if Self.hangUp(path, line: "hi \(hungUp)") { hungUp += 1 } else { usleep(500) }
+        }
+        #expect(hungUp == 200)
+        let reply = try LineClient.send(path: path, line: Data("last".utf8), timeout: 5)
+        #expect(String(decoding: reply, as: UTF8.self) == "last")
+    }
+
+    /// Connects, writes one line and closes at once, without reading the reply.
+    static func hangUp(_ path: String, line: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        UnixAddress.noSigPipe(fd)
+        guard UnixAddress.with(path, { connect(fd, $0, $1) }) == 0 else { return false }
+        let out = Array((line + "\n").utf8)
+        _ = out.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        return true
     }
 }

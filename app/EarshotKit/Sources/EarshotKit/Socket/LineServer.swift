@@ -43,6 +43,10 @@ public final class LineServer: @unchecked Sendable {
         unlink(path)   // left by an app that crashed; one instance runs at a time
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw Failure.socket(errno) }
+        // Accepted sockets inherit this at connect time. Setting it on an accepted
+        // socket can fail (EINVAL) once the client has hung up, and then the reply
+        // write raises SIGPIPE for the whole process.
+        UnixAddress.noSigPipe(fd)
         let bound = UnixAddress.with(path) { bind(fd, $0, $1) }
         guard bound == 0, chmod(path, 0o600) == 0, listen(fd, 32) == 0 else {
             let e = errno
@@ -71,7 +75,10 @@ public final class LineServer: @unchecked Sendable {
             let fd = accept(listenFD, nil, nil)
             guard fd >= 0 else { return }
             _ = fcntl(fd, F_SETFL, O_NONBLOCK)
-            UnixAddress.noSigPipe(fd)
+            // The listening socket's option is inherited. If the client has already hung up, setting it
+            // here fails, and the connection is kept only when the inherited option reads as set.
+            // Otherwise a reply write could kill the process, so the connection is dropped unanswered.
+            guard UnixAddress.noSigPipe(fd) || UnixAddress.hasNoSigPipe(fd) else { close(fd); continue }
             let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
             source.setEventHandler { [weak self] in self?.readClient(fd) }
             source.setCancelHandler { close(fd) }
