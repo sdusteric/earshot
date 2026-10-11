@@ -90,6 +90,23 @@ The blind votes are from the [Artificial Analysis Speech Arena](https://artifici
 - `jq`. To install it, run `brew install jq`.
 - Optional: `swiftc`, which comes with the Command Line Tools. Without it, Earshot does not stop talking when you start to talk, and it does not wait while you are on a call.
 
+## Earshot for Mac (optional)
+
+Earshot for Mac is a menu bar app that works with the plugin. While it runs,
+it plays every line instead of the plugin:
+
+- It turns music and videos down while it talks, then back up.
+- The menu shows your open sessions, the ones that need you first.
+- "Mute for 1 hour" is in the menu.
+- Settings for the voice, the level and the style are in one place.
+
+It needs macOS 26 or later. The plugin works the same without it: when the app
+is not running, the plugin speaks for itself.
+
+To build it from this repo, run `bash scripts/release-app.sh --local`, then open
+`app/build/release/Earshot.app`. It needs Xcode and XcodeGen
+(`brew install xcodegen`).
+
 ## Install
 
 1. In Claude Code, run these two commands:
