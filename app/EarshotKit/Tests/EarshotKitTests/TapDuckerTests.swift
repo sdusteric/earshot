@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 import Testing
 @testable import EarshotKit
@@ -31,6 +32,43 @@ final class FakeBackend: DuckBackend, @unchecked Sendable {
         #expect(abs(r[0] - 1) < 0.01)
         #expect(abs(r[9599] - 0.3) < 0.01)
         #expect(abs(r[4800] - 0.65) < 0.02)
+    }
+
+    /// Runs GainState.render on one interleaved input and output buffer.
+    func render(_ input: [Float], inChannels: Int, outChannels: Int, outFrames: Int) -> [Float] {
+        let gain = GainState()
+        gain.reset(sampleRate: 48_000, fade: 0.2)
+        var inData = input
+        var outData = [Float](repeating: 99, count: outFrames * outChannels)
+        let inList = AudioBufferList.allocate(maximumBuffers: 1)
+        let outList = AudioBufferList.allocate(maximumBuffers: 1)
+        defer { free(inList.unsafeMutablePointer); free(outList.unsafeMutablePointer) }
+        inData.withUnsafeMutableBytes { inBytes in
+            outData.withUnsafeMutableBytes { outBytes in
+                inList[0] = AudioBuffer(mNumberChannels: UInt32(inChannels), mDataByteSize: UInt32(inBytes.count), mData: inBytes.baseAddress)
+                outList[0] = AudioBuffer(mNumberChannels: UInt32(outChannels), mDataByteSize: UInt32(outBytes.count), mData: outBytes.baseAddress)
+                gain.render(inList, outList)
+            }
+        }
+        return outData
+    }
+
+    @Test func stereoToStereoCopies() {
+        #expect(render([0.1, 0.2, 0.3, 0.4], inChannels: 2, outChannels: 2, outFrames: 2) == [0.1, 0.2, 0.3, 0.4])
+    }
+
+    @Test func stereoToMonoMixes() {
+        let out = render([0.2, 0.4, 0.6, 0.8], inChannels: 2, outChannels: 1, outFrames: 2)
+        #expect(abs(out[0] - 0.3) < 0.0001 && abs(out[1] - 0.7) < 0.0001)
+    }
+
+    @Test func stereoToFourChannelsFillsTheFirstTwo() {
+        #expect(render([0.1, 0.2, 0.3, 0.4], inChannels: 2, outChannels: 4, outFrames: 2)
+            == [0.1, 0.2, 0, 0, 0.3, 0.4, 0, 0])
+    }
+
+    @Test func monoToStereoCopiesToBoth() {
+        #expect(render([0.1, 0.3], inChannels: 1, outChannels: 2, outFrames: 2) == [0.1, 0.1, 0.3, 0.3])
     }
 
     @Test func offMeansNoTap() async {

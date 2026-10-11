@@ -240,29 +240,69 @@ final class GainState: @unchecked Sendable {
         step = (t - current) * stepSize
     }
 
+    /// Copies the tap's audio to the output at the current gain, frame by
+    /// frame, mapping channels: the tap is stereo, the output may be mono (a
+    /// headset in call mode) or have more channels. Buffers are either one
+    /// interleaved buffer or one buffer per channel.
     func render(_ ins: UnsafeMutableAudioBufferListPointer, _ outs: UnsafeMutableAudioBufferListPointer) {
         callbacks &+= 1
-        let channels = max(1, ins.first.map { Int($0.mNumberChannels) } ?? 1)
-        var last = current
-        for i in 0..<outs.count {
-            guard let dst = outs[i].mData?.assumingMemoryBound(to: Float.self) else { continue }
-            let n = Int(outs[i].mDataByteSize) / MemoryLayout<Float>.size
-            guard i < ins.count, let src = ins[i].mData?.assumingMemoryBound(to: Float.self) else {
-                dst.update(repeating: 0, count: n)
-                continue
-            }
-            let m = min(n, Int(ins[i].mDataByteSize) / MemoryLayout<Float>.size)
-            var g = current
-            for k in 0..<m {
-                if k % channels == 0, g != target {
-                    g += step
-                    if (step < 0 && g < target) || (step > 0 && g > target) { g = target }
+        let inCh = Self.channels(ins), outCh = Self.channels(outs)
+        guard outCh > 0 else { return }
+        // Per-channel pointers live on the stack: no allocation on the audio thread.
+        withUnsafeTemporaryAllocation(of: UnsafeMutablePointer<Float>.self, capacity: max(inCh, 1)) { inP in
+            withUnsafeTemporaryAllocation(of: UnsafeMutablePointer<Float>.self, capacity: outCh) { outP in
+                guard let out = Self.fill(outs, outP) else { return }
+                guard inCh > 0, let inp = Self.fill(ins, inP) else {
+                    for f in 0..<out.frames { for c in 0..<outCh { outP[c][f * out.stride] = 0 } }
+                    return
                 }
-                dst[k] = src[k] * g
+                let frames = min(inp.frames, out.frames)
+                var g = current
+                for f in 0..<frames {
+                    if g != target {
+                        g += step
+                        if (step < 0 && g < target) || (step > 0 && g > target) { g = target }
+                    }
+                    if outCh == 1 {
+                        var sum: Float = 0
+                        for c in 0..<inCh { sum += inP[c][f * inp.stride] }
+                        outP[0][f * out.stride] = sum / Float(inCh) * g
+                    } else {
+                        for c in 0..<outCh {
+                            let v: Float = c < inCh ? inP[c][f * inp.stride]
+                                : (inCh == 1 && c < 2 ? inP[0][f * inp.stride] : 0)
+                            outP[c][f * out.stride] = v * g
+                        }
+                    }
+                }
+                for f in frames..<out.frames { for c in 0..<outCh { outP[c][f * out.stride] = 0 } }
+                current = g
             }
-            if m < n { (dst + m).update(repeating: 0, count: n - m) }
-            last = g
         }
-        current = last
+    }
+
+    /// Channels in a buffer list: one interleaved buffer, or one buffer per channel.
+    static func channels(_ list: UnsafeMutableAudioBufferListPointer) -> Int {
+        list.count == 1 ? max(1, Int(list[0].mNumberChannels)) : list.count
+    }
+
+    /// Fills `ptrs` with a pointer to each channel's first sample. Returns the
+    /// stride between frames and the frame count, or nil when a buffer has no data.
+    static func fill(_ list: UnsafeMutableAudioBufferListPointer,
+                     _ ptrs: UnsafeMutableBufferPointer<UnsafeMutablePointer<Float>>) -> (stride: Int, frames: Int)? {
+        let size = MemoryLayout<Float>.size
+        if list.count == 1 {
+            guard let p = list[0].mData?.assumingMemoryBound(to: Float.self) else { return nil }
+            let ch = max(1, Int(list[0].mNumberChannels))
+            for c in 0..<ch { ptrs[c] = p + c }
+            return (ch, Int(list[0].mDataByteSize) / size / ch)
+        }
+        var frames = Int.max
+        for (i, b) in list.enumerated() {
+            guard let p = b.mData?.assumingMemoryBound(to: Float.self) else { return nil }
+            ptrs[i] = p
+            frames = min(frames, Int(b.mDataByteSize) / size)
+        }
+        return list.isEmpty ? nil : (1, frames)
     }
 }
