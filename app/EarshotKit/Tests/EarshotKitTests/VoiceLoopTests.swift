@@ -8,9 +8,12 @@ actor FakeFollowUps: FollowUpListening {
     private var delay: Duration = .zero
     /// Opening a window takes this long, like starting the recognizer.
     func slow(_ d: Duration) { delay = d }
+    /// Windows whose listenFollowUp has returned.
+    private(set) var completions = 0
     func listenFollowUp(_ f: Listener.FollowUp, within: Duration?) async {
         calls.append(f)
         if delay > .zero { try? await Task.sleep(for: delay) }
+        completions += 1
     }
     func setVocabulary(_ v: [String]) async { vocabulary = v }
     private(set) var speaking: [String?] = []
@@ -35,7 +38,7 @@ actor CountingSpeaker: LineSpeaker {
     /// Lines the loop held the queue after: the .started handler has run for them.
     private(set) var holds: [UUID] = []
     func holdAfter(_ id: UUID) async { holds.append(id); await inner.holdAfter(id) }
-    func releaseHold() async { await inner.releaseHold() }
+    func releaseHold(_ id: UUID) async { await inner.releaseHold(id) }
 }
 
 @Suite struct VoiceLoopTests {
@@ -320,6 +323,38 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await eventually { await player.played.count == 2 })
         // The second line began only after the window opened.
         #expect(await followUps.calls == [.reply])
+        #expect(await followUps.completions == 1)
+    }
+
+    /// The finished event of an earlier line, handled late, must not free the hold of the question after it.
+    @Test func anEarlierLinesFinishedDoesNotReleaseTheNextLinesHold() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        await followUps.slow(.milliseconds(200))
+        await followUps.slowSpeaking(.milliseconds(100))
+        let player = r.player
+        await r.speech.enqueue(SpokenLine(text: "first", kind: .roll, session: ""))
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await player.played.count == 2 })
+        await r.speech.enqueue(SpokenLine(text: "third", kind: .roll, session: ""))
+        #expect(await eventually { await player.played.count == 3 })
+        // The third line began only after the question's window was opened and closed.
+        #expect(await followUps.calls == [.reply])
+        #expect(await followUps.completions == 1)
+    }
+
+    @Test func heyEarshotAloneInAReplyWindowDoesNothing() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await followUps.calls == [.reply] })
+        r.heard.yield(said("Hey Earshot.", .followUp(.reply)))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await transport.sent.isEmpty)
+        #expect(await r.player.played.count == 1)   // only the question
+        // The question is still open.
+        r.heard.yield(said("Invoice export.", .followUp(.reply)))
+        #expect(await eventually { await transport.sent.map(\.pid) == [11] })
     }
 
     @Test func listeningIsNeverEndedMoreOftenThanItBegan() async {

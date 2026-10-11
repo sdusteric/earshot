@@ -17,7 +17,7 @@ public protocol LineSpeaker: Sendable {
     func endListening() async
     func lineEvents() async -> AsyncStream<SpeechOut.LineEvent>
     func holdAfter(_ id: UUID) async
-    func releaseHold() async
+    func releaseHold(_ id: UUID) async
 }
 
 extension SpeechOut: LineSpeaker {}
@@ -208,7 +208,7 @@ public actor VoiceLoop: ListenObserver {
                 // Only the prompt the line was about, and only while it is still open.
                 await followUps.listenFollowUp(.approval(id: id), within: nil)
             }
-            await speech.releaseHold()
+            await speech.releaseHold(line.id)
         case .ended:
             await followUps.setSpeaking(nil)
         }

@@ -80,6 +80,8 @@ public actor SpeechOut {
     /// The lines after which the queue waits (see holdAfter), and whether it is waiting now.
     private var holdIDs: Set<UUID> = []
     private var holdActive = false
+    /// The line whose hold is active now.
+    private var holdLine: UUID?
     private var holdGeneration = 0
     private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
     private var lastMicBusy = false
@@ -175,27 +177,36 @@ public actor SpeechOut {
     /// is enqueued, so a line that ends at once is still held.
     public func holdAfter(_ id: UUID) { holdIDs.insert(id) }
 
-    public func releaseHold() {
+    /// Releases the hold that belongs to this line only: the finished event of an
+    /// earlier line, handled late, cannot free the hold of a later one.
+    public func releaseHold(_ id: UUID) {
+        guard holdLine == id else { return }
+        endHold()
+    }
+
+    private func endHold() {
         guard holdActive else { return }
+        holdLine = nil
         holdActive = false
         holdGeneration += 1
         runIfNeeded()
     }
 
-    private func startHold() {
+    private func startHold(_ id: UUID) {
         holdActive = true
+        holdLine = id
         owed = true   // the ducking is ended when the hold is released
         holdGeneration += 1
         let generation = holdGeneration
         Task { [holdTimeout] in
             try? await Task.sleep(for: holdTimeout)
-            await self.holdTimedOut(generation)
+            self.holdTimedOut(generation)
         }
     }
 
     private func holdTimedOut(_ generation: Int) {
         guard holdActive, holdGeneration == generation else { return }
-        releaseHold()
+        endHold()
     }
 
     public func lineEvents() -> AsyncStream<LineEvent> {
@@ -238,6 +249,7 @@ public actor SpeechOut {
             let line = queue.removeFirst()
             if clock().timeIntervalSince(line.received) > maxWait {
                 log.info("dropped a line that waited over \(Int(self.maxWait)) s")
+                holdIDs.remove(line.id)
                 continue
             }
             if line.kind != .roll, await micBusy() { hold(line); continue }
@@ -279,8 +291,9 @@ public actor SpeechOut {
                 finished = true
             }
             currentLine = nil
+            if !(playedToEnd && made != nil) { holdIDs.remove(line.id) }   // it never finished: no hold
             if playedToEnd, made != nil {
-                if holdIDs.remove(line.id) != nil { startHold() }
+                if holdIDs.remove(line.id) != nil { startHold(line.id) }
                 emit(.finished(line))
             }
             emit(.ended(line))

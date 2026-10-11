@@ -143,10 +143,43 @@ actor SlowEndDucker: Ducking {
         try? await Task.sleep(for: .milliseconds(100))
         #expect(await player.played == ["one"])
         #expect(await ducker.ends == 0)
-        await s.releaseHold()
+        await s.releaseHold(one.id)
         await s.waitUntilIdle()
         #expect(await player.played == ["one", "two"])
         #expect(await ducker.ends == 1)
+    }
+
+    @Test func anotherLinesReleaseDoesNotEndTheHold() async {
+        let player = FakePlayer()
+        let s = await makeHolding(player)
+        let one = line("one"), two = line("two")
+        await s.holdAfter(one.id)
+        await s.enqueue(one); await s.enqueue(two)
+        await eventually { await player.played == ["one"] }
+        await s.releaseHold(UUID())
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await player.played == ["one"])
+        await s.releaseHold(one.id)
+        await s.waitUntilIdle()
+        #expect(await player.played == ["one", "two"])
+    }
+
+    /// A line that was stopped before it finished leaves no hold behind.
+    @Test func aLineThatNeverFinishedLeavesNoHold() async {
+        let player = FakePlayer(blocking: true)
+        let s = await makeHolding(player)
+        let one = line("one")
+        await s.holdAfter(one.id)
+        await s.enqueue(one)
+        await eventually { await player.isPlaying }
+        await s.beginListening()   // barges in: one is dropped
+        await s.endListening()
+        await s.waitUntilIdle()
+        await player.unblock()
+        await s.enqueue(one)   // the same id again, now played to the end
+        await s.enqueue(line("two"))
+        await s.waitUntilIdle()
+        #expect(await player.played == ["one", "one", "two"])   // no hold between them
     }
 
     @Test func theHoldReleasesItselfAfterTheTimeout() async {
@@ -173,7 +206,7 @@ actor SlowEndDucker: Ducking {
         await eventually { await player.played == ["one"] }
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await ducker.ends == 0)
-        await s.releaseHold()
+        await s.releaseHold(one.id)
         await eventually { await ducker.ends == 1 }
         #expect(await ducker.ends == 1)
     }
