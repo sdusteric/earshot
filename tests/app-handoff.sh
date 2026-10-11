@@ -15,7 +15,7 @@ ok() { pass=$((pass + 1)); echo "  ok    $1"; }
 bad() { fail=$((fail + 1)); echo "  FAIL  $1"; }
 expect() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $2, expected $3)"; fi; }
 hook() { jq -nc --arg sid "$2" --arg cwd "$P" --argjson x "$3" '{session_id: $sid, cwd: $cwd} + $x' | bash "$S" "$1" >/dev/null; }
-fake() { pkill -f "fake-app.zsh $SOCK" 2>/dev/null; sleep 0.1; ( zsh -f "$ROOT/tests/fake-app.zsh" "$SOCK" "$APPLOG" "$1" & ); sleep 0.3; }
+fake() { pkill -f "fake-app.pl $SOCK" 2>/dev/null; sleep 0.1; ( /usr/bin/perl "$ROOT/tests/fake-app.pl" "$SOCK" "$APPLOG" "$1" & ); sleep 0.3; }
 said() { grep -c -- "$1" "$OUT"; }
 took() { grep -c -- "$1" "$APPLOG"; }
 
@@ -47,7 +47,7 @@ expect "a silent app: the plugin says it, once" "$(said 'Slow app line')" 1
 [ $(( slow - base )) -lt 450 ] && ok "a silent app adds about the 0.2 s wait (${base} ms without, ${slow} ms with)" \
   || bad "a silent app adds about the 0.2 s wait (${base} ms without, ${slow} ms with)"
 
-pkill -9 -f "fake-app.zsh $SOCK"; sleep 0.2; : > "$OUT"
+pkill -9 -f "fake-app.pl $SOCK"; sleep 0.2; : > "$OUT"
 [ -S "$SOCK" ] && ok "a crashed app leaves its socket file (test setup)" || bad "a crashed app leaves its socket file (test setup)"
 hook start a6 '{}'; hook stop a6 '{"last_assistant_message":"🗣 Crashed app line."}'
 expect "a crashed app's socket: the plugin says it" "$(said 'Crashed app line')" 1
@@ -76,6 +76,6 @@ EARSHOT_APP_SOCK= bash "$S" say "Plain mute line" >/dev/null
 expect "an empty mute file still mutes" "$(said 'Plain mute line')" 0
 rm -f "$EARSHOT_MUTE"
 
-pkill -f "fake-app.zsh $SOCK"
+pkill -f "fake-app.pl $SOCK"
 rm -rf "$D" "$EARSHOT_STATE_DIR"; rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
