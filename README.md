@@ -31,10 +31,12 @@ talks back.
 
 With several sessions open, you hear which one is talking. The finished line
 starts with the project, like "From billing service: fixed the rounding bug." When
-two sessions are open in the same project, Earshot also says the session's name,
-the one you see in `/resume`: "Hey, the refund rounding session in billing service
-needs your OK." Folder names are said as words, so `billing_service` and
-`billingService` both sound like "billing service".
+two sessions are open in the same project, Earshot names the session instead,
+with a short form of the name you see in `/resume`: "Hey, the refund rounding
+session needs your OK." When two open sessions would get the same short name, it
+adds the project: "Hey, refund rounding in billing service needs your OK." Folder
+names are said as words, so `billing_service` and `billingService` both sound
+like "billing service".
 
 Earshot only speaks while `/voice` is on. It stops talking when you start, plays
 repeated lines from a cache, and beeps if the voice fails. Reminders stop as soon
@@ -261,9 +263,12 @@ you answered, the timer stops.
 Earshot keeps a list of open sessions in its own folder. A session that
 closes, or that is quiet for 6 hours, leaves the list. When another session is
 open, the finished line starts with the project name. When another session is
-open in the same project, Earshot also says the session's name. It reads the
+open in the same project, Earshot says the session's name instead. It reads the
 name from the session transcript: a `/rename` name first, then the name that
-Claude Code made. A new session can have no name for its first minute.
+Claude Code made. A name of 3 words or fewer is said as it is. A longer one is
+cut to its first few words, without a leading verb or "the": "Create guest
+confirmation email with event details" becomes "guest confirmation email". A
+new session can have no name for its first minute.
 
 When `/voice` is on, the prompt hook tells Claude to end each reply with one line
 that starts with 🗣. When Claude stops, the `Stop` hook reads that line aloud.
@@ -338,7 +343,8 @@ that were open before you installed or updated Earshot need a restart.
 
 **Can I tell which session is talking when I run several?**
 Yes. With several sessions open, the summary starts with the project name. Two
-sessions in the same project also get the session's name.
+sessions in the same project are told apart by a short form of the session's
+name.
 
 **Does it work on Linux or Windows?**
 Not yet. Earshot plays audio with `afplay`, which only macOS has.
