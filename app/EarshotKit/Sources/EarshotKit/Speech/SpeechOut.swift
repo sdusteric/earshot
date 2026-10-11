@@ -71,6 +71,8 @@ public actor SpeechOut {
     private var listening = 0
     /// The playing line was stopped because you started talking: it is dropped.
     private var bargedIn = false
+    /// A listening begin ducked other audio and nobody has ended it yet.
+    private var owed = false
     private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
     private var lastMicBusy = false
     private var catchUpGeneration = 0
@@ -136,6 +138,7 @@ public actor SpeechOut {
     /// that is playing stops and is not said again; the rest waits.
     public func beginListening() async {
         listening += 1
+        owed = true
         if let id = currentLine {
             bargedIn = true
             await player.stop(id)
@@ -148,7 +151,9 @@ public actor SpeechOut {
         guard listening > 0 else { return }
         listening -= 1
         guard listening == 0 else { return }
-        if !running, queue.isEmpty {
+        // A running run ends the ducking in its tail; otherwise end it here.
+        if !running, queue.isEmpty, owed {
+            owed = false
             let ducker = self.ducker
             await bounded(callTimeout, ()) { await ducker.end() }
         }
@@ -190,6 +195,7 @@ public actor SpeechOut {
 
     private func run() async {
         var ducked = false
+        while true {
         while !queue.isEmpty, listening == 0 {
             let line = queue.removeFirst()
             if clock().timeIntervalSince(line.received) > maxWait {
@@ -202,6 +208,8 @@ public actor SpeechOut {
             let url = made ?? Self.errorTone
             // A call may have started while the audio was made.
             if line.kind != .roll, await micBusy() { hold(line); continue }
+            // You began talking while the audio was made: it waits for endListening.
+            if listening > 0 { queue.insert(line, at: 0); break }
             // From here a call that starts interrupts this line.
             currentLine = line.id
             interrupted = false
@@ -213,10 +221,12 @@ public actor SpeechOut {
             ducked = true
             emit(.started(line))
             let finished: Bool
+            var playedToEnd = false
             if interrupted || bargedIn {
                 finished = false   // a call or your voice began while the ducking started
             } else if let done = await playWithTimeout(url, id: line.id) {
                 finished = done
+                playedToEnd = done
             } else {
                 // Playback did not finish in time, for example a start that hangs
                 // inside Core Audio while a headset switches mode. Move on, so the
@@ -226,7 +236,7 @@ public actor SpeechOut {
                 finished = true
             }
             currentLine = nil
-            if finished, made != nil { emit(.finished(line)) }
+            if playedToEnd, made != nil { emit(.finished(line)) }
             if !finished && interrupted {
                 // A call started: say this line and the rest later.
                 hold(line)
@@ -235,9 +245,15 @@ public actor SpeechOut {
             }
             // Stopped because you talked: the line is dropped; the queue waits for endListening.
         }
-        if ducked, listening == 0 {
+        if listening == 0, ducked || owed {
+            ducked = false
+            owed = false
             let ducker = self.ducker
             await bounded(callTimeout, ()) { await ducker.end() }
+        }
+        // Lines or a listening begin that arrived during the awaited end: go again.
+        if listening == 0, !queue.isEmpty || owed { continue }
+        break
         }
         running = false
         updateState()

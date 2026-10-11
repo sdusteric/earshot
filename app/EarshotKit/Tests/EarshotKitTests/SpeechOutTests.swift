@@ -77,6 +77,32 @@ actor FakeDucker: Ducking {
     func end() async { ends += 1 }
 }
 
+/// Makes audio only after the test releases it.
+actor GatedSynth: Synthesizer {
+    private var open = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var asked = 0
+    func audio(for line: SpokenLine) async -> URL? {
+        asked += 1
+        if !open { await withCheckedContinuation { waiters.append($0) } }
+        return URL(fileURLWithPath: "/fake/\(line.text)")
+    }
+    func release() { open = true; waiters.forEach { $0.resume() }; waiters = [] }
+}
+
+/// The first end() suspends until released, like a slow Core Audio teardown.
+actor SlowEndDucker: Ducking {
+    private(set) var begins = 0, ends = 0, endStarted = false
+    private var gate: CheckedContinuation<Void, Never>?
+    private var released = false
+    func begin() async { begins += 1 }
+    func end() async {
+        ends += 1
+        if ends == 1, !released { endStarted = true; await withCheckedContinuation { gate = $0 } }
+    }
+    func release() { released = true; gate?.resume(); gate = nil }
+}
+
 @Suite struct SpeechOutTests {
     let mic = FakeMic()
     let ducker = FakeDucker()
@@ -354,5 +380,86 @@ actor FakeDucker: Ducking {
         await s.endListening()
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await events.items == [.started(a), .finished(a), .started(b)])
+    }
+
+    @Test func aLineMadeWhileYouTalkWaitsForTheEnd() async {
+        let synth = GatedSynth()
+        let player = FakePlayer()
+        let s = SpeechOut(synth: synth, player: player, mic: mic, ducker: ducker, settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("later"))
+        await eventually { await synth.asked == 1 }
+        await s.beginListening()
+        await synth.release()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await player.played.isEmpty)
+        await s.endListening()
+        await eventually {
+            let played = await player.played
+            let ends = await ducker.ends
+            return played == ["later"] && ends == 1
+        }
+        #expect(await player.played == ["later"])
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func duckingEndsWhenARunExitsWithoutHavingDucked() async {
+        let synth = GatedSynth()
+        let s = SpeechOut(synth: synth, player: FakePlayer(), mic: mic, ducker: ducker, settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("held", .need))
+        await eventually { await synth.asked == 1 }
+        await s.beginListening()
+        mic.set(true)
+        await s.endListening()
+        await synth.release()
+        await eventually { await ducker.ends == 1 }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await ducker.begins == 1)
+        #expect(await ducker.ends == 1)
+    }
+
+    @Test func aListeningPairDuringTheFinalEndStillEndsTheDucking() async {
+        let slow = SlowEndDucker()
+        let s = SpeechOut(synth: FakeSynth(), player: FakePlayer(), mic: mic, ducker: slow, settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("one"))
+        await eventually { await slow.endStarted }
+        await s.beginListening()
+        await s.endListening()
+        await slow.release()
+        await eventually { await slow.ends == 2 }
+        #expect(await slow.begins == 2)
+        #expect(await slow.ends == 2)
+    }
+
+    @Test func aLineEnqueuedDuringTheFinalEndStillPlays() async {
+        let slow = SlowEndDucker()
+        let player = FakePlayer()
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: slow, settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("one"))
+        await eventually { await slow.endStarted }
+        await s.enqueue(line("two"))
+        await slow.release()
+        await eventually { await player.played == ["one", "two"] }
+        await eventually { await slow.begins == slow.ends }
+        #expect(await player.played == ["one", "two"])
+        #expect(await slow.begins == slow.ends)
+    }
+
+    @Test func aLineThatTimedOutIsNotReportedFinished() async {
+        let player = FakePlayer(hangs: true)
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: ducker, answered: { _ in false },
+                          settle: .milliseconds(30), lineTimeout: .milliseconds(100))
+        await s.start()
+        let events = Collected<SpeechOut.LineEvent>()
+        let stream = await s.lineEvents()
+        Task { for await e in stream { await events.add(e) } }
+        let a = line("stuck", .need)
+        await s.enqueue(a)
+        await eventually { await ducker.ends == 1 }
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(await events.items == [.started(a)])
     }
 }
