@@ -50,6 +50,8 @@ public actor Listener {
         var start: Int
         /// Waiting for speech to begin: after "Hey Earshot" alone, or in a follow-up window.
         var waitingForSpeech: Bool
+        /// After "Hey Earshot" alone: this clip is the command itself.
+        var commandPhase = false
     }
 
     private let input: any AudioInput
@@ -82,6 +84,13 @@ public actor Listener {
     private var capture: Capture?
     private var hotkeyHeld = false
     private var holdTask: Task<Void, Never>?
+    private var pressID = 0
+    private var openTask: Task<Void, Never>?
+    /// Callers that are opening the mic to start a capture of their own.
+    private var pendingOpens = 0
+
+    /// Wake captures whose transcript did not start with the wake phrase.
+    public private(set) var falseWakes = 0
 
     public init(input: any AudioInput, gate: any SpeechGate, spotter: any WakeSpotter, transcriber: any Transcriber,
                 chimes: any Chimes, timing: Timing = Timing()) {
@@ -118,11 +127,13 @@ public actor Listener {
     public func hotkeyDown() async {
         guard !micBusy, !hotkeyHeld else { return }
         hotkeyHeld = true
+        pressID += 1
+        let press = pressID
         holdTask?.cancel()
         holdTask = Task { [minHold = timing.minHold] in
             try? await Task.sleep(for: minHold)
             guard !Task.isCancelled else { return }
-            await self.holdConfirmed()
+            await self.holdConfirmed(press)
         }
     }
 
@@ -130,19 +141,29 @@ public actor Listener {
     /// not opened and nothing is chimed or lowered, so a tap or a chord
     /// (Right Option types characters on some layouts) changes nothing. When
     /// the wake word already has the mic open, the last 0.3 s count too.
-    private func holdConfirmed() async {
-        guard hotkeyHeld, !micBusy else { return }
-        if let c = capture, case .followUp = c.trigger { capture = nil }   // the hotkey takes over
-        else if capture != nil { return }
+    private func holdConfirmed(_ press: Int) async {
+        guard hotkeyHeld, pressID == press, !micBusy else { return }
         let wasOpen = micOpen
         await openMic()
-        // Released, or a call started, while the mic opened.
-        guard micOpen, hotkeyHeld, !micBusy, capture == nil else { await closeMicIfIdle(); return }
+        // Released, pressed again, or a call started, while the mic opened.
+        guard micOpen, hotkeyHeld, pressID == press, !micBusy else { await closeMicIfIdle(); return }
+        if let c = capture {
+            guard case .followUp = c.trigger else { return }
+            // The hotkey takes over: end the follow-up before the new capture begins.
+            capture = nil
+            await observer?.captureEnded(heard: false)
+            guard micOpen, hotkeyHeld, pressID == press, !micBusy, capture == nil else {
+                await closeMicIfIdle()
+                settlePhase()
+                return
+            }
+        }
         let start = wasOpen ? max(ring.oldest, ring.total - timing.preRollSamples) : ring.total
         capture = Capture(trigger: .hotkey, start: start, waitingForSpeech: false)
         phase = .capturing(.hotkey)
-        await chimes.play(.listening)
+        startPrewarm()
         await observer?.captureBegan(.hotkey)
+        await chimes.play(.listening)
     }
 
     public func hotkeyUp() async {
@@ -172,21 +193,29 @@ public actor Listener {
     /// Listens once without the wake word, for a few seconds.
     public func listenFollowUp(_ f: FollowUp, within: Duration? = nil) async {
         guard !micBusy, capture == nil, !hotkeyHeld else { return }
-        await openMic()
-        guard micOpen else { return }
+        await openMic(counted: true)
         await gate.reset()
+        guard micOpen, !micBusy, capture == nil, !hotkeyHeld else {
+            await closeMicIfIdle()
+            settlePhase()
+            return
+        }
         let c = Capture(trigger: .followUp(f), start: ring.total, waitingForSpeech: true)
         capture = c
         phase = .capturing(c.trigger)
-        await chimes.play(.listening)
         await observer?.captureBegan(c.trigger)
         scheduleTimeout(c.id, after: within ?? timing.followUp)
+        await chimes.play(.listening)
     }
 
     /// Another app opened the mic: drop what is being heard and close the mic.
     public func setMicBusy(_ busy: Bool) async {
         micBusy = busy
-        guard busy else { return }
+        guard busy else {
+            if armed { await openMic() }
+            settlePhase()
+            return
+        }
         holdTask?.cancel()
         holdTask = nil
         if let c = capture { await drop(c) }
@@ -196,10 +225,30 @@ public actor Listener {
 
     // MARK: - Audio
 
-    private func openMic() async {
+    /// Opens the mic. Opens are serialised: a caller that arrives while one
+    /// is in flight waits for it. `counted` marks a caller that will start a
+    /// capture once the mic is open, so the mic is wanted even if nothing else needs it.
+    private func openMic(counted: Bool = false) async {
+        if counted { pendingOpens += 1 }
+        defer { if counted { pendingOpens -= 1 } }
         guard !micOpen, !micBusy else { return }
+        if openTask == nil { openTask = Task { await self.performOpen() } }
+        await openTask?.value
+    }
+
+    private func performOpen() async {
+        defer { openTask = nil }
         do {
             let stream = try await input.start()
+            _ = chunker.drain()
+            segmentStart = nil
+            spotted = false
+            await gate.reset()
+            // start() and reset() suspend: a call may have started, or nobody may want the mic any more.
+            guard !micBusy, armed || capture != nil || hotkeyHeld || pendingOpens > 0 else {
+                await input.stop()
+                return
+            }
             micOpen = true
             streamTask = Task { [weak self] in
                 for await samples in stream { await self?.receive(samples) }
@@ -208,6 +257,13 @@ public actor Listener {
             log.error("couldn't open the mic: \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    private func startPrewarm() {
+        Task { [transcriber] in await transcriber.prewarm() }
+    }
+
+    /// A command can't be longer than what the ring still holds, less the pre-roll.
+    private var maxCommand: Int { min(timing.maxCommandSamples, ring.capacity - timing.preRollSamples) }
 
     private func closeMic() async {
         guard micOpen else { return }
@@ -232,7 +288,7 @@ public actor Listener {
     private func process(_ chunk: [Float]) async {
         ring.append(chunk)
         if let c = capture, c.trigger == .hotkey {
-            if ring.total - c.start >= timing.maxCommandSamples { await finish(c, end: ring.total) }
+            if ring.total - c.start >= maxCommand { await finish(c, end: ring.total) }
             return
         }
         // Stage 1: quiet audio skips the VAD, unless something is being heard.
@@ -244,13 +300,13 @@ public actor Listener {
             segmentStart = max(ring.oldest, ring.total - 2 * chunk.count)
             spotted = false
             if var c = capture, c.waitingForSpeech, let s = segmentStart {
-                c.start = s
+                c.start = max(c.start, s)   // never reach back before the window opened
                 c.waitingForSpeech = false
                 capture = c
             }
         }
         if let c = capture, !c.waitingForSpeech {
-            if edge == .end || ring.total - c.start >= timing.maxCommandSamples {
+            if edge == .end || ring.total - c.start >= maxCommand {
                 segmentStart = nil
                 await finish(c, end: ring.total)
             }
@@ -261,12 +317,13 @@ public actor Listener {
            ring.total - s >= timing.spotAtSamples || edge == .end {
             spotted = true
             let window = ring.samples(from: s, to: s + timing.spotWindowSamples)
-            if await spotter.heardWake(window, sensitivity: sensitivity), capture == nil, !micBusy {
+            if await spotter.heardWake(window, sensitivity: sensitivity), capture == nil, !micBusy, micOpen {
                 let c = Capture(trigger: .wake, start: s, waitingForSpeech: false)
                 capture = c
                 phase = .capturing(.wake)
-                await chimes.play(.listening)
+                startPrewarm()
                 await observer?.captureBegan(.wake)
+                await chimes.play(.listening)
                 if edge == .end { segmentStart = nil; await finish(c, end: ring.total) }
             }
         }
@@ -290,22 +347,31 @@ public actor Listener {
             }
         }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if c.trigger == .wake, let rest = Self.stripWake(text) {
-            text = rest
-            if text.isEmpty {
-                // "Hey Earshot" alone: keep listening for the command.
-                let next = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true)
-                capture = next
-                phase = .capturing(.wake)
-                scheduleTimeout(next.id, after: timing.wakeSilence)
-                return
+        // A result that arrives after a call started is dropped.
+        let dropped = micBusy
+        if c.trigger == .wake, !c.commandPhase {
+            if let rest = Self.stripWake(text) {
+                text = rest
+                if text.isEmpty, !dropped, capture == nil, micOpen {
+                    // "Hey Earshot" alone: keep listening for the command.
+                    let next = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
+                    capture = next
+                    phase = .capturing(.wake)
+                    scheduleTimeout(next.id, after: timing.wakeSilence)
+                    return
+                }
+            } else {
+                falseWakes += 1
+                text = ""
             }
         }
-        await observer?.captureEnded(heard: !text.isEmpty)
-        if text.isEmpty {
-            await chimes.play(.closed)
-        } else {
+        if dropped { text = "" }
+        let heard = !text.isEmpty
+        await observer?.captureEnded(heard: heard)
+        if heard {
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now))
+        } else if !dropped, capture == nil {
+            await chimes.play(.closed)
         }
         await closeMicIfIdle()
         settlePhase()

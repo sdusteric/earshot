@@ -49,7 +49,67 @@ actor FakeTranscriber: Transcriber {
         if s.contains(3) { words.append("what's everyone doing?") } else if s.contains(1) { words.append("run the tests") }
         return words.joined(separator: " ")
     }
+    private(set) var prewarms = 0
+    func prewarm() async { prewarms += 1 }
+}
+
+/// A mic whose start() waits until the test releases it.
+actor SlowInput: AudioInput {
+    private var cont: AsyncStream<[Float]>.Continuation?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var starts = 0, stops = 0
+    var waiting: Int { waiters.count }
+    var isOpen: Bool { cont != nil }
+    func start() async throws -> AsyncStream<[Float]> {
+        starts += 1
+        await withCheckedContinuation { waiters.append($0) }
+        let (s, c) = AsyncStream<[Float]>.makeStream()
+        cont = c
+        return s
+    }
+    func stop() async { stops += 1; cont?.finish(); cont = nil }
+    func release() { waiters.forEach { $0.resume() }; waiters = [] }
+}
+
+/// Reads like FakeTranscriber, records the clips, can say a fixed text, and
+/// can hold its first answer until released.
+actor ScriptTranscriber: Transcriber {
+    private(set) var clips: [[Float]] = []
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var holdFirst: Bool
+    private let fixed: String?
+    var waiting: Bool { waiter != nil }
+    init(holdFirst: Bool = false, fixed: String? = nil) { self.holdFirst = holdFirst; self.fixed = fixed }
+    func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String {
+        clips.append(s)
+        if holdFirst {
+            holdFirst = false
+            await withCheckedContinuation { waiter = $0 }
+        }
+        if let fixed { return fixed }
+        var words: [String] = []
+        if s.contains(2) { words.append("Hey Earshot,") }
+        if s.contains(3) { words.append("what's everyone doing?") } else if s.contains(1) { words.append("run the tests") }
+        return words.joined(separator: " ")
+    }
     func prewarm() async {}
+    func release() { waiter?.resume(); waiter = nil }
+}
+
+/// Holds the first chime until released.
+actor SlowChimes: Chimes {
+    private(set) var played: [Chime] = []
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var held = false
+    var waiting: Bool { waiter != nil }
+    func play(_ c: Chime) async {
+        played.append(c)
+        if !held {
+            held = true
+            await withCheckedContinuation { waiter = $0 }
+        }
+    }
+    func release() { waiter?.resume(); waiter = nil }
 }
 
 actor FakeChimes: Chimes {
@@ -83,8 +143,10 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
     let chimes = FakeChimes(), observer = FakeObserver()
     let heard = Collected<Listener.Utterance>()
 
-    func make(_ t: Listener.Timing = .forTests) async -> Listener {
-        let l = Listener(input: input, gate: gate, spotter: spotter, transcriber: transcriber, chimes: chimes, timing: t)
+    func make(_ t: Listener.Timing = .forTests, input custom: (any AudioInput)? = nil,
+              transcriber customT: (any Transcriber)? = nil, chimes customC: (any Chimes)? = nil) async -> Listener {
+        let l = Listener(input: custom ?? input, gate: gate, spotter: spotter, transcriber: customT ?? transcriber,
+                         chimes: customC ?? chimes, timing: t)
         await l.setObserver(observer)
         let heard = self.heard
         Task { for await u in l.utterances { await heard.add(u) } }
@@ -218,6 +280,195 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await eventually { await input.isOpen })
         await l.setWakeArmed(false)
         #expect(await eventually { await !input.isOpen })
+    }
+
+
+    // MARK: - Reentrancy
+
+    @Test func disarmingWhileTheMicOpensLeavesItClosed() async {
+        let slow = SlowInput()
+        let l = await make(input: slow)
+        let arming = Task { await l.setWakeArmed(true) }
+        #expect(await eventually { await slow.waiting == 1 })
+        await l.setWakeArmed(false)
+        await slow.release()
+        await arming.value
+        #expect(await eventually { await !slow.isOpen })
+        #expect(await slow.stops == 1)
+        #expect(await observer.events.isEmpty)
+    }
+
+    @Test func aCallWhileTheMicOpensLeavesItClosedAndStartsNothing() async {
+        let slow = SlowInput()
+        let l = await make(input: slow)
+        let follow = Task { await l.listenFollowUp(.reply) }
+        #expect(await eventually { await slow.waiting == 1 })
+        await l.setMicBusy(true)
+        await slow.release()
+        await follow.value
+        #expect(await eventually { await !slow.isOpen })
+        #expect(await observer.events.isEmpty)
+        #expect(await chimes.played.isEmpty)
+    }
+
+    @Test func twoOpensAtOnceStartTheMicOnce() async {
+        let slow = SlowInput()
+        let l = await make(input: slow)
+        let arming = Task { await l.setWakeArmed(true) }
+        #expect(await eventually { await slow.waiting == 1 })
+        let follow = Task { await l.listenFollowUp(.reply) }
+        try? await Task.sleep(for: .milliseconds(30))
+        await slow.release()
+        await arming.value
+        await follow.value
+        #expect(await slow.starts == 1)
+        #expect(await slow.isOpen)
+        #expect(await observer.events == ["began"])
+    }
+
+    @Test func releasingDuringTheChimeStillPairsTheObserver() async {
+        let slowChimes = SlowChimes()
+        let l = await make(chimes: slowChimes)
+        await l.hotkeyDown()
+        #expect(await eventually { await slowChimes.waiting })
+        await l.hotkeyUp()
+        await slowChimes.release()
+        #expect(await eventually { await observer.events == ["began", "ended"] })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await observer.events == ["began", "ended"])
+    }
+
+    @Test func theHotkeyTakingOverAFollowUpEndsIt() async {
+        let l = await make()
+        await l.listenFollowUp(.reply)
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began", "ended", "began"] })
+        await l.hotkeyUp()
+        #expect(await eventually { await observer.events == ["began", "ended", "began", "ended"] })
+    }
+
+    @Test func aCommandStartedDuringTranscriptionIsNotOverwritten() async {
+        let t = ScriptTranscriber(holdFirst: true)
+        let l = await make(transcriber: t)
+        await l.setWakeArmed(true)
+        _ = await eventually { await input.isOpen }
+        await input.push([2, 2, 0, 0])
+        #expect(await eventually { await t.waiting })
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began", "began"] })
+        await input.push([1, 1])
+        try? await Task.sleep(for: .milliseconds(30))
+        await t.release()   // "Hey Earshot," alone: must not replace the hotkey capture
+        #expect(await eventually { await observer.events.count == 3 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.trigger == .hotkey)
+        #expect(await eventually { await observer.events.count == 4 })
+    }
+
+    @Test func aResultAfterACallStartedIsDropped() async {
+        let t = ScriptTranscriber(holdFirst: true)
+        let l = await make(transcriber: t)
+        await l.setWakeArmed(true)
+        _ = await eventually { await input.isOpen }
+        await input.push([2, 3, 3, 3, 0, 0])
+        #expect(await eventually { await t.waiting })
+        await l.setMicBusy(true)
+        await t.release()
+        #expect(await eventually { await observer.events == ["began", "ended"] })
+        try? await Task.sleep(for: .milliseconds(250))   // longer than wakeSilence
+        #expect(await heard.items.isEmpty)
+        #expect(await observer.heard == [false])
+        #expect(await chimes.played == [.listening])
+        #expect(await !input.isOpen)
+    }
+
+    @Test func aWakeAloneThenACallDoesNotKeepListening() async {
+        let t = ScriptTranscriber(holdFirst: true)
+        let l = await make(transcriber: t)
+        await l.setWakeArmed(true)
+        _ = await eventually { await input.isOpen }
+        await input.push([2, 2, 0, 0])
+        #expect(await eventually { await t.waiting })
+        await l.setMicBusy(true)
+        await t.release()
+        #expect(await eventually { await observer.events == ["began", "ended"] })
+        try? await Task.sleep(for: .milliseconds(250))
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+    }
+
+    @Test func anAnswerNeverReachesBackBeforeTheWindow() async {
+        let t = ScriptTranscriber()
+        let l = await make(transcriber: t)
+        await l.setWakeArmed(true)
+        _ = await eventually { await input.isOpen }
+        await input.push([0.25])   // the tail of Earshot's own prompt
+        try? await Task.sleep(for: .milliseconds(50))
+        await l.listenFollowUp(.reply)
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        let clip = await t.clips.first ?? []
+        #expect(!clip.isEmpty)
+        #expect(!clip.contains(0.25))
+    }
+
+    @Test func aLongHoldEndsAtTheCap() async {
+        let t = ScriptTranscriber()
+        let l = await make(transcriber: t)
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(60))
+        await input.push([Float](repeating: 1, count: 45))   // 11.5 s, the ring holds 10 s
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await t.clips.first?.count == 38 * 4096)   // 10 s less the pre-roll, to a whole chunk
+        await l.hotkeyUp()
+    }
+
+    @Test func aTapDuringASlowMicOpenNeverChimes() async {
+        let slow = SlowInput()
+        let l = await make(input: slow)
+        await l.hotkeyDown()
+        #expect(await eventually { await slow.waiting == 1 })
+        try? await Task.sleep(for: .milliseconds(60))   // the first press is confirmed and waiting on the mic
+        await l.hotkeyUp()
+        await l.hotkeyDown()   // a second press, still within its minHold
+        await slow.release()
+        await l.hotkeyUp()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+        #expect(await eventually { await !slow.isOpen })
+    }
+
+    @Test func theMicReopensAfterACall() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setMicBusy(true)
+        #expect(await eventually { await !input.isOpen })
+        await l.setMicBusy(false)
+        #expect(await eventually { await input.isOpen })
+        #expect(await input.starts == 2)
+    }
+
+    @Test func aCommandPrewarmsTheModel() async {
+        let l = await make()
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(60))
+        #expect(await eventually { await transcriber.prewarms == 1 })
+        await l.hotkeyCancel()
+    }
+
+    @Test func aWakeWithoutThePhraseIsAFalseWake() async {
+        let t = ScriptTranscriber(fixed: "run the tests")
+        let l = await make(transcriber: t)
+        await l.setWakeArmed(true)
+        _ = await eventually { await input.isOpen }
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+        #expect(await l.falseWakes == 1)
+        #expect(await observer.heard == [false])
     }
 
     @Test(arguments: [
