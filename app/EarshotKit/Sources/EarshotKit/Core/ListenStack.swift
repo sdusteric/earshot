@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Every listening part, wired. The app owns one.
 public struct ListenStack: Sendable {
@@ -30,8 +31,19 @@ public struct ListenStack: Sendable {
     }
 
     /// The VAD and the spotter, which stay loaded while the wake word may listen.
-    public func loadWakeModels() async {
-        try? await gate.load()
-        try? await spotter.load()
+    /// True when both loaded.
+    @discardableResult
+    public func loadWakeModels() async -> Bool {
+        let log = Logger(subsystem: "com.earshot.app", category: "models")
+        var ok = true
+        do { try await gate.load() } catch {
+            log.error("the VAD didn't load: \(error.localizedDescription, privacy: .public)")
+            ok = false
+        }
+        do { try await spotter.load() } catch {
+            log.error("the wake word model didn't load: \(error.localizedDescription, privacy: .public)")
+            ok = false
+        }
+        return ok
     }
 }

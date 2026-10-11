@@ -178,6 +178,7 @@ public actor Listener {
         if let c = capture, c.trigger == .hotkey {
             ring.append(chunker.drain())
             await finish(c, end: ring.total)
+            await dropSegment()
         } else {
             await closeMicIfIdle()
             settlePhase()
@@ -315,6 +316,15 @@ public actor Listener {
     /// A command can't be longer than what the ring still holds, less the pre-roll.
     private var maxCommand: Int { min(timing.maxCommandSamples, ring.capacity - timing.preRollSamples) }
 
+    /// A capture ended without an end edge from the VAD (the length cap, or a
+    /// hotkey hold): forget the segment and reset the VAD, which would
+    /// otherwise stay triggered and never report the next speech start.
+    private func dropSegment() async {
+        segmentStart = nil
+        spotted = false
+        await gate.reset()
+    }
+
     private func closeMic() async {
         guard micOpen else { return }
         micOpen = false
@@ -338,7 +348,10 @@ public actor Listener {
     private func process(_ chunk: [Float]) async {
         ring.append(chunk)
         if let c = capture, c.trigger == .hotkey {
-            if ring.total - c.start >= maxCommand { await finish(c, end: ring.total) }
+            if ring.total - c.start >= maxCommand {
+                await finish(c, end: ring.total)
+                await dropSegment()
+            }
             return
         }
         // Stage 1: quiet audio skips the VAD, unless something is being heard.
@@ -359,6 +372,7 @@ public actor Listener {
             if edge == .end || ring.total - c.start >= maxCommand {
                 segmentStart = nil
                 await finish(c, end: ring.total)
+                if edge != .end { await gate.reset() }
             }
             return
         }

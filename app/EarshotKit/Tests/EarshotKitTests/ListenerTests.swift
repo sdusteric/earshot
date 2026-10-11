@@ -27,7 +27,8 @@ actor FakeInput: AudioInput {
 /// Speech is any chunk above 0.5. Two quiet chunks end it.
 actor FakeGate: SpeechGate {
     private var inSpeech = false, quiet = 0
-    func reset() async { inSpeech = false; quiet = 0 }
+    private(set) var resets = 0
+    func reset() async { inSpeech = false; quiet = 0; resets += 1 }
     func feed(_ c: [Float]) async -> SpeechEdge? {
         if (c.first ?? 0) > 0.5 {
             quiet = 0
@@ -196,6 +197,32 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await chimes.played == [.listening])
         #expect(await observer.events == ["began", "ended"])
         #expect(await observer.heard == [true])
+    }
+
+    @Test func theGateIsResetAfterACaptureThatHitTheLengthCap() async {
+        let t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30))
+        let l = await make(t)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        let before = await gate.resets
+        await input.push([2, 3, 3, 3, 3, 3, 3, 3])   // one long breath: the cap ends it, no end edge
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await gate.resets > before)   // else the VAD stays triggered and the next wake is never started
+    }
+
+    @Test func theGateIsResetWhenAHotkeyCaptureFinishesWhileTheMicStaysOpen() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.hotkeyDown()
+        try? await Task.sleep(for: .milliseconds(60))
+        await input.push([1, 1, 1])
+        try? await Task.sleep(for: .milliseconds(40))
+        let before = await gate.resets
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await gate.resets > before)
     }
 
     @Test func speechWithoutTheWakePhraseIsIgnored() async {
