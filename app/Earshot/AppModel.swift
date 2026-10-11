@@ -165,7 +165,7 @@ final class AppModel {
         // At most once a minute: a failing `claude agents` is not cached by the directory.
         if stack.claudePath != nil, lastDirectoryCheck.map({ Date().timeIntervalSince($0) >= 60 }) ?? true {
             lastDirectoryCheck = Date()
-            await stack.directory.refresh(ifOlderThan: 60)
+            refreshDirectory(stack)
         }
         directorySessions = await stack.directory.sessions.count
         i = listenInputs(c)
@@ -186,6 +186,19 @@ final class AppModel {
         listenBlock = fresh
         await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
         scheduleWakeUnload(blocked: fresh != nil)
+    }
+
+    /// Asks `claude agents` for the session list in a task of its own, so no caller of
+    /// listeningChanged waits for it (it can take seconds). Applies the result when the count changed.
+    private func refreshDirectory(_ stack: ListenStack) {
+        Task {
+            await stack.directory.refresh(ifOlderThan: 60)
+            let count = await stack.directory.sessions.count
+            if count != directorySessions {
+                directorySessions = count
+                await listeningChanged()
+            }
+        }
     }
 
     /// The spotter and its share of the CTC model stay loaded only while the wake
