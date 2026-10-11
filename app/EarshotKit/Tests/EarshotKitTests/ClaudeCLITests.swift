@@ -53,7 +53,55 @@ import Testing
         let start = ContinuousClock.now
         let r = await ClaudeCLI(path: "/bin/sleep").run(["10"], cwd: nil, timeout: .milliseconds(300))
         #expect(r.status != 0)
+        #expect(r.timedOut)
         #expect(ContinuousClock.now - start < .seconds(3))
+    }
+
+    /// SIGTERM is ignored, so only SIGKILL after the grace period stops it.
+    @Test func aChildThatIgnoresSIGTERMIsKilledAndTheCallReturns() async {
+        let start = ContinuousClock.now
+        let r = await ClaudeCLI(path: "/bin/sh").run(["-c", "trap \"\" TERM; sleep 10"], cwd: nil,
+                                                    timeout: .milliseconds(300))
+        #expect(r.timedOut)
+        #expect(ContinuousClock.now - start < .milliseconds(2300))   // deadline + 1 s grace + 1 s
+    }
+
+    /// A grandchild holds stdout open after the child exits: do not wait for EOF.
+    @Test func aGrandchildHoldingThePipeDoesNotHoldTheCall() async {
+        let start = ContinuousClock.now
+        let r = await ClaudeCLI(path: "/bin/sh").run(["-c", "sleep 10 & echo hi"], cwd: nil, timeout: .seconds(5))
+        #expect(r.status == 0 && !r.timedOut)
+        #expect(String(decoding: r.stdout, as: UTF8.self) == "hi\n")
+        #expect(ContinuousClock.now - start < .seconds(2))
+    }
+
+    /// stderr larger than a pipe buffer must not stall the child.
+    @Test func aLargeStderrDoesNotDeadlock() async {
+        let start = ContinuousClock.now
+        let r = await ClaudeCLI(path: "/bin/sh").run(["-c", "head -c 200000 /dev/zero >&2; echo ok"], cwd: nil,
+                                                    timeout: .seconds(5))
+        #expect(r.status == 0 && !r.timedOut)
+        #expect(String(decoding: r.stdout, as: UTF8.self) == "ok\n")
+        #expect(r.stderr.utf8.count == 200000)
+        #expect(ContinuousClock.now - start < .seconds(3))
+    }
+
+    /// A failed --version is not cached: the next call asks again.
+    @Test func versionCachesOnlyASuccess() async throws {
+        let dir = NSTemporaryDirectory() + "ek-ver-\(UUID().uuidString.prefix(6))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let script = "\(dir)/claude"
+        try """
+        #!/bin/sh
+        if [ -e "$0.ran" ]; then echo "2.1.296 (Claude Code)"; else touch "$0.ran"; exit 1; fi
+
+        """.write(toFile: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        let cli = ClaudeCLI(path: script)
+        #expect(await cli.version() == nil)
+        #expect(await cli.version() == "2.1.296")
+        try FileManager.default.removeItem(atPath: "\(script).ran")   // now a failing script, if asked again
+        #expect(await cli.version() == "2.1.296")
     }
 
     @Test func aMissingProgramFails() async {

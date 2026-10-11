@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Synchronization
 
@@ -5,8 +6,10 @@ public struct RunResult: Sendable, Equatable {
     public var status: Int32
     public var stdout: Data
     public var stderr: String
-    public init(status: Int32, stdout: Data = Data(), stderr: String = "") {
-        self.status = status; self.stdout = stdout; self.stderr = stderr
+    /// True when the deadline fired, so the output may be cut short.
+    public var timedOut: Bool
+    public init(status: Int32, stdout: Data = Data(), stderr: String = "", timedOut: Bool = false) {
+        self.status = status; self.stdout = stdout; self.stderr = stderr; self.timedOut = timedOut
     }
 }
 
@@ -47,11 +50,125 @@ public struct AgentEntry: Decodable, Sendable, Equatable {
     }
 }
 
+/// Runs one process with a deadline. Both pipes are drained as they fill, so
+/// a full pipe never stalls the child. At the deadline the process gets
+/// SIGTERM, and after a 1 s grace SIGKILL. The call returns once the process
+/// has exited and its pipes are drained (or 200 ms after exit, when a
+/// grandchild still holds a pipe), or at deadline plus grace, whichever is first.
+enum BoundedRun {
+    static func run(executable: String, args: [String], cwd: String?, environment: [String: String]?,
+                    timeout: Double) async -> RunResult {
+        await withCheckedContinuation { (cont: CheckedContinuation<RunResult, Never>) in
+            let job = Job(cont)
+            let p = job.process
+            p.executableURL = URL(fileURLWithPath: executable)
+            p.arguments = args
+            if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+            p.environment = environment
+            p.standardOutput = job.out
+            p.standardError = job.err
+            p.standardInput = FileHandle.nullDevice
+            job.out.fileHandleForReading.readabilityHandler = { job.read($0, stdout: true) }
+            job.err.fileHandleForReading.readabilityHandler = { job.read($0, stdout: false) }
+            p.terminationHandler = { _ in job.exited() }
+            do {
+                try p.run()
+            } catch {
+                job.failed(error.localizedDescription)
+                return
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { job.deadline() }
+        }
+    }
+
+    private final class Job: @unchecked Sendable {
+        struct State {
+            var out = Data(), err = Data()
+            var outDone = false, errDone = false
+            var exited = false
+            var status: Int32 = -1
+            var timedOut = false
+            var resumed = false
+        }
+
+        let process = Process()
+        let out = Pipe(), err = Pipe()
+        private let cont: CheckedContinuation<RunResult, Never>
+        private let state = Mutex(State())
+
+        init(_ cont: CheckedContinuation<RunResult, Never>) { self.cont = cont }
+
+        func read(_ h: FileHandle, stdout: Bool) {
+            let d = h.availableData
+            let eof = d.isEmpty
+            state.withLock { s in
+                if !eof && stdout { s.out.append(d) }
+                if !eof && !stdout { s.err.append(d) }
+                if eof && stdout { s.outDone = true }
+                if eof && !stdout { s.errDone = true }
+            }
+            if eof {
+                h.readabilityHandler = nil
+                try? h.close()
+                maybeFinish()
+            }
+        }
+
+        func exited() {
+            state.withLock { s in
+                s.exited = true
+                s.status = process.terminationStatus
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { self.finish() }
+            maybeFinish()
+        }
+
+        /// At the deadline: SIGTERM, then after the grace period SIGKILL and return what was read.
+        func deadline() {
+            let stillRunning = state.withLock { s -> Bool in
+                if s.exited { return false }
+                s.timedOut = true
+                return true
+            }
+            guard stillRunning else { return }
+            process.terminate()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                Darwin.kill(self.process.processIdentifier, SIGKILL)
+                self.finish()
+            }
+        }
+
+        func failed(_ message: String) {
+            state.withLock { $0.resumed = true }
+            cont.resume(returning: RunResult(status: -1, stderr: message))
+        }
+
+        private func maybeFinish() {
+            let done = state.withLock { s in s.exited && s.outDone && s.errDone }
+            if done { finish() }
+        }
+
+        /// Resumes once, whichever of the paths above comes first.
+        func finish() {
+            let result: RunResult? = state.withLock { s in
+                if s.resumed { return nil }
+                s.resumed = true
+                return RunResult(status: s.exited ? s.status : -1, stdout: s.out,
+                                 stderr: String(decoding: s.err, as: UTF8.self), timedOut: s.timedOut)
+            }
+            guard let result else { return }
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
+            cont.resume(returning: result)
+        }
+    }
+}
+
 /// Runs the claude command line. Apps opened from the Dock get a short PATH,
 /// so the binary is found once, at launch.
 public final class ClaudeCLI: ClaudeRunner {
     public let path: String
-    private let cachedVersion = Mutex<String??>(nil)
+    private let cachedVersion = Mutex<String?>(nil)
 
     public init(path: String) { self.path = path }
 
@@ -68,60 +185,37 @@ public final class ClaudeCLI: ClaudeRunner {
         return nil
     }
 
-    /// Asks the login shell once: it has the PATH the user set up.
+    /// Asks the login shell once, with a 3 s limit: it has the PATH the user set up.
     static func loginShellLookup() -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lic", "command -v claude"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        p.standardInput = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).split(separator: "\n").last
+        let box = Mutex<RunResult?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let r = await BoundedRun.run(executable: "/bin/zsh", args: ["-lic", "command -v claude"], cwd: nil,
+                                         environment: nil, timeout: 3)
+            box.withLock { $0 = r }
+            done.signal()
+        }
+        // BoundedRun returns within 4 s; the wait is a backstop only.
+        guard done.wait(timeout: .now() + 5) == .success, let r = box.withLock({ $0 }),
+              !r.timedOut, r.status == 0 else { return nil }
+        return String(decoding: r.stdout, as: UTF8.self).split(separator: "\n").last
             .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     public func run(_ args: [String], cwd: String?, timeout: Duration) async -> RunResult {
-        let path = self.path
         let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
-        return await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: path)
-                p.arguments = args
-                if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-                var env = ProcessInfo.processInfo.environment
-                let dir = (path as NSString).deletingLastPathComponent
-                env["PATH"] = "\(dir):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-                p.environment = env
-                let out = Pipe(), err = Pipe()
-                p.standardOutput = out
-                p.standardError = err
-                p.standardInput = FileHandle.nullDevice
-                do { try p.run() } catch {
-                    cont.resume(returning: RunResult(status: -1, stderr: error.localizedDescription))
-                    return
-                }
-                let timer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: timer)
-                let o = out.fileHandleForReading.readDataToEndOfFile()
-                let e = err.fileHandleForReading.readDataToEndOfFile()
-                p.waitUntilExit()
-                timer.cancel()
-                cont.resume(returning: RunResult(status: p.terminationStatus, stdout: o,
-                                                 stderr: String(decoding: e, as: UTF8.self)))
-            }
-        }
+        var env = ProcessInfo.processInfo.environment
+        let dir = (path as NSString).deletingLastPathComponent
+        env["PATH"] = "\(dir):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        return await BoundedRun.run(executable: path, args: args, cwd: cwd, environment: env, timeout: seconds)
     }
 
+    /// Only a version that was read is kept; a failure is asked again next time.
     public func version() async -> String? {
         if let v = cachedVersion.withLock({ $0 }) { return v }
         let r = await run(["--version"], cwd: nil, timeout: .seconds(5))
         let v = r.status == 0 ? String(decoding: r.stdout, as: UTF8.self).split(separator: " ").first.map(String.init) : nil
-        cachedVersion.withLock { $0 = .some(v) }
+        if let v { cachedVersion.withLock { $0 = v } }
         return v
     }
 }
