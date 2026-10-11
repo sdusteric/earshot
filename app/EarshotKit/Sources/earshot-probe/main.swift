@@ -1,0 +1,224 @@
+// earshot-probe: measures Earshot's listening cascade on this Mac (plan 2, task 0).
+//   record SECS OUT.wav      records the mic at 16 kHz mono, for evals
+//   spot WAV...              VAD, then the keyword spotter once per speech segment
+//   transcribe WAV [TERM...] Parakeet TDT v2, then vocabulary rescoring with TERMs
+//   listen MINUTES           the live cascade on the mic, with CPU use per minute
+import AVFoundation
+import Darwin
+@preconcurrency import FluidAudio
+import Foundation
+
+let wakePhrase = "hey earshot"
+let segmentSpotAt = 24_000          // 1.5 s: spot a segment this long, or when it ends
+let spotWindow = 32_000             // the first 2 s of a segment
+let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
+
+@main struct Probe {
+    static func main() async throws {
+        let a = Array(CommandLine.arguments.dropFirst())
+        switch a.first {
+        case "record" where a.count == 3: try await record(seconds: Double(a[1]) ?? 5, to: URL(fileURLWithPath: a[2]))
+        case "spot" where a.count >= 2: try await spot(a.dropFirst().map { URL(fileURLWithPath: $0) })
+        case "transcribe" where a.count >= 2: try await transcribe(URL(fileURLWithPath: a[1]), terms: Array(a.dropFirst(2)))
+        case "listen": try await listen(minutes: Double(a.count > 1 ? a[1] : "5") ?? 5)
+        default:
+            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES")
+            exit(2)
+        }
+    }
+}
+
+// MARK: - Helpers
+
+func ms(_ start: ContinuousClock.Instant) -> Int {
+    let d = ContinuousClock.now - start
+    return Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)
+}
+
+func cpuSeconds() -> Double {
+    var u = rusage()
+    getrusage(RUSAGE_SELF, &u)
+    return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6
+}
+
+func rms(_ s: ArraySlice<Float>) -> Float {
+    guard !s.isEmpty else { return 0 }
+    return (s.reduce(0) { $0 + $1 * $1 } / Float(s.count)).squareRoot()
+}
+
+/// The mic as 16 kHz mono Float chunks.
+func micStream() throws -> (AVAudioEngine, AsyncStream<[Float]>) {
+    let engine = AVAudioEngine()
+    let input = engine.inputNode
+    let converter = AudioConverter()
+    let (stream, cont) = AsyncStream<[Float]>.makeStream()
+    input.installTap(onBus: 0, bufferSize: 4096, format: input.outputFormat(forBus: 0)) { buffer, _ in
+        if let s = try? converter.resampleBuffer(buffer) { cont.yield(s) }
+    }
+    try engine.start()
+    return (engine, stream)
+}
+
+struct Spotter {
+    let spotter: CtcKeywordSpotter
+    let vocab: CustomVocabularyContext
+
+    static func load() async throws -> Spotter {
+        let models = try await CtcModels.downloadAndLoad(variant: .ctc110m)
+        let tokenizer = try await CtcTokenizer.load(from: CtcModels.defaultCacheDirectory(for: .ctc110m))
+        let term = CustomVocabularyTerm(text: wakePhrase, ctcTokenIds: tokenizer.encode(wakePhrase))
+        return Spotter(spotter: CtcKeywordSpotter(models: models, blankId: models.vocabulary.count),
+                       vocab: CustomVocabularyContext(terms: [term]))
+    }
+
+    /// The best score for the wake phrase, or nil when it was not found.
+    func score(_ samples: [Float]) async throws -> Float? {
+        let r = try await spotter.spotKeywordsWithLogProbs(audioSamples: samples, customVocabulary: vocab, minScore: -30)
+        return r.detections.map(\.score).max()
+    }
+}
+
+/// Energy gate and VAD over a sample stream. Calls `onSegment` once per speech
+/// segment with its first 2 s, at 1.5 s or at its end.
+actor Segmenter {
+    let vad: VadManager
+    var state: VadStreamState
+    var pending: [Float] = []
+    var all: [Float] = []
+    var segmentStart: Int?
+    var spotted = false
+    var vadRuns = 0
+    var quietChunks = 0
+    let config = VadSegmentationConfig(minSilenceDuration: 0.6)
+
+    init(vad: VadManager) async {
+        self.vad = vad
+        state = await vad.makeStreamState()
+    }
+
+    func feed(_ samples: [Float], onSegment: ([Float]) async -> Void) async throws {
+        pending += samples
+        while pending.count >= VadManager.chunkSize {
+            let chunk = Array(pending.prefix(VadManager.chunkSize))
+            pending.removeFirst(VadManager.chunkSize)
+            all += chunk
+            if all.count > 160_000 {   // keep about 10 s
+                let drop = all.count - 160_000
+                all.removeFirst(drop)
+                if let s = segmentStart { segmentStart = max(0, s - drop) }
+            }
+            // The energy gate: quiet chunks skip the VAD, unless a segment is open.
+            if rms(chunk[...]) < energyThreshold && segmentStart == nil {
+                quietChunks += 1
+                if quietChunks == 8 { state = await vad.makeStreamState() }
+                continue
+            }
+            quietChunks = 0
+            vadRuns += 1
+            let r = try await vad.processStreamingChunk(chunk, state: state, config: config)
+            state = r.state
+            if r.event?.kind == .speechStart { segmentStart = max(0, all.count - VadManager.chunkSize * 2); spotted = false }
+            if let s = segmentStart, !spotted, all.count - s >= segmentSpotAt || r.event?.kind == .speechEnd {
+                spotted = true
+                await onSegment(Array(all[s..<min(all.count, s + spotWindow)]))
+            }
+            if r.event?.kind == .speechEnd { segmentStart = nil }
+        }
+    }
+}
+
+// MARK: - Commands
+
+func record(seconds: Double, to url: URL) async throws {
+    let (engine, stream) = try micStream()
+    var samples: [Float] = []
+    let target = Int(seconds * 16_000)
+    print("Recording \(seconds) s...")
+    for await chunk in stream {
+        samples += chunk
+        if samples.count >= target { break }
+    }
+    engine.stop()
+    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))!
+    buffer.frameLength = AVAudioFrameCount(samples.count)
+    samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+    let file = try AVAudioFile(forWriting: url, settings: format.settings)
+    try file.write(from: buffer)
+    print("Wrote \(url.path)")
+}
+
+func spot(_ files: [URL]) async throws {
+    var t = ContinuousClock.now
+    let vad = try await VadManager()
+    let spotter = try await Spotter.load()
+    print("models loaded in \(ms(t)) ms")
+    for url in files {
+        let samples = try AudioConverter().resampleAudioFile(url)
+        let seg = await Segmenter(vad: vad)
+        var calls: [Int] = []
+        var best: Float?
+        try await seg.feed(samples + [Float](repeating: 0, count: 8 * VadManager.chunkSize)) { window in
+            t = ContinuousClock.now
+            let s = try? await spotter.score(window)
+            calls.append(ms(t))
+            if let s { best = max(best ?? -.infinity, s) }
+        }
+        print("\(url.lastPathComponent)\tsegments=\(calls.count)\tbest=\(best.map { String(format: "%.1f", $0) } ?? "none")\tms=\(calls)")
+    }
+}
+
+func transcribe(_ url: URL, terms: [String]) async throws {
+    var t = ContinuousClock.now
+    let models = try await AsrModels.downloadAndLoad(version: .v2)
+    let asr = AsrManager(config: .default)
+    try await asr.loadModels(models)
+    let ctc = try await CtcModels.downloadAndLoad(variant: .ctc110m)
+    print("models loaded in \(ms(t)) ms")
+    let samples = try AudioConverter().resampleAudioFile(url)
+    for run in 1...3 {
+        t = ContinuousClock.now
+        var state = TdtDecoderState.make()
+        let result = try await asr.transcribe(samples, decoderState: &state)
+        let asrMs = ms(t)
+        var text = result.text
+        if !terms.isEmpty, let timings = result.tokenTimings {
+            t = ContinuousClock.now
+            let session = try await VocabularyBoostingSession(
+                vocabulary: CustomVocabularyContext(terms: terms.map { CustomVocabularyTerm(text: $0) }), ctcModels: ctc)
+            if let out = await session.rescore(text: text, tokenTimings: timings, audioSamples: samples) { text = out.text }
+            print("run \(run): asr \(asrMs) ms, rescore \(ms(t)) ms: \(text)")
+        } else {
+            print("run \(run): asr \(asrMs) ms: \(text)")
+        }
+    }
+}
+
+func listen(minutes: Double) async throws {
+    let vad = try await VadManager()
+    let spotter = try await Spotter.load()
+    let seg = await Segmenter(vad: vad)
+    let (engine, stream) = try micStream()
+    print("Listening for \(minutes) min. Say \"Hey Earshot\" now and then.")
+    let end = Date().addingTimeInterval(minutes * 60)
+    var minuteStart = Date(), cpuStart = cpuSeconds()
+    var segments = 0, wakes = 0, spotMs: [Int] = []
+    for await chunk in stream {
+        try await seg.feed(chunk) { window in
+            segments += 1
+            let t = ContinuousClock.now
+            let s = try? await spotter.score(window)
+            spotMs.append(ms(t))
+            if let s, s > -15 { wakes += 1; print("  wake (score \(String(format: "%.1f", s)))") }
+        }
+        if Date().timeIntervalSince(minuteStart) >= 60 {
+            let cpu = (cpuSeconds() - cpuStart) / Date().timeIntervalSince(minuteStart) * 100
+            let runs = await seg.vadRuns
+            print(String(format: "minute: cpu %.1f%%, vad runs %d, segments %d, wakes %d, spot ms max %d",
+                         cpu, runs, segments, wakes, spotMs.max() ?? 0))
+            minuteStart = Date(); cpuStart = cpuSeconds()
+        }
+        if Date() > end { break }
+    }
+    engine.stop()
+}
