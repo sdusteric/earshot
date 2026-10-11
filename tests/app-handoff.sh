@@ -40,7 +40,12 @@ t1=$(perl -MTime::HiRes=time -e 'print time')
 expect "a silent app: the plugin says it, once" "$(said 'Slow app line')" 1
 awk -v a="$t0" -v b="$t1" 'BEGIN { exit !(b - a < 1.5) }' && ok "a silent app costs under 1.5 s per hook" || bad "a silent app costs under 1.5 s per hook"
 
-pkill -f "fake-app.zsh $SOCK"; sleep 0.2; rm -f "$SOCK"; : > "$OUT"
+pkill -9 -f "fake-app.zsh $SOCK"; sleep 0.2; : > "$OUT"
+[ -S "$SOCK" ] && ok "a crashed app leaves its socket file (test setup)" || bad "a crashed app leaves its socket file (test setup)"
+hook start a6 '{}'; hook stop a6 '{"last_assistant_message":"🗣 Crashed app line."}'
+expect "a crashed app's socket: the plugin says it" "$(said 'Crashed app line')" 1
+
+rm -f "$SOCK"; : > "$OUT"
 hook start a4 '{}'; hook stop a4 '{"last_assistant_message":"🗣 No app line."}'
 expect "no app: the plugin says it" "$(said 'No app line')" 1
 

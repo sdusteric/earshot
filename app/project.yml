@@ -1,0 +1,46 @@
+name: Earshot
+options:
+  bundleIdPrefix: com.earshot
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  EarshotKit:
+    path: EarshotKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
+targets:
+  Earshot:
+    type: application
+    platform: macOS
+    sources: [Earshot]
+    dependencies:
+      - package: EarshotKit
+      - package: Sparkle
+    info:
+      path: Earshot/Info.plist
+      properties:
+        CFBundleDisplayName: Earshot
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSAudioCaptureUsageDescription: "Earshot lowers other apps' audio while it talks. It never records or saves that audio."
+        SUFeedURL: https://github.com/sdusteric/earshot/releases/latest/download/appcast.xml
+        SUPublicEDKey: "$(SPARKLE_PUBLIC_KEY)"
+    entitlements:
+      path: Earshot/Earshot.entitlements
+      properties: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.earshot.app
+        PRODUCT_NAME: Earshot
+        DEVELOPMENT_TEAM: 8N9KUZLT8N
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_VERSION: "6.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SPARKLE_PUBLIC_KEY: ""
+        GENERATE_INFOPLIST_FILE: NO
