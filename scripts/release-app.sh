@@ -8,6 +8,15 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd); APP=$ROOT/app; OUT=$APP/build/release
 fail() { echo "$*" >&2; exit 1; }
+# update_cask <dmg> <version> [cask]: writes the release's version and checksum
+# into the Homebrew cask, ready to copy to the tap.
+update_cask() {
+  local sum cask=${3:-$ROOT/packaging/earshot.rb}
+  sum=$(shasum -a 256 "$1" | cut -d' ' -f1)
+  sed -i '' -e "s/^  version \".*\"/  version \"$2\"/" -e "s/^  sha256 .*/  sha256 \"$sum\"/" "$cask"
+  echo "Cask: version $2, sha256 $sum"
+}
+[ "${1:-}" = --update-cask ] && { update_cask "$2" "$3" "${4:-}"; exit 0; }   # for tests
 local_build=; [ "${1:-}" = --local ] && local_build=1
 command -v xcodegen >/dev/null || fail "Needs XcodeGen: brew install xcodegen"
 if [ -z "$local_build" ]; then
@@ -34,6 +43,7 @@ else
   ditto -c -k --keepParent "$OUT/Earshot.app" "$OUT/Earshot.zip"
   xcrun notarytool submit "$OUT/Earshot.zip" --keychain-profile earshot --wait || fail "Notarization failed."
   xcrun stapler staple "$OUT/Earshot.app"
+  rm -f "$OUT/Earshot.zip"   # unstapled: keep it away from generate_appcast
 fi
 codesign --verify --deep --strict "$OUT/Earshot.app" || fail "The app's signature does not verify."
 echo "Signature OK"
@@ -54,5 +64,6 @@ if [ -z "$local_build" ]; then
   xcrun notarytool submit "$dmg" --keychain-profile earshot --wait && xcrun stapler staple "$dmg"
   gen=$(find "$APP/build" -path '*Sparkle*/bin/generate_appcast' -type f | head -1)
   if [ -n "$gen" ]; then "$gen" "$OUT"; else echo "generate_appcast not found: build once with Xcode to fetch Sparkle's tools."; fi
+  update_cask "$dmg" "$ver"
 fi
 echo "Built $dmg"

@@ -29,6 +29,8 @@ playback within 3 seconds (a speaker in standby).
 | Holding during a call | Open the mic in another app, send a `need` line, close the mic | Log: `held need`; about 4 s after the mic closes, the line plays |
 | Ducking with real audio | Play music, send a line | Music drops to the set level and comes back |
 | Ducking with Bluetooth | Same, with AirPods or Bluetooth speakers | Same; switching output mid-line ends ducking |
+| Ducking permission denied | Deny "System Audio Recording" for Earshot, play music, send a line | Music keeps playing at full volume; it must never go silent |
+| Settings text fields | Type a voice name slowly | The config changes only on Return or leaving the field |
 | Menu | Click the menu bar icon | Sessions, Mute for 1 Hour, Settings, Copy Diagnostics, Quit |
 | Settings | Change level, voice, ducking | The config file changes; the next line uses it |
 | First launch | New user account | Onboarding: three steps, test line, permission prompt for ducking |

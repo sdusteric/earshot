@@ -57,8 +57,9 @@ private struct VoiceTab: View {
                     ForEach(Self.kokoroVoices, id: \.self) { Text($0).tag($0) }
                 }
             case .elevenlabs:
-                TextField("Voice ID", text: Binding(get: { model.config.elevenLabsVoice ?? "" },
-                                                    set: { v in model.save { $0.set("EARSHOT_VOICE", v) } }))
+                SavedField(title: "Voice ID", value: model.config.elevenLabsVoice ?? "") { v in
+                    model.save { $0.set("EARSHOT_VOICE", v.isEmpty ? nil : v) }
+                }
                 SecureField(model.config.elevenLabsKey == nil ? "API key" : "API key (saved; type to replace)", text: $key)
                     .onSubmit {
                         let k = key
@@ -66,13 +67,39 @@ private struct VoiceTab: View {
                         key = ""
                     }
             case .say:
-                TextField("Voice (empty: the system voice)",
-                          text: Binding(get: { model.config.sayVoice ?? "" },
-                                        set: { v in model.save { $0.set("EARSHOT_SAY_VOICE", v.isEmpty ? nil : v) } }))
+                SavedField(title: "Voice (empty: the system voice)", value: model.config.sayVoice ?? "") { v in
+                    model.save { $0.set("EARSHOT_SAY_VOICE", v.isEmpty ? nil : v) }
+                }
             }
             Button("Play a Test Line") { model.playTestLine() }
         }
         .onAppear { model.reloadConfig() }
+    }
+}
+
+/// A text setting saved when you press Return or leave the field, not on
+/// every keystroke: the plugin reads the config file at every hook, and a
+/// half-typed voice name would make its lines fail.
+private struct SavedField: View {
+    let title: String
+    let value: String
+    let save: (String) -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(title, text: $text)
+            .focused($focused)
+            .onAppear { text = value }
+            .onChange(of: value) { _, new in if !focused { text = new } }
+            .onSubmit { commit() }
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .onDisappear { commit() }
+    }
+
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed != value { save(trimmed) }
     }
 }
 
