@@ -462,4 +462,20 @@ actor SlowEndDucker: Ducking {
         try? await Task.sleep(for: .milliseconds(30))
         #expect(await events.items == [.started(a)])
     }
+
+    @Test func aRequeuedLineStaysBehindAnswersEnqueuedMeanwhile() async {
+        let synth = GatedSynth()
+        let player = FakePlayer()
+        let s = SpeechOut(synth: synth, player: player, mic: mic, ducker: ducker, settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(line("x"))
+        await eventually { await synth.asked == 1 }
+        await s.beginListening()
+        await s.enqueue(line("Sent.", .confirm, ""))
+        await synth.release()
+        try? await Task.sleep(for: .milliseconds(50))
+        await s.endListening()
+        await eventually { await player.played.count == 2 }
+        #expect(await player.played == ["Sent.", "x"])
+    }
 }

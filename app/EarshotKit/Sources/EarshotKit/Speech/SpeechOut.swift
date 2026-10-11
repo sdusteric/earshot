@@ -209,7 +209,12 @@ public actor SpeechOut {
             // A call may have started while the audio was made.
             if line.kind != .roll, await micBusy() { hold(line); continue }
             // You began talking while the audio was made: it waits for endListening.
-            if listening > 0 { queue.insert(line, at: 0); break }
+            if listening > 0 {
+                // Same order rule as enqueue: answers stay ahead of other lines.
+                let at = line.kind == .confirm ? 0 : (queue.firstIndex { $0.kind != .confirm } ?? queue.endIndex)
+                queue.insert(line, at: at)
+                break
+            }
             // From here a call that starts interrupts this line.
             currentLine = line.id
             interrupted = false
