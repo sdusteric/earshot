@@ -3,7 +3,7 @@
 # The test plays the app: it reads the approval message the fake app logged
 # and writes the answer file named there. Nothing is spoken (EARSHOT_DRYRUN).
 # Needs /voice on, because speak.sh exits early without it.
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"; S=$ROOT/scripts/speak.sh
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; S=$ROOT/plugin/scripts/speak.sh
 OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_STATE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
 printf 'EARSHOT_ENGINE=say\n' > "$EARSHOT_CONF"
 MICST=$(mktemp); echo 1 > "$MICST"; export EARSHOT_MIC=$(mktemp)

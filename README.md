@@ -132,7 +132,7 @@ You can also do the setup in a terminal. The script asks whether to use Kokoro o
 2. In a terminal, run:
 
    ```
-   bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh
+   bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/setup.sh
    ```
 
 To see all options, run the same command with `--help`.
@@ -141,7 +141,7 @@ To see all options, run the same command with `--help`.
 
 The easiest way: in Claude Code, run `/earshot:setup` and choose a different engine or voice.
 
-In a terminal, run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh` with one of these options:
+In a terminal, run `bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/setup.sh` with one of these options:
 
 | To | Options |
 |---|---|
@@ -175,9 +175,9 @@ Premade voices work on all ElevenLabs plans. A voice from the Voice Library can 
 | Mute Earshot | Run `touch ~/.config/earshot/mute`. |
 | Unmute Earshot | Run `rm ~/.config/earshot/mute`. |
 | Change the voice, the engine, or the key | Run `/earshot:setup`. See [Change the voice](#change-the-voice). |
-| Change how much Earshot says | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --level quiet`. Use `quiet`, `normal`, or `all`. |
-| Change the style | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --style cheeky`. Use `plain`, `upbeat`, or `cheeky`. |
-| Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --status`. |
+| Change how much Earshot says | Run `bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/setup.sh --level quiet`. Use `quiet`, `normal`, or `all`. |
+| Change the style | Run `bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/setup.sh --style cheeky`. Use `plain`, `upbeat`, or `cheeky`. |
+| Show the current setup | Run `bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/setup.sh --status`. |
 
 ## Roll call
 
@@ -192,14 +192,14 @@ The roll call plays even when Earshot is muted, `/voice` is off, or you are on a
 - **With a hotkey (no Claude turn, about a second):**
   1. Open the Shortcuts app and make a new shortcut.
   2. Add the action **Run Shell Script** with this script:
-     `bash ~/.claude/plugins/marketplaces/earshot/scripts/speak.sh rollcall`
+     `bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/speak.sh rollcall`
   3. In the shortcut's details, click **Add Keyboard Shortcut** and press the keys you want.
 
 ## Update
 
 If you turned on auto-update during setup, you do not need to do anything. Claude Code installs new versions a few minutes after a session starts, then shows `Plugin updated: earshot`.
 
-To turn on auto-update later, run `bash ~/.claude/plugins/marketplaces/earshot/scripts/setup.sh --auto-update`. You can also use `/plugin`, then **Marketplaces**, then **earshot**, then **Enable auto-update**.
+To turn on auto-update later, run `bash ~/.claude/plugins/marketplaces/earshot/plugin/scripts/setup.sh --auto-update`. You can also use `/plugin`, then **Marketplaces**, then **earshot**, then **Enable auto-update**.
 
 To update by hand:
 
@@ -224,7 +224,7 @@ Your key and voice stay the same.
 The plugin adds hooks for these events: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse` (for
 `AskUserQuestion`, and in the background for `Bash`, MCP tools, `WebFetch` and `WebSearch`), `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
 `Stop`, `StopFailure`, `Elicitation`, `ElicitationResult`, and `Notification` (for `permission_prompt`,
-`idle_prompt`, `elicitation_dialog` and `elicitation_url_dialog`). Each hook runs `scripts/speak.sh` and returns in about 50 ms. The
+`idle_prompt`, `elicitation_dialog` and `elicitation_url_dialog`). Each hook runs `plugin/scripts/speak.sh` and returns in about 50 ms. The
 speech runs in the background, so Earshot does not slow down Claude.
 
 With Kokoro, a small helper keeps the voice model loaded while you work, so a

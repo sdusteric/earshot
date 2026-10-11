@@ -2,7 +2,7 @@
 # Checks the real Kokoro helper. Needs it built (setup.sh --engine kokoro) and
 # its models downloaded. Not part of the quick suite: it takes about a minute.
 TTS=${EARSHOT_TTS:-$HOME/.config/earshot/kokoro/earshot-tts}
-[ -x "$TTS" ] || { echo "Build the helper first: bash scripts/build-tts.sh"; exit 1; }
+[ -x "$TTS" ] || { echo "Build the helper first: bash plugin/scripts/build-tts.sh"; exit 1; }
 D=$(mktemp -d); SOCK=$D/k.sock; pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "  ok    $1"; }
 bad() { fail=$((fail + 1)); echo "  FAIL  $1"; }

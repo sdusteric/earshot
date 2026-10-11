@@ -1,7 +1,7 @@
 #!/bin/bash
 # Checks engine choice, caching and fallbacks with a fake Kokoro helper, a fake
 # `say` and a fake player. Needs /voice on, like stuck-and-levels.sh.
-S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
+S="$(cd "$(dirname "$0")/.." && pwd)/plugin/scripts/speak.sh"
 T=$(mktemp -d)
 export EARSHOT_STATE_DIR=$T/state EARSHOT_CACHE_DIR=$T/cache EARSHOT_CONF=$T/config
 export EARSHOT_TTS=$T/tts EARSHOT_SAY=$T/say EARSHOT_PLAYER=$T/player EARSHOT_MIC=$T/mic

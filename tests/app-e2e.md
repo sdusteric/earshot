@@ -23,7 +23,7 @@ playback within 3 seconds (a speaker in standby).
 | Check | How | Expected |
 |---|---|---|
 | The app answers the plugin | Send a `say` line to the socket | `{"ok":true}`, log shows `line`, `ducking on`, `ducking off` |
-| The plugin hands lines over | `bash scripts/speak.sh say "..."` | Plugin log: `the app took (alert)` |
+| The plugin hands lines over | `bash plugin/scripts/speak.sh say "..."` | Plugin log: `the app took (alert)` |
 | One instance only | Start a second copy | It exits at once |
 | The plugin covers a dead app | Kill the app, run `speak.sh say` | The plugin says it (see `tests/app-handoff.sh`, crashed app case) |
 | Holding during a call | Open the mic in another app, send a `need` line, close the mic | Log: `held need`; about 4 s after the mic closes, the line plays |

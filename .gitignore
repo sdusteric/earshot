@@ -2,7 +2,7 @@
 mic-in-use
 *.mp3
 videos/
-tts/.build/
+plugin/tts/.build/
 .superpowers/
 app/EarshotKit/.build/
 app/EarshotKit/.swiftpm/

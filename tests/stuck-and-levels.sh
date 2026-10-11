@@ -3,7 +3,7 @@
 # Nothing is spoken: EARSHOT_DRYRUN collects the lines instead.
 # Needs /voice on, because speak.sh exits early without it. A throwaway config
 # with a dummy key keeps your own settings out of the results.
-S="$(cd "$(dirname "$0")/.." && pwd)/scripts/speak.sh"
+S="$(cd "$(dirname "$0")/.." && pwd)/plugin/scripts/speak.sh"
 OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_STATE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
 printf 'EARSHOT_ENGINE=elevenlabs\nEARSHOT_KEY=sk_test\nEARSHOT_VOICE=test\n' > "$EARSHOT_CONF"
 export EARSHOT_MUTE=$EARSHOT_STATE_DIR/mute   # your own mute file does not mute the tests
