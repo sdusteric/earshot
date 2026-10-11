@@ -30,7 +30,13 @@ case "$ENGINE" in kokoro|elevenlabs|say) ;; *) ENGINE=kokoro ;; esac
 # /voice off. ($4 is the kind when play runs a line.)
 if [ "$1" != rollcall ] && ! { [ "$1" = play ] && [ "$4" = roll ]; }; then
   [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] || exit 0
-  [ -e ~/.config/earshot/mute ] && exit 0
+  # Muted: an empty file mutes until it is removed; a time (epoch seconds)
+  # mutes until then. Earshot for Mac writes the time for "Mute for 1 hour".
+  MUTE=${EARSHOT_MUTE:-$HOME/.config/earshot/mute}
+  if [ -e "$MUTE" ]; then
+    until=$(head -c 20 "$MUTE" 2>/dev/null | tr -cd 0-9)
+    { [ -z "$until" ] || [ "$until" -gt "$(date +%s)" ]; } && exit 0
+  fi
 fi
 
 MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
@@ -55,6 +61,17 @@ TTS=${EARSHOT_TTS:-$HOME/.config/earshot/kokoro/earshot-tts}
 SAYCMD=${EARSHOT_SAY:-/usr/bin/say}   # the program: a bare "say" is the function below
 PLAYER=${EARSHOT_PLAYER:-afplay}
 SOCK=$STATE/kokoro.sock   # the Kokoro server, while it runs
+# Earshot for Mac: when it runs, it plays every line. Tests that collect lines
+# (EARSHOT_DRYRUN) reach an app only when they name its socket.
+APP_SOCK=${EARSHOT_APP_SOCK-$HOME/Library/Application Support/Earshot/earshot.sock}
+[ -n "$EARSHOT_DRYRUN" ] && [ -z "${EARSHOT_APP_SOCK+x}" ] && APP_SOCK=
+APP_SEND=$(dirname "$0")/app-send.zsh
+
+# app_up: the app's socket is there.
+app_up() { [ -n "$APP_SOCK" ] && [ -S "$APP_SOCK" ]; }
+# app_send '<json>': hands one message to the app. 0 only when the app took it.
+# It waits at most 0.2 s, so a hung app costs a hook little.
+app_send() { app_up && /bin/zsh -f "$APP_SEND" "$APP_SOCK" "$1"; }
 
 # mic_state: the helper's answer. 0 an app is capturing (a call, or you
 # dictating), 1 free, 2 the device runs but the app is unknown (macOS before 14.2).
@@ -150,9 +167,16 @@ synth() {
 }
 
 # speak "<line>" <kind> <session>: holds the line while an app uses the mic,
-# or plays it. It returns when the line has played.
+# or plays it. It returns when the line has played. When Earshot for Mac takes
+# the line, the app holds, queues and plays it instead.
 speak() {
   local asked out dl tmp fb
+  if app_up && app_send "$(jq -nc --arg t "$1" --arg k "$2" --arg s "$3" --arg n "${who:-}" --arg tr "${transcript:-}" \
+      '{v: 1, type: "say", text: $t, kind: $k, session: $s} + (if $n != "" then {name: $n} else {} end)
+       + (if $tr != "" and ($k == "need" or $k == "reply") then {transcript: $tr} else {} end)')"; then
+    echo "$(date '+%F %T') the app took ($2): $1" >> "$LOG"
+    return
+  fi
   if [ "$2" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
   # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
   [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
@@ -595,7 +619,12 @@ running="$STATE/running-$sid"   # a long command in progress: token, name, step,
 status="$STATE/status-$sid"     # for the roll call: state, since, spoken name, detail
 
 # set_status <state> [detail]: what this session is doing, for the roll call.
-set_status() { printf '%s\n%s\n%s\n%s\n' "$1" "$now" "$who" "$2" > "$status"; }
+set_status() {
+  printf '%s\n%s\n%s\n%s\n' "$1" "$now" "$who" "$2" > "$status"
+  # The app's session list follows it. In the background: a hook never waits for it.
+  app_up && { app_send "$(jq -nc --arg s "$sid" --arg st "$1" --arg d "$2" --arg n "$who" --arg p "$proj" --arg t "$title" \
+      '{v: 1, type: "status", session: $s, state: $st, detail: $d, name: $n, project: $p, title: $t}')" & } </dev/null >/dev/null 2>&1
+}
 
 # stop_watch: the command ended (or the turn did), so stop its update timer.
 stop_watch() {
@@ -701,8 +730,9 @@ begin)
   # compact or resume, so a status that is already there stays.
   [ -f "$status" ] || set_status open
   # Load Kokoro now, so the session's first line does not wait for it. A
-  # server that is already running makes the new one exit at once.
-  if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ]; then
+  # server that is already running makes the new one exit at once. Earshot
+  # for Mac keeps its own Kokoro loaded, so not while it runs.
+  if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && ! app_up; then
     ( "$TTS" serve --socket "$SOCK" ) </dev/null >/dev/null 2>>"$SOCK.log" &
   fi
   ;;
@@ -711,6 +741,7 @@ end)
   stop_watch
   clear_wait
   rm -f "$LIVE/$sid" "$state" "$hist" "$errs" "$warned" "$status"
+  app_up && app_send "$(jq -nc --arg s "$sid" '{v: 1, type: "status", session: $s, state: "closed"}')" >/dev/null 2>&1
   ;;
 start)
   stop_watch
