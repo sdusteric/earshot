@@ -31,6 +31,9 @@ final class AppModel {
     @ObservationIgnored private let configBox = ConfigBox()
     @ObservationIgnored private var started = false
     @ObservationIgnored private(set) var stack: ListenStack?
+    /// Loudness of Earshot's voice and of the mic during a command, for the orb.
+    @ObservationIgnored private(set) var speakLevel: AudioLevel?
+    var micLevel: AudioLevel? { stack?.listener.level }
     @ObservationIgnored private let watch = SystemWatch()
     @ObservationIgnored private var hotkeyTap: HotkeyTap?
     @ObservationIgnored private var micInUse = false
@@ -70,6 +73,7 @@ final class AppModel {
         core = live.core
         ducker = live.ducker
         mic = live.mic
+        speakLevel = live.speakLevel
         readMute()
         Task {
             do { try await live.core.start() } catch { startError = "Couldn't open the plugin socket: \(error)" }

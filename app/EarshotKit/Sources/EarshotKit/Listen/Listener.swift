@@ -89,6 +89,8 @@ public actor Listener {
     private let log = Logger(subsystem: "com.earshot.app", category: "listener")
 
     public nonisolated let utterances: AsyncStream<Utterance>
+    /// The mic's loudness while a command is being captured, for the orb. 0 otherwise.
+    public nonisolated let level = AudioLevel()
     private let utteranceCont: AsyncStream<Utterance>.Continuation
     private var phaseConts: [UUID: AsyncStream<Phase>.Continuation] = [:]
     private var phase: Phase = .off {
@@ -443,6 +445,7 @@ public actor Listener {
     private func closeMic() async {
         guard micOpen else { return }
         micOpen = false
+        level.set(0)
         streamTask?.cancel()
         streamTask = nil
         await input.stop()
@@ -457,6 +460,8 @@ public actor Listener {
     }
 
     private func receive(_ samples: [Float]) async {
+        // Per mic buffer (about 85 ms), not per 256 ms chunk, so the orb keeps up.
+        level.set(capture == nil ? 0 : AudioLevel.fromSamples(samples))
         for c in chunker.push(samples) { await process(c) }
     }
 

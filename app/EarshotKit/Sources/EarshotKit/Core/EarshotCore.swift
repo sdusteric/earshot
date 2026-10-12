@@ -97,16 +97,17 @@ public final class EarshotCore: Sendable {
     /// player, mic and ducker. The config is read again for each line, so
     /// settings apply at once.
     public static func live(config: @escaping @Sendable () -> EarshotConfig)
-        -> (core: EarshotCore, ducker: TapDucker, mic: MicMonitor, synth: LiveSynth) {
+        -> (core: EarshotCore, ducker: TapDucker, mic: MicMonitor, synth: LiveSynth, speakLevel: AudioLevel) {
         let mic = MicMonitor()
         let ducker = TapDucker {
             let c = config()
             return (c.duckEnabled, c.duckLevel)
         }
         let synth = LiveSynth(config: config)
-        let speech = SpeechOut(synth: synth, player: AudioFilePlayer(), mic: mic, ducker: ducker)
+        let player = AudioFilePlayer()
+        let speech = SpeechOut(synth: synth, player: player, mic: mic, ducker: ducker)
         let core = EarshotCore(speech: speech, sessions: SessionStore(), events: EventLog())
-        return (core, ducker, mic, synth)
+        return (core, ducker, mic, synth, player.level)
     }
 }
 

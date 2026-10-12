@@ -4,10 +4,22 @@ import os
 /// A started playback: AVAudioPlayer, or a stand-in in tests.
 public protocol PlaybackHandle: AnyObject {
     var isPlaying: Bool { get }
+    /// How loud the playback is now, from 0 to 1.
+    var outputLevel: Float { get }
     func stop()
 }
 
-extension AVAudioPlayer: PlaybackHandle {}
+extension PlaybackHandle {
+    public var outputLevel: Float { 0 }
+}
+
+extension AVAudioPlayer: PlaybackHandle {
+    public var outputLevel: Float {
+        guard isMeteringEnabled else { return 0 }
+        updateMeters()
+        return AudioLevel.fromDecibels(averagePower(forChannel: 0), floor: -45, ceiling: -8)
+    }
+}
 
 /// Plays one file per line. Each play and stop names its line, so a stop that
 /// arrives before the play has started still counts, and a start that returns
@@ -23,19 +35,24 @@ public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
     private var stopped: [UUID] = []   // the most recent stops, oldest first
     private let volume: Float
     private let starter: Starter
+    /// The playing line's loudness, for the orb. 0 between lines.
+    public let level: AudioLevel
     private let log = Logger(subsystem: "com.earshot.app", category: "player")
 
-    public init(volume: Float = 1) {
+    public init(volume: Float = 1, level: AudioLevel = AudioLevel()) {
         self.volume = volume
+        self.level = level
         starter = { url, volume in
             guard let p = try? AVAudioPlayer(contentsOf: url) else { return nil }
             p.volume = volume
+            p.isMeteringEnabled = true
             return p.play() ? p : nil
         }
     }
 
-    init(volume: Float = 1, starter: @escaping Starter) {
+    init(volume: Float = 1, level: AudioLevel = AudioLevel(), starter: @escaping Starter) {
         self.volume = volume
+        self.level = level
         self.starter = starter
     }
 
@@ -65,15 +82,17 @@ public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
             p.stop()
             return false
         }
+        defer { level.set(0) }
         while true {
             try? await Task.sleep(for: .milliseconds(50))
-            let (isPlaying, wasStopped) = lock.withLock { (p.isPlaying, stopped.contains(id)) }
+            let (isPlaying, wasStopped, loudness) = lock.withLock { (p.isPlaying, stopped.contains(id), p.outputLevel) }
             if wasStopped {
                 // stop(id) stops a player it finds; stop it here only if it did not.
                 lock.withLock { playing.removeValue(forKey: id) }?.stop()
                 return false
             }
             if !isPlaying { break }
+            level.set(loudness)
         }
         lock.withLock { playing[id] = nil }
         return true

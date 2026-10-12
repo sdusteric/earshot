@@ -70,7 +70,7 @@ bash scripts/send-integration.sh
 
 | Check | How | Expected |
 |---|---|---|
-| Hotkey command | Hold Right Option: "what's everyone doing", release | Chime, orb "Listening" then "Working on it", the roll call |
+| Hotkey command | Hold Right Option: "what's everyone doing", release | Chime, the orb pulses blue with your voice, turns violet while working, then pulses amber with the roll call |
 | Tap and chord | Tap Right Option; type Option+e | Nothing: no chime, no orb |
 | Wake word | Turn it on; "Hey Earshot, tell <a terminal session> to say hi" | "Sent to ..." and the terminal session answers |
 | Desktop session | The same, naming a Code tab session in the Claude app | The message appears in that conversation |
@@ -88,6 +88,8 @@ bash scripts/send-integration.sh
 | Stop | "Stop <busy session>" | "... will stop after its current step."; it stops at the next step |
 | Secure input | In a password field, hold Right Option and type a character | No capture; a hold past 0.2 s plays the closed chime; the menu and the Listening settings say the hotkey is paused while another app uses secure keyboard entry |
 | Orb with another app in front | Hold the hotkey while Safari or Terminal is frontmost | The orb shows at the top center |
+| Orb with Reduce Motion | Turn on Reduce Motion in Accessibility, then hold the hotkey and speak | The orb does not turn; it only brightens and grows a little with your voice |
+| Orb with VoiceOver | Turn on VoiceOver, then hold the hotkey | VoiceOver says "Listening", then "Working on it" |
 | First launch prompts | On a fresh install, start the app | No Input Monitoring prompt appears before onboarding's hotkey step |
 | Chimes and own lines | Play the listening chime and Earshot's own lines through the speakers with the wake word on (the own-*.wav recordings in the listener eval include one with the chime) | Never wakes it (wake 0) |
 | End of speech | Say a wake command, then stop talking | About 770 ms of silence ends it (the VAD's chunking; the spec's 600 ms was ruled to 770 ms) |
