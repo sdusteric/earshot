@@ -20,9 +20,9 @@ import SwiftUI
         self.model = model
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: Self.size, height: Self.size),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
-        panel.level = .statusBar
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
+        panel.level = .statusBar   // after isFloatingPanel, which sets the floating level
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false   // the glass draws its own
@@ -81,17 +81,29 @@ import SwiftUI
                 panel.alphaValue = 0
             }
             panel.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { $0.duration = 0.18; panel.animator().alphaValue = 1 }
+            fade(to: 1, over: 0.18)
         } else if shown {
             shown = false
-            NSAnimationContext.runAnimationGroup({ $0.duration = 0.25; panel.animator().alphaValue = 0 },
-                                                 completionHandler: { [weak self] in
-                Task { @MainActor in
-                    // Shown again while it faded out.
-                    guard let self, !self.shown else { return }
-                    self.panel.orderOut(nil)
-                }
-            })
+            fade(to: 0, over: 0.25)
+        }
+    }
+
+    private var fadeTask: Task<Void, Never>?
+
+    /// Steps the alpha itself. The window animator runs its fade on a thread
+    /// of its own, and that fade was seen to stall at alpha 0, leaving the orb
+    /// invisible for a whole line.
+    private func fade(to target: CGFloat, over seconds: Double) {
+        fadeTask?.cancel()
+        let from = panel.alphaValue, steps = max(1, Int(seconds * 60))
+        fadeTask = Task { [weak self] in
+            for i in 1...steps {
+                try? await Task.sleep(for: .seconds(seconds / Double(steps)))
+                guard let self, !Task.isCancelled else { return }
+                self.panel.alphaValue = from + (target - from) * CGFloat(i) / CGFloat(steps)
+            }
+            guard let self, !Task.isCancelled else { return }
+            if target == 0 { self.panel.orderOut(nil) }
         }
     }
 
@@ -121,7 +133,7 @@ import SwiftUI
 
     private func resetPosition() {
         UserDefaults.standard.removeObject(forKey: Self.positionKey)
-        NSAnimationContext.runAnimationGroup { _ in place() }
+        place()
     }
 }
 
