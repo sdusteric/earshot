@@ -88,6 +88,8 @@ bash scripts/send-integration.sh
 | Stop | "Stop <busy session>" | "... will stop after its current step."; it stops at the next step |
 | Secure input | In a password field, hold Right Option and type a character | No capture; a hold past 0.2 s plays the closed chime; the menu and the Listening settings say the hotkey is paused while another app uses secure keyboard entry |
 | Orb with another app in front | Hold the hotkey while Safari or Terminal is frontmost | The orb shows at the top center |
+| Orb moves | While the orb shows, drag it; next time it shows, double-click it | It stays where you dropped it and the app in front keeps focus; the double-click puts it back at the top center |
+| Orb over a full screen app | Put an app in full screen, then hold the hotkey | The orb shows over the full screen app |
 | Orb with Reduce Motion | Turn on Reduce Motion in Accessibility, then hold the hotkey and speak | The orb does not turn; it only brightens and grows a little with your voice |
 | Orb with VoiceOver | Turn on VoiceOver, then hold the hotkey | VoiceOver says "Listening", then "Working on it" |
 | First launch prompts | On a fresh install, start the app | No Input Monitoring prompt appears before onboarding's hotkey step |
