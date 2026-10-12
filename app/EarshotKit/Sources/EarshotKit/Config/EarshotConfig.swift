@@ -80,9 +80,25 @@ public struct EarshotConfig: Sendable, Equatable {
     public var sayVoice: String? { nonEmpty("EARSHOT_SAY_VOICE") }
     /// App only: lower other apps' audio while Earshot talks.
     public var duckEnabled: Bool { self["EARSHOT_DUCK"] != "off" }
-    /// Full screen apps: "quiet" (the default) keeps Earshot's own lines until
-    /// you leave full screen; "speak" says them anyway.
-    public var quietInFullScreen: Bool { self["EARSHOT_FULLSCREEN"] != "speak" }
+    /// What Earshot does while the app in front is full screen.
+    public enum FullScreen: String, Sendable, CaseIterable {
+        /// Says nothing and doesn't listen; its lines wait until you leave full screen.
+        case silent
+        /// Its own lines wait; the hotkey and wake word work, and answers play.
+        case answers
+        /// Full screen changes nothing.
+        case speak
+    }
+    public var fullScreen: FullScreen { nonEmpty("EARSHOT_FULLSCREEN").flatMap(FullScreen.init) ?? .silent }
+    /// Earshot's own lines wait while an app is full screen.
+    public var quietInFullScreen: Bool { fullScreen != .speak }
+    /// The orb shows while Earshot listens, works or talks. "off" hides it.
+    public var showOrb: Bool { self["EARSHOT_ORB"] != "off" }
+    /// The orb's color: "state" changes it with what Earshot is doing.
+    public enum OrbColor: String, Sendable, CaseIterable {
+        case state, blue, purple, orange, green, pink, white
+    }
+    public var orbColor: OrbColor { nonEmpty("EARSHOT_ORB_COLOR").flatMap(OrbColor.init) ?? .state }
     /// App only: how loud other apps stay, 10 to 90 percent.
     public var duckLevel: Float {
         guard let s = self["EARSHOT_DUCK_LEVEL"], let p = Int(s) else { return 0.3 }

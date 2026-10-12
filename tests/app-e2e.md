@@ -89,8 +89,9 @@ bash scripts/send-integration.sh
 | Secure input | In a password field, hold Right Option and type a character | No capture; a hold past 0.2 s plays the closed chime; the menu and the Listening settings say the hotkey is paused while another app uses secure keyboard entry |
 | Orb with another app in front | Hold the hotkey while Safari or Terminal is frontmost | The orb shows at the top center |
 | Orb moves | While the orb shows, drag it; next time it shows, double-click it | It stays where you dropped it and the app in front keeps focus; the double-click puts it back at the top center |
-| Full screen keeps Earshot quiet | Put an app in full screen; have a session finish | Nothing is said and no orb shows; the line plays a few seconds after you leave full screen |
-| Asking in full screen | In a full screen app, hold the hotkey: "what's everyone doing" | The orb shows over the full screen app and the roll call plays |
+| Full screen is silent by default | Put an app in full screen; have a session finish; hold the hotkey | Nothing is said, no orb shows, the hotkey does nothing; the line plays a few seconds after you leave full screen |
+| Asking in full screen | Settings, Speaking: "Answer only when I ask". In a full screen app, hold the hotkey: "what's everyone doing" | The orb shows over the full screen app and the roll call plays; a session update still waits |
+| Orb color and visibility | Settings, Listening, Orb: pick Green, then hide the orb | The orb turns green on its dark glass over light and dark windows; hidden, it never shows |
 | No voice, no lowering | Turn off or unplug the output while a session finishes | Other apps keep their volume; they are lowered only while Earshot's voice really plays |
 | Orb with Reduce Motion | Turn on Reduce Motion in Accessibility, then hold the hotkey and speak | The orb does not turn; it only brightens and grows a little with your voice |
 | Orb with VoiceOver | Turn on VoiceOver, then hold the hotkey | VoiceOver says "Listening", then "Working on it" |

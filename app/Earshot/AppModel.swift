@@ -37,6 +37,8 @@ final class AppModel {
     @ObservationIgnored private let watch = SystemWatch()
     @ObservationIgnored private var hotkeyTap: HotkeyTap?
     @ObservationIgnored private var micInUse = false
+    /// An app is full screen (and the setting isn't "speak as usual").
+    @ObservationIgnored private var fullScreenNow = false
     /// Sessions `claude agents` lists: the plugin is silent while /voice is off or muted.
     @ObservationIgnored private var directorySessions = 0
     @ObservationIgnored private var lastDirectoryCheck: Date?
@@ -75,6 +77,13 @@ final class AppModel {
         mic = live.mic
         speakLevel = live.speakLevel
         readMute()
+        Task {
+            fullScreenNow = await live.fullScreen.isBusy
+            for await busy in live.fullScreen.changes() {
+                fullScreenNow = busy
+                await listeningChanged()
+            }
+        }
         Task {
             do { try await live.core.start() } catch { startError = "Couldn't open the plugin socket: \(error)" }
             // Kokoro takes about 12 s to load cold, so load it before the first line.
@@ -149,9 +158,9 @@ final class AppModel {
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
-    func playTestLine() {
+    func playTestLine(_ text: String = "This is how Earshot sounds.") {
         guard let core else { return }
-        Task { await core.speech.enqueue(SpokenLine(text: "This is how Earshot sounds.", kind: .roll, session: "")) }
+        Task { await core.speech.enqueue(SpokenLine(text: text, kind: .roll, session: "")) }
     }
 
     // MARK: Listening
@@ -237,6 +246,7 @@ final class AppModel {
         i.micInUse = micInUse
         i.liveSessions = max(sessions.count, directorySessions)
         i.hotkey = c.hotkey
+        i.fullScreenSilent = c.fullScreen == .silent && fullScreenNow
         return i
     }
 
@@ -247,6 +257,7 @@ final class AppModel {
             var i = ListenInputs()
             i.micAllowed = micAllowed; i.modelsReady = modelState == .ready; i.micInUse = micInUse
             i.locked = watch.state.locked; i.asleep = watch.state.asleep
+            i.fullScreenSilent = configBox.value.fullScreen == .silent && fullScreenNow
             guard ListenPolicy.commandBlock(i) == nil else { return }
             // Secure input may hide key presses from the tap, so a chord could look like a hold.
             // Refused, but not silently: a hold past the minimum gets the closed chime.
@@ -356,6 +367,7 @@ final class AppModel {
         Earshot \(ver)
         macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
         Engine: \(c.engine.rawValue), level \(c.level), style \(c.style)
+        Full screen: \(c.fullScreen.rawValue), orb \(c.showOrb ? c.orbColor.rawValue : "off")
         Lower other audio: \(c.duckEnabled ? "on, \(Int(c.duckLevel * 100))%" : "off")\(duckError.map { ", last error \($0)" } ?? "")
         Kokoro models: \(KokoroEngine.modelsPresent ? "present" : "missing")
         Sessions: \(sessions.count)

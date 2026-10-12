@@ -28,6 +28,9 @@ import SwiftUI
         panel.hasShadow = false   // the glass draws its own
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         glass.style = .regular
+        // Always the dark glass: the light points need a dark backing to stand
+        // out, whatever is behind the orb and whatever the system appearance.
+        glass.appearance = NSAppearance(named: .darkAqua)
         glass.cornerRadius = Self.size / 2
         if #available(macOS 27, *) { glass.effectIsInteractive = true }
         let hosting = OrbHostingView(rootView: AnyView(OrbView().environment(model)))
@@ -44,6 +47,7 @@ import SwiftUI
         withObservationTracking {
             _ = model.listenPhase
             _ = model.speechState
+            _ = model.config.showOrb
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.announce()
@@ -72,8 +76,8 @@ import SwiftUI
     }
 
     private func update() {
-        if let mode = OrbMode(model) {
-            glass.tintColor = mode.glassTint
+        if model.config.showOrb, let mode = OrbMode(model) {
+            glass.tintColor = mode.glassTint(model.config.orbColor)
             guard !shown else { return }
             shown = true
             if !panel.isVisible {
@@ -132,9 +136,12 @@ import SwiftUI
     }
 
     private func resetPosition() {
-        UserDefaults.standard.removeObject(forKey: Self.positionKey)
+        Self.forgetPosition()
         place()
     }
+
+    /// The next time it shows, the orb is back at the top center.
+    static func forgetPosition() { UserDefaults.standard.removeObject(forKey: positionKey) }
 }
 
 /// Drags the panel from anywhere on the orb. The panel never becomes key, so
@@ -172,30 +179,35 @@ enum OrbMode: Equatable {
         }
     }
 
-    /// Blue while listening, violet while working, amber while speaking.
-    /// On light glass the colors are deeper, so the points stay visible.
-    func rgb(dark: Bool) -> SIMD3<Double> {
-        switch (self, dark) {
-        case (.listening, true): [0.39, 0.77, 1.0]
-        case (.working, true): [0.67, 0.56, 1.0]
-        case (.speaking, true): [1.0, 0.74, 0.42]
-        case (.listening, false): [0.0, 0.42, 0.9]
-        case (.working, false): [0.4, 0.27, 0.88]
-        case (.speaking, false): [0.86, 0.43, 0.0]
+    /// By state: blue while listening, violet while working, amber while
+    /// speaking. A fixed color keeps one hue; the motion still shows the state.
+    func rgb(_ choice: EarshotConfig.OrbColor) -> SIMD3<Double> {
+        switch choice {
+        case .state:
+            switch self {
+            case .listening: [0.39, 0.77, 1.0]
+            case .working: [0.67, 0.56, 1.0]
+            case .speaking: [1.0, 0.74, 0.42]
+            }
+        case .blue: [0.39, 0.77, 1.0]
+        case .purple: [0.72, 0.58, 1.0]
+        case .orange: [1.0, 0.66, 0.3]
+        case .green: [0.45, 0.95, 0.6]
+        case .pink: [1.0, 0.55, 0.78]
+        case .white: [0.95, 0.96, 1.0]
         }
     }
 
     /// A light wash of the same color over the glass.
-    var glassTint: NSColor {
-        let c = rgb(dark: true)
-        return NSColor(red: c.x, green: c.y, blue: c.z, alpha: 0.14)
+    func glassTint(_ choice: EarshotConfig.OrbColor) -> NSColor {
+        let c = rgb(choice)
+        return NSColor(red: c.x, green: c.y, blue: c.z, alpha: 0.16)
     }
 }
 
 private struct OrbView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     @State private var sphere = ParticleSphere()
 
     var body: some View {
@@ -208,7 +220,7 @@ private struct OrbView: View {
                 default: 0
                 }
                 sphere.step(to: timeline.date, mode: mode, level: target, reduceMotion: reduceMotion,
-                            dark: colorScheme == .dark)
+                            color: model.config.orbColor)
                 sphere.draw(in: &gc, size: size)
             }
         }
@@ -231,8 +243,8 @@ private struct OrbView: View {
     private var t: Double = 0
     private var rotation: Double = 0
     private var level: Double = 0
-    private var color: SIMD3<Double> = OrbMode.listening.rgb(dark: true)
-    private var dark = true
+    private var color: SIMD3<Double> = OrbMode.listening.rgb(.state)
+    private var choice: EarshotConfig.OrbColor = .state
     private var mode: OrbMode = .listening
     private var reduceMotion = false
     private var dt: Double = 0
@@ -247,18 +259,18 @@ private struct OrbView: View {
     }
 
     /// `mode` nil means the panel is fading out: keep drawing the last mode, settling.
-    func step(to now: Date, mode: OrbMode?, level target: Float, reduceMotion: Bool, dark: Bool) {
+    func step(to now: Date, mode: OrbMode?, level target: Float, reduceMotion: Bool, color choice: EarshotConfig.OrbColor) {
         dt = last.map { min(0.05, max(0, now.timeIntervalSince($0))) } ?? 0
         last = now
         t += dt
         if let mode { self.mode = mode }
         self.reduceMotion = reduceMotion
-        self.dark = dark
+        self.choice = choice
         // The levels arrive 12 to 20 times a second: rise fast, fall slower.
         let goal = mode == nil ? 0 : Double(target)
         let tau = goal > level ? 0.04 : 0.14
         level += (goal - level) * min(1, dt / tau)
-        color += (self.mode.rgb(dark: dark) - color) * min(1, dt / 0.25)
+        color += (self.mode.rgb(choice) - color) * min(1, dt / 0.25)
         if !reduceMotion { rotation += dt * (self.mode == .working ? 1.5 : 0.3 + level * 1.1) }
     }
 
@@ -270,8 +282,11 @@ private struct OrbView: View {
         let tt = reduceMotion ? 0 : t
         let tilt = 0.42, ct = cos(tilt), st = sin(tilt), cr = cos(rotation), sr = sin(rotation)
 
-        // Light adds up on dark glass; on light glass points draw over each other.
-        gc.blendMode = dark ? .plusLighter : .normal
+        // A dark disc under the points, so they read even where the glass is clear.
+        let backing = size.width / 2
+        gc.fill(Path(ellipseIn: CGRect(x: c.x - backing, y: c.y - backing, width: backing * 2, height: backing * 2)),
+                with: .color(.black.opacity(0.28)))
+        gc.blendMode = .plusLighter
         let glow = radius * 1.25
         gc.fill(Path(ellipseIn: CGRect(x: c.x - glow, y: c.y - glow, width: glow * 2, height: glow * 2)),
                 with: .radialGradient(Gradient(colors: [tint.opacity((0.08 + 0.42 * L) * breathe), tint.opacity(0)]),

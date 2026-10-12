@@ -15,6 +15,8 @@ public struct ListenInputs: Sendable, Equatable {
     /// Another app captures from the mic (a call, dictation).
     public var micInUse = false
     public var hotkey: EarshotConfig.Hotkey = .rightOption
+    /// An app is full screen and the setting says to stay silent then.
+    public var fullScreenSilent = false
 
     public init() {}
 }
@@ -26,6 +28,7 @@ public enum ListenBlock: Sendable, Equatable {
     case asleep
     case locked
     case micInUse
+    case fullScreen
     case lowPower
     case battery
     case noSessions
@@ -58,6 +61,7 @@ public enum ListenPolicy {
         if i.asleep { return .asleep }
         if i.locked { return .locked }
         if i.micInUse { return .micInUse }
+        if i.fullScreenSilent { return .fullScreen }
         return nil
     }
 
@@ -73,6 +77,7 @@ public enum ListenPolicy {
         case .wakeOff: "The wake word is off. Hold the hotkey to talk."
         case .asleep, .locked: "Not listening while the Mac is locked."
         case .micInUse: "Not listening while another app uses the mic."
+        case .fullScreen: "Not listening while an app is full screen."
         case .lowPower: "Not listening for the wake word in Low Power Mode."
         case .battery: "Not listening for the wake word on battery."
         case .noSessions: "Listening for the wake word once a session is open."

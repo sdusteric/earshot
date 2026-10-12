@@ -87,9 +87,19 @@ import Testing
         #expect(ListenPolicy.canListen(i))
     }
 
+    @Test func aSilentFullScreenBlocksCommandsAndApprovals() {
+        var i = ListenInputs()
+        i.micAllowed = true; i.modelsReady = true; i.wakeWord = true; i.liveSessions = 1
+        #expect(ListenPolicy.commandBlock(i) == nil)
+        i.fullScreenSilent = true
+        #expect(ListenPolicy.commandBlock(i) == .fullScreen)
+        #expect(ListenPolicy.wakeBlock(i) == .fullScreen)
+        #expect(!ListenPolicy.canListen(i))
+    }
+
     @Test func everyBlockHasAMenuLineWithoutEmDashes() {
         let all: [ListenBlock] = [.micPermission, .models(nil), .models(0.5), .wakeOff, .asleep, .locked, .micInUse,
-                                  .lowPower, .battery, .noSessions]
+                                  .fullScreen, .lowPower, .battery, .noSessions]
         for b in all {
             let line = ListenPolicy.menuLine(b)
             #expect(!line.isEmpty)
