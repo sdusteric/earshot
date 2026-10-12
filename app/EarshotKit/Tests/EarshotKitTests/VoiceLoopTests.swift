@@ -64,7 +64,7 @@ actor CountingSpeaker: LineSpeaker {
         let counter: CountingSpeaker
     }
 
-    func rig(_ agents: [AgentEntry], blocking: Bool = false) async -> Rig {
+    func rig(_ agents: [AgentEntry], blocking: Bool = false, history: HistoryStore? = nil) async -> Rig {
         let player = FakePlayer(blocking: blocking)
         let speech = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: ducker, settle: .milliseconds(30))
         await speech.start()
@@ -77,7 +77,8 @@ actor CountingSpeaker: LineSpeaker {
                                     say: { _ in }, receiptTimeout: .seconds(60))
         let counter = CountingSpeaker(speech)
         let loop = VoiceLoop(followUps: followUps, parser: CommandParser(model: nil), dispatcher: dispatcher,
-                             directory: directory, approvals: book, speech: counter, chimes: chimes, events: EventLog())
+                             directory: directory, approvals: book, speech: counter, chimes: chimes, events: EventLog(),
+                             history: history)
         let (stream, cont) = AsyncStream<Listener.Utterance>.makeStream()
         await loop.start(utterances: stream)
         return Rig(loop: loop, speech: speech, player: player, book: book, heard: cont, counter: counter)
@@ -98,6 +99,20 @@ actor CountingSpeaker: LineSpeaker {
         r.heard.yield(said("Tell blog to deploy."))
         #expect(await eventually { await player.played == ["Sent to blog."] })
         #expect(await transport.sent.map(\.text) == ["deploy"])
+    }
+
+    @Test func aCommandAndItsReplyGoIntoTheHistory() async {
+        let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
+        let r = await rig([agent("b", "blog", pid: 11)], history: history)
+        let player = r.player
+        r.heard.yield(said("Tell blog to deploy."))
+        #expect(await eventually { await player.played == ["Sent to blog."] })
+        let e = await history.entries
+        #expect(e.count == 1)
+        #expect(e.first?.kind == .heard)
+        #expect(e.first?.text == "Tell blog to deploy.")
+        #expect(e.first?.reply == "Sent to blog.")
+        #expect(e.first?.sessionName == "blog")
     }
 
     @Test func aCommandOverTheCapIsNotSent() async {

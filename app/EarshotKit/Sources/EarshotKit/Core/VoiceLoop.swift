@@ -32,6 +32,10 @@ public actor VoiceLoop: ListenObserver {
     private let speech: any LineSpeaker
     private let chimes: any Chimes
     private let events: EventLog
+    /// What you said and what Earshot answered. Never the event log.
+    private let history: HistoryStore?
+    /// The history entry for the utterance being answered, for its reply.
+    private var heardEntry: UUID?
     private let signposter = OSSignposter(subsystem: "com.earshot.app", category: "command")
     private let latencyLog = Logger(subsystem: "com.earshot.app", category: "latency")
 
@@ -52,9 +56,11 @@ public actor VoiceLoop: ListenObserver {
     private let owedLimit: Duration = .seconds(15)
 
     public init(followUps: any FollowUpListening, parser: CommandParser, dispatcher: Dispatcher, directory: SessionDirectory,
-                approvals: ApprovalBook, speech: any LineSpeaker, chimes: any Chimes, events: EventLog) {
+                approvals: ApprovalBook, speech: any LineSpeaker, chimes: any Chimes, events: EventLog,
+                history: HistoryStore? = nil) {
         self.followUps = followUps; self.parser = parser; self.dispatcher = dispatcher; self.directory = directory
         self.approvals = approvals; self.speech = speech; self.chimes = chimes; self.events = events
+        self.history = history
     }
 
     public func start(utterances: AsyncStream<Listener.Utterance>) async {
@@ -104,11 +110,27 @@ public actor VoiceLoop: ListenObserver {
     private func handle(_ u: Listener.Utterance) async {
         signposter.emitEvent("transcript")
         if !awaiting.isEmpty { awaiting.removeFirst(); endsOwed += 1 }
-        if u.tooLong { await tooLong(u) } else { await respond(to: u) }
+        if u.tooLong { await tooLong(u) } else {
+            await record(u)
+            await respond(to: u)
+        }
+        heardEntry = nil
         if endsOwed > 0 {
             endsOwed -= 1
             await speech.endListening()
         }
+    }
+
+    /// Saves what you said. An approval window keeps only a clear yes or no;
+    /// anything else there was not meant for Earshot.
+    private func record(_ u: Listener.Utterance) async {
+        guard let history else { return }
+        let text = Listener.stripWake(u.text) ?? u.text
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        if case .followUp(.approval) = u.trigger, Grammar.approvalWord(text) == nil { return }
+        let e = HistoryEntry(kind: .heard, text: text)
+        heardEntry = e.id
+        await history.add(e)
     }
 
     private func respond(to u: Listener.Utterance) async {
@@ -161,7 +183,13 @@ public actor VoiceLoop: ListenObserver {
 
     private func apply(_ o: Dispatcher.Outcome, after u: Listener.Utterance) async {
         if o.sound { await chimes.play(.confirm) }
-        if let s = o.spokeAbout { await directory.noteSpoke(about: s) }
+        if let s = o.spokeAbout {
+            await directory.noteSpoke(about: s)
+            if let id = heardEntry, let history {
+                let name = await directory.session(s)?.name
+                await history.setSession(s, name: name, for: id)
+            }
+        }
         if let p = o.pending { pending = p }
         guard let text = o.line else { return }
         await say(text, after: u, then: o.pending == nil ? nil : .reply)
@@ -170,6 +198,7 @@ public actor VoiceLoop: ListenObserver {
     private func say(_ text: String, after u: Listener.Utterance, then followUp: Listener.FollowUp? = nil) async {
         let line = SpokenLine(text: text, kind: .confirm, session: "")
         commandEnded[line.id] = u.endedAt
+        if let id = heardEntry { await history?.setReply(text, for: id) }
         if let followUp {
             afterLine[line.id] = followUp
             // Marked before the line can start, so even a line that ends at once is held.

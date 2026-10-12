@@ -12,7 +12,8 @@ public struct ListenStack: Sendable {
     let spotter: CtcWakeSpotter
     let chimes: SystemChimes
 
-    public static func live(core: EarshotCore, config: @escaping @Sendable () -> EarshotConfig) async -> ListenStack {
+    public static func live(core: EarshotCore, history: HistoryStore? = nil,
+                            config: @escaping @Sendable () -> EarshotConfig) async -> ListenStack {
         let gate = SileroGate(), spotter = CtcWakeSpotter(), transcriber = ParakeetTranscriber(), chimes = SystemChimes(output: {
             AudioDevices.chooseOutput(setting: config().outputDevice, devices: AudioDevices.all())
         })
@@ -24,9 +25,14 @@ public struct ListenStack: Sendable {
         let speech = core.speech
         let dispatcher = Dispatcher(directory: directory, store: core.sessions, transport: CCSocketTransport(), runner: runner,
                                     approvals: core.approvals,
-                                    say: { text in await speech.enqueue(SpokenLine(text: text, kind: .confirm, session: "")) })
+                                    say: { text in
+                                        // Said later, not as a reply (a session didn't pick a prompt up).
+                                        await history?.add(HistoryEntry(kind: .said, text: text, lineKind: .confirm))
+                                        await speech.enqueue(SpokenLine(text: text, kind: .confirm, session: ""))
+                                    })
         let loop = VoiceLoop(followUps: listener, parser: CommandParser(model: FoundationCommandModel()), dispatcher: dispatcher,
-                             directory: directory, approvals: core.approvals, speech: speech, chimes: chimes, events: core.events)
+                             directory: directory, approvals: core.approvals, speech: speech, chimes: chimes, events: core.events,
+                             history: history)
         await listener.setObserver(loop)
         await loop.start(utterances: listener.utterances)
         return ListenStack(listener: listener, loop: loop, directory: directory, models: ListenModels(),

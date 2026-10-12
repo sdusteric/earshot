@@ -119,6 +119,8 @@ public struct EarshotConfig: Sendable, Equatable {
     public var inputDevice: String? { nonEmpty("EARSHOT_INPUT") }
     /// The speaker for Earshot's voice and chimes, by device UID. Empty: the system output.
     public var outputDevice: String? { nonEmpty("EARSHOT_OUTPUT") }
+    /// How long Earshot keeps what it said and heard: "day" (the default), "session" or "off".
+    public var history: HistoryStore.Keep { nonEmpty("EARSHOT_HISTORY").flatMap(HistoryStore.Keep.init) ?? .day }
 
     private func nonEmpty(_ key: String) -> String? {
         guard let v = self[key], !v.isEmpty else { return nil }

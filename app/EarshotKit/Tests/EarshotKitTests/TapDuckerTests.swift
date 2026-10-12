@@ -129,6 +129,8 @@ final class FakeBackend: DuckBackend, @unchecked Sendable {
         await d.end()
         #expect(backend.target == 1)
         #expect(await d.isActive == false)
+        // The tap is removed on the audio queue, a moment after end returns.
+        for _ in 0..<100 where backend.stops == 0 { try? await Task.sleep(for: .milliseconds(10)) }
         #expect(backend.stops == 1)
     }
 
