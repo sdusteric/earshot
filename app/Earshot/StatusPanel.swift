@@ -28,6 +28,7 @@ struct StatusPanel: View {
         }
         .frame(width: 360)
         .onAppear { model.refreshPermissions() }   // secure input or a permission may have changed
+        .task { await model.checkPlugin() }
     }
 
     // MARK: Header
@@ -88,15 +89,25 @@ struct StatusPanel: View {
 
     @ViewBuilder private var notices: some View {
         let needsHotkey = model.config.hotkey != .off && !model.hotkeyAllowed
+        let needsPlugin = model.pluginStatus.action != nil || model.pluginWorking
         let needsModels: Bool = switch model.modelState {
         case .missing, .failed: true
         default: false
         }
-        if needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
+        if needsPlugin || needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
             VStack(alignment: .leading, spacing: 8) {
+                if needsPlugin {
+                    Notice(text: model.pluginWorking ? "Connecting to Claude Code\u{2026}" : model.pluginStatus.line,
+                           action: model.pluginWorking ? nil : model.pluginStatus.action) { model.connectPlugin() }
+                }
                 if needsModels {
-                    Notice(text: "Listening needs about 1 GB of speech models, downloaded once.",
-                           action: model.modelState == .failed ? "Try Again" : "Download") { model.downloadModels() }
+                    if ListenModelFiles.partial {
+                        Notice(text: "The speech model download didn't finish, so listening can't start yet.",
+                               action: "Finish Download") { model.downloadModels() }
+                    } else {
+                        Notice(text: "Listening needs about 1 GB of speech models, downloaded once.",
+                               action: model.modelState == .failed ? "Try Again" : "Download") { model.downloadModels() }
+                    }
                 }
                 if needsHotkey {
                     Notice(text: "Allow Input Monitoring so Earshot can see the hotkey.", action: "Allow\u{2026}") {

@@ -438,6 +438,15 @@ private struct GeneralTab: View {
             }
 
             Section {
+                PluginStatusRow()
+            } header: {
+                Text("Claude Code")
+            } footer: {
+                Footnote("Without the plugin, voice commands still work, but Earshot says nothing about your sessions and can't take yes or no for a permission prompt. Sessions that were already open pick it up when they restart.")
+            }
+            .task { await model.checkPlugin() }
+
+            Section {
                 PermissionRow(title: "Microphone", allowed: model.micAllowed,
                               why: "To hear the hotkey, the wake word, and yes or no.") { Task { await model.requestMic() } }
                 PermissionRow(title: "Input Monitoring", allowed: model.hotkeyAllowed,
@@ -473,7 +482,8 @@ private struct GeneralTab: View {
                     switch model.modelState {
                     case .ready: Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
                     case .downloading(let p): ProgressView(value: p).frame(width: 140)
-                    case .missing: Button("Download (about 1 GB)") { model.downloadModels() }
+                    case .missing:
+                        Button(ListenModelFiles.partial ? "Finish Download" : "Download (about 1 GB)") { model.downloadModels() }
                     case .failed: Button("Try Again") { model.downloadModels() }
                     }
                 }
@@ -502,5 +512,25 @@ private struct GeneralTab: View {
         let v = info?["CFBundleShortVersionString"] as? String ?? "?"
         let b = info?["CFBundleVersion"] as? String ?? "?"
         return "\(v) (\(b))"
+    }
+}
+
+/// The plugin's state, with the button that fixes it. Used in Settings and the welcome steps.
+struct PluginStatusRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        LabeledContent {
+            if model.pluginWorking {
+                ProgressView().controlSize(.small)
+            } else if model.pluginStatus.isConnected {
+                Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
+            } else if let action = model.pluginStatus.action {
+                Button(action) { model.connectPlugin() }
+            }
+        } label: {
+            Text("Earshot plugin")
+            Text(model.pluginWorking ? "Installing through Claude Code\u{2026}" : model.pluginStatus.line)
+        }
     }
 }

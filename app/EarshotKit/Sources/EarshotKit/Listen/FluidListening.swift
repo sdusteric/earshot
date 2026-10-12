@@ -78,6 +78,14 @@ public enum ListenModelFiles {
     static var ctcDir: URL { CtcModels.defaultCacheDirectory(for: .ctc110m) }
     static var asrDir: URL { AsrModels.defaultCacheDirectory(for: .v2) }
 
+    /// Some model files are on disk but not all: a download was cut off.
+    public static var partial: Bool {
+        guard !present else { return false }
+        return [vadDir, ctcDir, asrDir].contains { dir in
+            !((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).isEmpty
+        }
+    }
+
     public static var present: Bool {
         let vad = (try? FileManager.default.contentsOfDirectory(atPath: vadDir.path))?.contains { $0.hasSuffix(".mlmodelc") } ?? false
         return vad && CtcModels.modelsExist(at: ctcDir) && AsrModels.modelsExist(at: asrDir, version: .v2)

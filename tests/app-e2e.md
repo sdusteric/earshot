@@ -111,3 +111,6 @@ bash scripts/send-integration.sh
 | History settings | Settings, General, History: Until Earshot quits, then quit and reopen | The history is empty after the restart and no history file is left |
 | Mute choices | Panel, the speaker button: Mute Until I Unmute | The icon shows the slash until you unmute; the plugin's fallback voice stays quiet too |
 | Activity orb | Open Activity and leave Earshot idle; then click the orb and say "what's everyone doing" | The orb turns slowly in white; the click chimes, the orb changes color while it listens, and the roll call plays |
+| Plugin missing | Disable the plugin (claude plugin disable earshot@earshot), then open the panel | The panel says the plugin is turned off with a Turn On button; after it, Settings, General shows Connected |
+| Plugin install on a fresh Mac | With no earshot marketplace or plugin, click Install in the welcome steps | Claude Code adds the marketplace and installs the plugin; the row shows Connected |
+| Interrupted model download | Quit Earshot while the speech models download, then reopen | The panel says the download didn't finish, with Finish Download |

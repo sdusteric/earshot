@@ -35,9 +35,13 @@ struct OnboardingView: View {
             case .intro:
                 Text("Earshot reads Claude Code updates aloud, and takes commands by voice").font(.title2.bold())
                 Text("It tells you when a session needs your OK, might be stuck, or finishes. Say \u{201C}Hey Earshot\u{201D} or hold a key to send a session a prompt, ask what everyone is doing, stop a session, start one, or answer a permission prompt with yes or no.")
+            case .plugin:
+                Text("Connect to Claude Code").font(.title2.bold())
+                Text("Earshot hears about your sessions through a small Claude Code plugin. It tells Earshot when a session needs you, might be stuck, or finishes, and lets you answer permission prompts by voice.")
+                PluginStatusRow()
             case .voice:
                 Text("Voice").font(.title2.bold())
-                Text("Earshot uses the voice you set up with the plugin: \(model.config.engine.rawValue). You can change it in Settings.")
+                Text("Earshot speaks with \(model.config.engine == .kokoro ? "Kokoro, on this Mac" : model.config.engine == .elevenlabs ? "ElevenLabs" : "the Mac's own voice"). You can change it in Settings.")
                 Button("Play a Test Line") { model.playTestLine() }
             case .mic:
                 Text("Microphone and wake word").font(.title2.bold())
@@ -114,5 +118,6 @@ struct OnboardingView: View {
             if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
         }
         .permissionRefresh(model)
+        .task { await model.checkPlugin(force: true) }
     }
 }

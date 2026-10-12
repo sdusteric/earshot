@@ -11,6 +11,9 @@ final class AppModel {
     var sessions: [SessionInfo] = []
     /// What Earshot said and heard, oldest first (see HistoryStore).
     var history: [HistoryEntry] = []
+    /// Whether Claude Code has the Earshot plugin, and an install under way.
+    var pluginStatus: PluginStatus = .checking
+    var pluginWorking = false
     /// What the Activity window shows; set before opening it from the panel.
     var activityFilter: ActivityFilter = .all
     var speechState: SpeechOut.State = .idle
@@ -42,6 +45,8 @@ final class AppModel {
     @ObservationIgnored private var hotkeyTap: HotkeyTap?
     @ObservationIgnored private var micInUse = false
     @ObservationIgnored private(set) var historyStore: HistoryStore?
+    @ObservationIgnored private var pluginLink: PluginLink?
+    @ObservationIgnored private var lastPluginCheck: Date?
     /// Lines that are replays or test lines: said again, never saved again.
     @ObservationIgnored private var unrecorded: Set<UUID> = []
     /// An app is full screen (and the setting isn't "speak as usual").
@@ -108,6 +113,8 @@ final class AppModel {
         Task {
             let stack = await ListenStack.live(core: live.core, history: history) { box.value }
             self.stack = stack
+            pluginLink = PluginLink(runner: stack.claudePath.map { ClaudeCLI(path: $0) })
+            await checkPlugin(force: true)
             Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
@@ -337,6 +344,27 @@ final class AppModel {
         Task { await stack.listener.tapToTalk() }
     }
 
+    // MARK: Claude Code plugin
+
+    /// Asks Claude Code again, at most once a minute unless forced.
+    func checkPlugin(force: Bool = false) async {
+        guard let pluginLink, !pluginWorking else { return }
+        if !force, let last = lastPluginCheck, Date().timeIntervalSince(last) < 60 { return }
+        lastPluginCheck = Date()
+        pluginStatus = await pluginLink.check()
+    }
+
+    /// Installs, turns on, or updates the plugin, whichever it needs.
+    func connectPlugin() {
+        guard let pluginLink, !pluginWorking else { return }
+        pluginWorking = true
+        Task {
+            pluginStatus = await pluginLink.connect()
+            lastPluginCheck = Date()
+            pluginWorking = false
+        }
+    }
+
     func requestMic() async {
         _ = await AVCaptureDevice.requestAccess(for: .audio)
         await listeningChanged()
@@ -447,6 +475,7 @@ final class AppModel {
         Mic permission: \(micAllowed ? "allowed" : "not allowed")
         Speech models: \(modelState)
         claude: \(stack?.claudePath ?? "not found")
+        Plugin: \(pluginStatus.line)
         Recent events:
         \(events.joined(separator: "\n"))
         """

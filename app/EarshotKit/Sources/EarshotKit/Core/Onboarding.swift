@@ -1,6 +1,6 @@
 /// The first-launch steps, in the spec's order.
 public enum OnboardingStep: Int, Sendable, CaseIterable {
-    case intro, voice, mic, hotkey, models, ducking, tryIt
+    case intro, plugin, voice, mic, hotkey, models, ducking, tryIt
 }
 
 public enum Onboarding {
