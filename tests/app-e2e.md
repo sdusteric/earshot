@@ -105,3 +105,8 @@ bash scripts/send-integration.sh
 | A session named earshot | Run a session in a folder named earshot, with the wake word on; let it ask for an OK | Its "Hey, earshot needs your OK" alert never wakes Earshot; the approval window opens after the line |
 | Upgrade onboarding | Start the app as a user who finished the 0.11 onboarding | Only the mic and wake word, hotkey, models and try it steps, once |
 | Diagnostics | Copy Diagnostics | Listening, models, permissions and claude path; no transcripts, no prompts |
+| Menu bar panel | Click the menu bar icon | The panel shows the status line, sessions with whoever needs you first, the last four lines, and Activity, Settings, Quit |
+| Replay a line | In the panel, click play on a session's last line | Earshot says it again; it is not added to the history twice |
+| Activity window | Panel, Activity; pick a session in the sidebar; search for a word | Only that session's lines; search narrows them; Clear History asks first |
+| History settings | Settings, General, History: Until Earshot quits, then quit and reopen | The history is empty after the restart and no history file is left |
+| Mute choices | Panel, the speaker button: Mute Until I Unmute | The icon shows the slash until you unmute; the plugin's fallback voice stays quiet too |

@@ -354,7 +354,7 @@ private struct ListeningTab: View {
             } header: {
                 Text("Input")
             } footer: {
-                Footnote("Automatic avoids a Bluetooth headset's mic, so the headset keeps its full sound. Audio stays on this Mac: Earshot keeps the last few seconds in memory to hear a command, and never saves or sends it.")
+                Footnote("Automatic avoids a Bluetooth headset's mic, so the headset keeps its full sound. Audio stays on this Mac: Earshot keeps the last few seconds in memory to hear a command, and never saves or sends it. The text of what you say goes into the history (Settings, General).")
             }
 
             Section {
@@ -420,6 +420,15 @@ private struct PermissionRow: View {
 private struct GeneralTab: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    @State private var confirmClear = false
+
+    private var historyLine: String {
+        switch model.config.history {
+        case .day: "What Earshot said and what you said to it, as text, in a file on this Mac only your account can read. Audio is never kept."
+        case .session: "Kept in memory and gone when Earshot quits. Audio is never kept."
+        case .off: "Earshot keeps nothing. The panel and the Activity window stay empty."
+        }
+    }
 
     var body: some View {
         Form {
@@ -437,6 +446,26 @@ private struct GeneralTab: View {
                 Text("Permissions")
             } footer: {
                 Footnote("System audio capture, for lowering other apps, is asked for the first time Earshot does it.")
+            }
+
+            Section {
+                Picker("Keep", selection: Binding(get: { model.config.history },
+                                                  set: { v in model.save { $0.set("EARSHOT_HISTORY", v == .day ? nil : v.rawValue) } })) {
+                    Text("For 24 hours").tag(HistoryStore.Keep.day)
+                    Text("Until Earshot quits").tag(HistoryStore.Keep.session)
+                    Text("Off").tag(HistoryStore.Keep.off)
+                }
+                Button("Clear History\u{2026}") { confirmClear = true }
+                    .disabled(model.history.isEmpty)
+            } header: {
+                Text("History")
+            } footer: {
+                Footnote(historyLine)
+            }
+            .confirmationDialog("Clear the history?", isPresented: $confirmClear) {
+                Button("Clear History", role: .destructive) { model.clearHistory() }
+            } message: {
+                Text("Everything Earshot said and heard is removed from this Mac.")
             }
 
             Section {

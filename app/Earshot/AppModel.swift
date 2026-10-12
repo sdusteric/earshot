@@ -9,6 +9,10 @@ import SwiftUI
 @MainActor @Observable
 final class AppModel {
     var sessions: [SessionInfo] = []
+    /// What Earshot said and heard, oldest first (see HistoryStore).
+    var history: [HistoryEntry] = []
+    /// What the Activity window shows; set before opening it from the panel.
+    var activityFilter: ActivityFilter = .all
     var speechState: SpeechOut.State = .idle
     var listenPhase: Listener.Phase = .off
     var listenBlock: ListenBlock?
@@ -37,6 +41,9 @@ final class AppModel {
     @ObservationIgnored private let watch = SystemWatch()
     @ObservationIgnored private var hotkeyTap: HotkeyTap?
     @ObservationIgnored private var micInUse = false
+    @ObservationIgnored private(set) var historyStore: HistoryStore?
+    /// Lines that are replays or test lines: said again, never saved again.
+    @ObservationIgnored private var unrecorded: Set<UUID> = []
     /// An app is full screen (and the setting isn't "speak as usual").
     @ObservationIgnored private var fullScreenNow = false
     /// Sessions `claude agents` lists: the plugin is silent while /voice is off or muted.
@@ -53,17 +60,16 @@ final class AppModel {
 
     static let muteFile = URL.earshotDir.appending(path: "mute")
 
-    var menuIcon: String {
-        if mutedUntil != nil { return "speaker.slash" }
+    var menuIcon: MenuIcon.State {
+        if mutedUntil != nil { return .muted }
         switch listenPhase {
-        case .capturing: return "mic.fill"
-        case .transcribing: return "ellipsis.circle"
+        case .capturing, .transcribing: return .active
         default: break
         }
         switch speechState {
-        case .speaking: return "waveform"
-        case .holding: return "pause.circle"
-        case .idle: return listenPhase == .waiting ? "ear.badge.waveform" : "ear"
+        case .speaking: return .active
+        case .holding: return .holding
+        case .idle: return listenPhase == .waiting ? .ready : .idle
         }
     }
 
@@ -72,6 +78,14 @@ final class AppModel {
         started = true
         let box = configBox
         let live = EarshotCore.live { box.value }
+        let history = HistoryStore(keep: { box.value.history })
+        historyStore = history
+        Task { for await list in await history.changes() { self.history = list } }
+        Task {
+            for await e in await live.core.speech.lineEvents() {
+                if case .started(let line) = e { await record(line) }
+            }
+        }
         core = live.core
         ducker = live.ducker
         mic = live.mic
@@ -92,7 +106,7 @@ final class AppModel {
         Task { for await list in await live.core.sessions.changes() { sessions = list; await listeningChanged() } }
         Task { for await s in await live.core.speech.stateChanges() { speechState = s; updateActivity() } }
         Task {
-            let stack = await ListenStack.live(core: live.core) { box.value }
+            let stack = await ListenStack.live(core: live.core, history: history) { box.value }
             self.stack = stack
             Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
@@ -146,7 +160,10 @@ final class AppModel {
         change(&c)
         try? c.save()
         config = c
-        Task { await listeningChanged() }
+        Task {
+            await historyStore?.settingChanged()
+            await listeningChanged()
+        }
     }
 
     func reloadConfig() { config = configBox.value }
@@ -160,7 +177,34 @@ final class AppModel {
 
     func playTestLine(_ text: String = "This is how Earshot sounds.") {
         guard let core else { return }
-        Task { await core.speech.enqueue(SpokenLine(text: text, kind: .roll, session: "")) }
+        let line = SpokenLine(text: text, kind: .roll, session: "")
+        unrecorded.insert(line.id)
+        Task { await core.speech.enqueue(line) }
+    }
+
+    // MARK: History
+
+    /// Says it again: Earshot's line, or its reply to what you said.
+    func replay(_ e: HistoryEntry) {
+        let text = e.kind == .said ? e.text : (e.reply ?? e.text)
+        playTestLine(text)
+    }
+
+    func clearHistory() { Task { await historyStore?.clear() } }
+
+    /// A line Earshot started saying. Replies to what you said are saved with
+    /// it by the voice loop, so confirm lines are skipped here.
+    private func record(_ line: SpokenLine) async {
+        if unrecorded.remove(line.id) != nil { return }
+        guard line.kind != .confirm else { return }
+        let name = sessions.first { $0.id == line.session }?.name
+        await historyStore?.add(HistoryEntry(kind: .said, text: line.text, session: line.session.isEmpty ? nil : line.session,
+                                             sessionName: name, lineKind: line.kind))
+    }
+
+    /// The last thing Earshot said about this session, for the panel.
+    func lastLine(for session: String) -> HistoryEntry? {
+        history.last { $0.kind == .said && $0.session == session }
     }
 
     // MARK: Listening
@@ -330,6 +374,19 @@ final class AppModel {
         try? FileManager.default.createDirectory(at: .earshotDir, withIntermediateDirectories: true)
         try? "\(Int(until.timeIntervalSince1970))\n".write(to: Self.muteFile, atomically: true, encoding: .utf8)
         setMuted(until)
+    }
+
+    /// Until you unmute: an empty mute file, which the plugin reads the same way.
+    func muteUntilUnmuted() {
+        try? FileManager.default.createDirectory(at: .earshotDir, withIntermediateDirectories: true)
+        try? "".write(to: Self.muteFile, atomically: true, encoding: .utf8)
+        setMuted(.distantFuture)
+    }
+
+    func muteUntilTomorrow() {
+        let cal = Calendar.current
+        let morning = cal.nextDate(after: Date(), matching: DateComponents(hour: 8), matchingPolicy: .nextTime) ?? Date().addingTimeInterval(12 * 3600)
+        mute(for: morning.timeIntervalSinceNow)
     }
 
     func unmute() {

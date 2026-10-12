@@ -19,9 +19,10 @@ struct EarshotApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent().environment(model)
+            StatusPanel().environment(model)
         } label: {
-            Image(systemName: model.menuIcon)
+            Image(nsImage: MenuIcon.image(model.menuIcon))
+                .accessibilityLabel(model.menuIcon.label)
                 .task {
                     model.start()
                     if orb == nil { orb = OrbPanel(model: model) }
@@ -31,7 +32,12 @@ struct EarshotApp: App {
                     }
                 }
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
+
+        Window("Activity", id: "activity") {
+            ActivityView().environment(model)
+        }
+        .defaultSize(width: 760, height: 540)
 
         Settings { SettingsView().environment(model) }
 
