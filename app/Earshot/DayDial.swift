@@ -10,6 +10,8 @@ struct DialLayout {
         let name: String
         let color: Color
         let radius: CGFloat
+        /// Working or waiting on you: its arc runs on to now.
+        var active = false
     }
 
     static let youLane = "you"
@@ -23,7 +25,7 @@ struct DialLayout {
 
     var center: CGPoint { CGPoint(x: size / 2, y: size / 2) }
 
-    init(size: CGFloat, now: Date, sessions: [(id: String, name: String, color: Color)]) {
+    init(size: CGFloat, now: Date, sessions: [(id: String, name: String, color: Color, active: Bool)]) {
         self.size = size
         self.now = now
         outer = size / 2 - 52
@@ -33,7 +35,7 @@ struct DialLayout {
         let gap = min(30, (outer - inner) / max(count, 1))
         var lanes = [Lane(id: Self.youLane, name: "You", color: DialPalette.you, radius: outer)]
         for (i, s) in sessions.enumerated() {
-            lanes.append(Lane(id: s.id, name: s.name, color: s.color, radius: outer - gap * CGFloat(i + 1)))
+            lanes.append(Lane(id: s.id, name: s.name, color: s.color, radius: outer - gap * CGFloat(i + 1), active: s.active))
         }
         self.lanes = lanes
     }
@@ -133,7 +135,15 @@ struct DayDial: View {
             }
         })
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Today around the orb")
+        .accessibilityLabel(summary)
+    }
+
+    /// What VoiceOver says for the dial, which draws its dots where it can't see them.
+    private var summary: String {
+        guard let newest = entries.max(by: { $0.date < $1.date }) else { return "Today around the orb. Nothing yet." }
+        let t = newest.date.formatted(date: .omitted, time: .shortened)
+        let about = newest.sessionName.map { ", about \(SessionStyle.title($0))" } ?? ""
+        return "Today around the orb. \(entries.count) \(entries.count == 1 ? "line" : "lines"), the newest at \(t)\(about)."
     }
 
     private func nearest(to p: CGPoint) -> HistoryEntry? {
@@ -183,12 +193,28 @@ struct DayDial: View {
         gc.draw(Text("now").font(.caption2.weight(.semibold)).foregroundStyle(DialPalette.voice),
                 at: CGPoint(x: c.x, y: c.y - layout.outer - 36), anchor: .bottom)
 
-        // Rings: a quiet track per lane, brighter for the lane in focus.
+        // Rings: a track for a lane with lines today, a hairline for one without,
+        // and each session's span from its first line to its last (on to now
+        // while it works or waits on you), in its state color.
+        var spans: [String: (Date, Date)] = [:]
+        for e in entries {
+            guard let lane = layout.lane(for: e) else { continue }
+            let s = spans[lane.id]
+            spans[lane.id] = (min(s?.0 ?? e.date, e.date), max(s?.1 ?? e.date, e.date))
+        }
         for lane in layout.lanes {
             let focused = focusLane == nil || focusLane == lane.id
             var ring = Path()
             ring.addEllipse(in: CGRect(x: c.x - lane.radius, y: c.y - lane.radius, width: lane.radius * 2, height: lane.radius * 2))
-            gc.stroke(ring, with: .color(focused ? DialPalette.track : DialPalette.track.opacity(0.45)), lineWidth: 14)
+            if let span = spans[lane.id] {
+                gc.stroke(ring, with: .color(focused ? DialPalette.track : DialPalette.track.opacity(0.45)), lineWidth: 14)
+                let end = lane.active ? layout.now : span.1
+                let start = min(span.0, end.addingTimeInterval(-300))   // even a single line shows a short arc
+                arc(&gc, from: start, to: end, radius: lane.radius,
+                    color: lane.color.opacity(focused ? 0.55 : 0.2), width: 6)
+            } else {
+                gc.stroke(ring, with: .color(DialPalette.tick.opacity(focused ? 0.7 : 0.3)), lineWidth: 1)
+            }
         }
 
         // Each ring's name, just past now, where a day-old moment would sit.
@@ -196,7 +222,7 @@ struct DayDial: View {
             let focused = focusLane == nil || focusLane == lane.id
             let a = -Double.pi / 2 + 0.05
             let p = CGPoint(x: c.x + cos(a) * lane.radius, y: c.y + sin(a) * lane.radius)
-            let name = Text(lane.id == DialLayout.youLane ? "You" : SessionStyle.title(lane.name))
+            let name = Text(lane.id == DialLayout.youLane ? "You" : Self.shortName(lane.name))
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(lane.color.opacity(focused ? 0.95 : 0.4))
             gc.draw(name, at: CGPoint(x: p.x + 6, y: p.y), anchor: .leading)
@@ -233,6 +259,12 @@ struct DayDial: View {
         gc.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
     }
 
+    /// A ring label short enough to stay clear of the dots near now.
+    static func shortName(_ name: String) -> String {
+        let t = SessionStyle.title(name)
+        return t.count <= 16 ? t : String(t.prefix(15)) + "\u{2026}"
+    }
+
     private func anchor(for a: Double) -> UnitPoint {
         UnitPoint(x: 0.5 - cos(a) * 0.5, y: 0.5 - sin(a) * 0.5)
     }
@@ -266,8 +298,18 @@ struct NowStrip: View {
     let entry: HistoryEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// A line this new types in here and waits to join the list below.
+    static func isFresh(_ e: HistoryEntry?, now: Date = Date()) -> Bool {
+        guard let e else { return false }
+        return now.timeIntervalSince(e.date) < 45
+    }
+
     var body: some View {
-        if let entry {
+        if let entry, !Self.isFresh(entry) {
+            Text("Quiet since \(entry.date.formatted(date: .omitted, time: .shortened))")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else if let entry {
             let fresh = Date().timeIntervalSince(entry.date) < 20 && !reduceMotion
             TimelineView(.animation(paused: !fresh)) { t in
                 let text = entry.kind == .heard ? (entry.reply ?? entry.text) : entry.text

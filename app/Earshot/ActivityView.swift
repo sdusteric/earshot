@@ -11,6 +11,12 @@ struct ActivityView: View {
     @State private var selection: ClosedRange<Date>?
     @State private var search = ""
     @State private var confirmClear = false
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    /// When you last looked away from this window; the first time, the start of today's history.
+    private var lastLooked: Date? {
+        lastSeenStamp > 0 ? Date(timeIntervalSince1970: lastSeenStamp) : model.history.first?.date
+    }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { t in
@@ -50,8 +56,12 @@ struct ActivityView: View {
         }
         .navigationTitle("Activity")
         .frame(minWidth: 980, minHeight: 640)
-        .onAppear { since = lastSeenStamp > 0 ? Date(timeIntervalSince1970: lastSeenStamp) : nil }
+        .onAppear { since = lastLooked }
         .onDisappear { lastSeenStamp = Date().timeIntervalSince1970 }
+        .onChange(of: controlActiveState) { old, state in
+            // Looking away marks the moment; coming back shades what came since.
+            if state == .key { since = lastLooked } else if old == .key { lastSeenStamp = Date().timeIntervalSince1970 }
+        }
     }
 
     private func content(now: Date) -> some View {
@@ -77,7 +87,6 @@ struct ActivityView: View {
     private func detail(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(recapLabel(now)).font(.caption.weight(.semibold)).textCase(.uppercase).tracking(0.6).foregroundStyle(.secondary)
                 Text(recap).font(.system(size: 24, weight: .semibold)).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Button("Say the Recap") { model.playTestLine(recap) }
@@ -91,8 +100,13 @@ struct ActivityView: View {
             .padding(.top, 22)
             .padding(.bottom, 18)
 
-            HStack {
+            HStack(alignment: .firstTextBaseline) {
                 Text(listTitle).font(.headline)
+                if selection == nil, let since, since < now, now.timeIntervalSince(since) > 120 {
+                    Text("Shaded on the dial: since \(since.formatted(date: .omitted, time: .shortened))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 if selection != nil {
                     Button("Show the Whole Day") { selection = nil }.buttonStyle(.link)
@@ -127,26 +141,14 @@ struct ActivityView: View {
             }
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                    ForEach(hourGroups(items), id: \.start) { g in
-                        Section {
-                            ForEach(g.items) { e in
-                                HistoryRow(entry: e) { model.replay(e) }
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 8)
-                            }
-                        } header: {
-                            Text(g.start, format: .dateTime.hour().minute())
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 6)
-                                .background(DialPalette.ground)
-                        }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(items) { e in
+                        HistoryRow(entry: e) { model.replay(e) }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 8)
                     }
                 }
-                .padding(.bottom, 16)
+                .padding(.vertical, 8)
             }
         }
     }
@@ -168,11 +170,13 @@ struct ActivityView: View {
     }
 
     /// At most five session rings; older sessions' dots stay off the dial but in the list.
-    private var lanes: [(id: String, name: String, color: Color)] {
+    private var lanes: [(id: String, name: String, color: Color, active: Bool)] {
         sessionList.prefix(5).map { s in
-            (s.id, s.name, model.sessions.first { $0.id == s.id }.map { SessionStyle.color($0.state) }
-                ?? model.liveSessions.first { $0.id == s.id }.map { $0.waiting ? .orange : ($0.busy ? .blue : .secondary) }
-                ?? .secondary)
+            let info = model.sessions.first { $0.id == s.id }
+            let live = model.liveSessions.first { $0.id == s.id }
+            let color = info.map { SessionStyle.color($0.state) } ?? live.map { $0.waiting ? .orange : ($0.busy ? .blue : .secondary) } ?? .secondary
+            let active = info.map { [.working, .needs, .reply].contains($0.state) } ?? live.map { $0.busy || $0.waiting } ?? false
+            return (s.id, s.name, color, active)
         }
     }
 
@@ -202,7 +206,9 @@ struct ActivityView: View {
 
     private func visible(_ now: Date) -> [HistoryEntry] {
         let q = search.trimmingCharacters(in: .whitespaces)
+        let typing = NowStrip.isFresh(model.history.last, now: Date()) ? model.history.last?.id : nil
         return dayEntries(now).reversed().filter { e in
+            if e.id == typing { return false }   // it is typing in above the list
             let byFilter: Bool = switch model.activityFilter {
             case .all: true
             case .you: e.kind == .heard
@@ -219,22 +225,6 @@ struct ActivityView: View {
     private func pick(_ t: Date?) {
         guard let t else { selection = nil; return }
         if let s = selection, s.contains(t) { selection = nil } else { selection = t.addingTimeInterval(-1800)...t.addingTimeInterval(1800) }
-    }
-
-    private struct HourGroup { let start: Date; let items: [HistoryEntry] }
-
-    private func hourGroups(_ items: [HistoryEntry]) -> [HourGroup] {
-        let cal = Calendar.current
-        var groups: [HourGroup] = []
-        for e in items {
-            let start = cal.dateInterval(of: .hour, for: e.date)?.start ?? e.date
-            if let last = groups.last, last.start == start {
-                groups[groups.count - 1] = HourGroup(start: start, items: last.items + [e])
-            } else {
-                groups.append(HourGroup(start: start, items: [e]))
-            }
-        }
-        return groups
     }
 
     // MARK: Words
@@ -267,14 +257,6 @@ struct ActivityView: View {
         }
         if parts.isEmpty { return model.sessions.isEmpty ? "No Claude Code sessions are open." : "Nothing needs you right now." }
         return parts.joined(separator: " ")
-    }
-
-    private func recapLabel(_ now: Date) -> String {
-        guard let since, since < now else { return "Right now" }
-        let minutes = Int(now.timeIntervalSince(since) / 60)
-        if minutes < 2 { return "Right now" }
-        if minutes < 90 { return "Since you last looked, \(minutes) minutes ago" }
-        return "Since you last looked, \(minutes / 60) hours ago"
     }
 
     private var listTitle: String {
