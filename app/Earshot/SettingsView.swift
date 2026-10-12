@@ -209,11 +209,36 @@ private struct VoiceTab: View {
             }
 
             Section {
+                Picker("Speaker", selection: Binding(get: { model.config.outputDevice ?? "" },
+                                                     set: { v in model.save { $0.set("EARSHOT_OUTPUT", v.isEmpty ? nil : v) } })) {
+                    Text(systemOutputName).tag("")
+                    if let chosen = model.config.outputDevice, !outputs.contains(where: { $0.uid == chosen }) {
+                        Text("Not connected").tag(chosen)
+                    }
+                    Divider()
+                    ForEach(outputs, id: \.uid) { Text($0.name).tag($0.uid) }
+                }
                 Button("Play a Test Line") { model.playTestLine() }
+            } header: {
+                Text("Output")
+            } footer: {
+                Footnote("Earshot's voice and chimes play here. When this speaker isn't connected, they play through the system output.")
             }
         }
         .formStyle(.grouped)
-        .onAppear { model.reloadConfig() }
+        .onAppear {
+            model.reloadConfig()
+            refreshDevices()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshDevices() }
+    }
+
+    @State private var outputs: [AudioDevices.Device] = []
+    @State private var systemOutputName = "System output"
+
+    private func refreshDevices() {
+        outputs = AudioDevices.all().filter(\.hasOutput)
+        systemOutputName = AudioDevices.systemDefault(input: false).map { "System output (\($0.name))" } ?? "System output"
     }
 
     private var engineLine: String {
@@ -320,8 +345,14 @@ private struct ListeningTab: View {
                 Picker("Microphone", selection: Binding(get: { model.config.inputDevice ?? "" },
                                                         set: { v in model.save { $0.set("EARSHOT_INPUT", v.isEmpty ? nil : v) } })) {
                     Text("Automatic").tag("")
+                    if let chosen = model.config.inputDevice, !inputs.contains(where: { $0.uid == chosen }) {
+                        Text("Not connected").tag(chosen)
+                    }
+                    Divider()
                     ForEach(inputs, id: \.uid) { Text($0.name).tag($0.uid) }
                 }
+            } header: {
+                Text("Input")
             } footer: {
                 Footnote("Automatic avoids a Bluetooth headset's mic, so the headset keeps its full sound. Audio stays on this Mac: Earshot keeps the last few seconds in memory to hear a command, and never saves or sends it.")
             }
@@ -354,6 +385,9 @@ private struct ListeningTab: View {
         .formStyle(.grouped)
         .onAppear {
             model.reloadConfig()
+            inputs = AudioDevices.all().filter(\.hasInput)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             inputs = AudioDevices.all().filter(\.hasInput)
         }
         .permissionRefresh(model)

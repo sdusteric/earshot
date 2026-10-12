@@ -50,3 +50,19 @@ import Testing
         #expect(count >= 16_000)
     }
 }
+
+@Suite struct OutputChoiceTests {
+    let speakers = AudioDevices.Device(uid: "SPK", name: "Audioengine 2+", hasInput: false, isBluetooth: true,
+                                       isBuiltIn: false, hasOutput: true)
+    let mic = AudioDevices.Device(uid: "MIC", name: "Yeti", hasInput: true, isBluetooth: false, isBuiltIn: false)
+
+    @Test func aConnectedSpeakerIsUsed() {
+        #expect(AudioDevices.chooseOutput(setting: "SPK", devices: [speakers, mic]) == "SPK")
+    }
+
+    @Test func aMissingOrInputOnlyDeviceFallsBackToTheSystemOutput() {
+        #expect(AudioDevices.chooseOutput(setting: "GONE", devices: [speakers, mic]) == nil)
+        #expect(AudioDevices.chooseOutput(setting: "MIC", devices: [speakers, mic]) == nil)
+        #expect(AudioDevices.chooseOutput(setting: nil, devices: [speakers]) == nil)
+    }
+}

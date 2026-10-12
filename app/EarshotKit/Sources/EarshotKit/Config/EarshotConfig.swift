@@ -117,6 +117,8 @@ public struct EarshotConfig: Sendable, Equatable {
     public var hotkey: Hotkey { nonEmpty("EARSHOT_HOTKEY").flatMap(Hotkey.init) ?? .rightOption }
     /// App only: the mic's Core Audio UID; nil picks one (see MicInput).
     public var inputDevice: String? { nonEmpty("EARSHOT_INPUT") }
+    /// The speaker for Earshot's voice and chimes, by device UID. Empty: the system output.
+    public var outputDevice: String? { nonEmpty("EARSHOT_OUTPUT") }
 
     private func nonEmpty(_ key: String) -> String? {
         guard let v = self[key], !v.isEmpty else { return nil }

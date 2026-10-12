@@ -39,13 +39,15 @@ public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
     public let level: AudioLevel
     private let log = Logger(subsystem: "com.earshot.app", category: "player")
 
-    public init(volume: Float = 1, level: AudioLevel = AudioLevel()) {
+    /// `output` names the speaker (a device UID) for each line; nil plays to the system output.
+    public init(volume: Float = 1, level: AudioLevel = AudioLevel(), output: @escaping @Sendable () -> String? = { nil }) {
         self.volume = volume
         self.level = level
         starter = { url, volume in
             guard let p = try? AVAudioPlayer(contentsOf: url) else { return nil }
             p.volume = volume
             p.isMeteringEnabled = true
+            if let uid = output() { p.currentDevice = uid }
             return p.play() ? p : nil
         }
     }

@@ -10,6 +10,13 @@ public enum AudioDevices {
         public let hasInput: Bool
         public let isBluetooth: Bool
         public let isBuiltIn: Bool
+        public var hasOutput = false
+    }
+
+    /// The speaker for Earshot's voice: the setting when that device is here, else nil (the system output).
+    public static func chooseOutput(setting: String?, devices: [Device]) -> String? {
+        guard let setting, devices.contains(where: { $0.uid == setting && $0.hasOutput }) else { return nil }
+        return setting
     }
 
     /// The mic to open. The setting, when that device is here; else, when the
@@ -24,6 +31,18 @@ public enum AudioDevices {
     }
 
     public static func all() -> [Device] { allIDs().compactMap(device) }
+
+    /// The system's current default input or output, for "System default (name)".
+    public static func systemDefault(input: Bool) -> Device? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: input ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var id = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id) == noErr
+        else { return nil }
+        return device(id)
+    }
 
     public static func defaultOutputIsBluetooth() -> Bool {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -56,7 +75,8 @@ public enum AudioDevices {
         return Device(uid: uid, name: string(id, kAudioObjectPropertyName) ?? uid,
                       hasInput: streamCount(id, kAudioObjectPropertyScopeInput) > 0,
                       isBluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE,
-                      isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn)
+                      isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn,
+                      hasOutput: streamCount(id, kAudioObjectPropertyScopeOutput) > 0)
     }
 
     private static func uidOf(_ id: AudioObjectID) -> String? { string(id, kAudioDevicePropertyDeviceUID) }

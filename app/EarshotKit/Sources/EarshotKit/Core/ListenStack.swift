@@ -13,7 +13,9 @@ public struct ListenStack: Sendable {
     let chimes: SystemChimes
 
     public static func live(core: EarshotCore, config: @escaping @Sendable () -> EarshotConfig) async -> ListenStack {
-        let gate = SileroGate(), spotter = CtcWakeSpotter(), transcriber = ParakeetTranscriber(), chimes = SystemChimes()
+        let gate = SileroGate(), spotter = CtcWakeSpotter(), transcriber = ParakeetTranscriber(), chimes = SystemChimes(output: {
+            AudioDevices.chooseOutput(setting: config().outputDevice, devices: AudioDevices.all())
+        })
         let listener = Listener(input: MicInput(deviceUID: { config().inputDevice }), gate: gate, spotter: spotter,
                                 transcriber: transcriber, chimes: chimes)
         let claudePath = await Task.detached { ClaudeCLI.locate() }.value
