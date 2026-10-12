@@ -105,7 +105,8 @@ public final class EarshotCore: Sendable {
         }
         let synth = LiveSynth(config: config)
         let player = AudioFilePlayer()
-        let speech = SpeechOut(synth: synth, player: player, mic: mic, ducker: ducker)
+        let fullScreen = FullScreenWatch { config().quietInFullScreen }
+        let speech = SpeechOut(synth: synth, player: player, mic: mic, quiet: fullScreen, ducker: ducker)
         let core = EarshotCore(speech: speech, sessions: SessionStore(), events: EventLog())
         return (core, ducker, mic, synth, player.level)
     }

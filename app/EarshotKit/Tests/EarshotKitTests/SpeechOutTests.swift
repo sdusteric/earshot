@@ -43,19 +43,25 @@ actor FakePlayer: LinePlayer {
     private var blocking: Bool
     private let hangs: Bool
     private var waiter: CheckedContinuation<Bool, Never>?
+    private var stoppedEarly: Set<UUID> = []
     /// hangs: play never returns and stop does nothing, like a playback
     /// start that blocks inside Core Audio.
     init(blocking: Bool = false, hangs: Bool = false) { self.blocking = blocking; self.hangs = hangs }
-    func play(_ url: URL, id: UUID) async -> Bool {
+    func play(_ url: URL, id: UUID, started: @escaping @Sendable () async -> Void) async -> Bool {
         played.append(url.lastPathComponent)
+        if !hangs { await started() }
         if hangs {
             try? await Task.sleep(for: .seconds(3600))
             return true
         }
+        // A stop that came while `started` ran, before the wait below.
+        if stoppedEarly.remove(id) != nil { return false }
         guard blocking else { return true }
         return await withCheckedContinuation { waiter = $0 }
     }
-    func stop(_ id: UUID) async { waiter?.resume(returning: false); waiter = nil }
+    func stop(_ id: UUID) async {
+        if let w = waiter { w.resume(returning: false); waiter = nil } else { stoppedEarly.insert(id) }
+    }
     func finish() { waiter?.resume(returning: true); waiter = nil }
     func unblock() { blocking = false; finish() }
     var isPlaying: Bool { waiter != nil }
@@ -301,16 +307,48 @@ actor SlowEndDucker: Ducking {
         #expect(await player.played == ["done"])
     }
 
-    @Test func aLineThatNeverFinishesIsAbandonedAndDuckingEnds() async {
+    /// A line whose playback never starts (an output that won't wake) is
+    /// abandoned, and other apps are never lowered for it.
+    @Test func aLineThatNeverStartsIsAbandonedAndNeverDucks() async {
         let player = FakePlayer(hangs: true)
         let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: ducker, answered: { _ in false },
                           settle: .milliseconds(30), lineTimeout: .milliseconds(100))
         await s.start()
         await s.enqueue(line("one", .done, "a")); await s.enqueue(line("two", .done, "b"))
-        await eventually { await ducker.ends == 1 }
+        await eventually { let st = await s.state; return await player.played == ["one", "two"] && st == .idle }
         #expect(await player.played == ["one", "two"])
-        #expect(await ducker.ends == 1)
+        #expect(await ducker.begins == 0)
+        #expect(await ducker.ends == 0)
         #expect(await s.state == .idle)
+    }
+
+    @Test func otherAppsAreLoweredOnlyOnceTheLinePlays() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        await s.enqueue(line("one"))
+        await eventually { await player.isPlaying }
+        #expect(await ducker.begins == 1)
+        await player.finish()
+        await eventually { await ducker.ends == 1 }
+        #expect(await ducker.ends == 1)
+    }
+
+    /// Full screen: lines Earshot starts on its own wait; answers to what you asked play.
+    @Test func aFullScreenAppHoldsOwnLinesButNotAnswers() async {
+        let quiet = FakeMic()
+        let player = FakePlayer()
+        let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, quiet: quiet, ducker: ducker,
+                          answered: { _ in false }, settle: .milliseconds(30))
+        await s.start()
+        quiet.set(true)
+        await s.enqueue(line("billing is done"))
+        await s.enqueue(line("Sent to billing.", .confirm, ""))
+        await s.enqueue(line("Two sessions are open.", .roll, ""))
+        await eventually { await player.played.count == 2 }
+        #expect(await player.played == ["Sent to billing.", "Two sessions are open."])
+        quiet.set(false)
+        await eventually { await player.played.count == 3 }
+        #expect(await player.played.last == "billing is done")
     }
 
     /// Review finding 2: the "free" event is handled before the line is held,
@@ -327,9 +365,10 @@ actor SlowEndDucker: Ducking {
         #expect(await player.played == ["held as the mic frees"])
     }
 
-    /// Review finding 3: a call that starts while the ducking is being set up.
+    /// Review finding 3: a call that starts while the ducking is being set up
+    /// (the line has just started playing) stops the line; it is said after the call.
     @Test func aCallThatStartsWhileDuckingStartsHoldsTheLine() async {
-        let player = FakePlayer()
+        let player = FakePlayer(blocking: true)
         let slowDucker = FakeDucker(beginDelay: .milliseconds(150))
         let s = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: slowDucker, answered: { _ in false },
                           settle: .milliseconds(30))
@@ -338,10 +377,12 @@ actor SlowEndDucker: Ducking {
         await eventually { await slowDucker.begins == 1 }
         mic.set(true)
         try? await Task.sleep(for: .milliseconds(300))
-        #expect(await player.played.isEmpty)
-        mic.set(false)
-        await eventually { await player.played.count == 1 }
         #expect(await player.played == ["first"])
+        #expect(await !player.isPlaying)
+        mic.set(false)
+        await eventually { await player.played.count == 2 }
+        await player.finish()
+        #expect(await player.played == ["first", "first"])
     }
 
     /// Review finding 5: a Core Audio call that never returns must not stop the queue.

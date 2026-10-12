@@ -80,6 +80,9 @@ public struct EarshotConfig: Sendable, Equatable {
     public var sayVoice: String? { nonEmpty("EARSHOT_SAY_VOICE") }
     /// App only: lower other apps' audio while Earshot talks.
     public var duckEnabled: Bool { self["EARSHOT_DUCK"] != "off" }
+    /// Full screen apps: "quiet" (the default) keeps Earshot's own lines until
+    /// you leave full screen; "speak" says them anyway.
+    public var quietInFullScreen: Bool { self["EARSHOT_FULLSCREEN"] != "speak" }
     /// App only: how loud other apps stay, 10 to 90 percent.
     public var duckLevel: Float {
         guard let s = self["EARSHOT_DUCK_LEVEL"], let p = Int(s) else { return 0.3 }

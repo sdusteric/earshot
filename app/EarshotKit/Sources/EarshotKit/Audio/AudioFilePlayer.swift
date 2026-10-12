@@ -56,7 +56,7 @@ public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
         self.starter = starter
     }
 
-    public func play(_ url: URL, id: UUID) async -> Bool {
+    public func play(_ url: URL, id: UUID, started onStart: @escaping @Sendable () async -> Void) async -> Bool {
         if isStopped(id) { return false }
         // Opening and starting can block inside Core Audio (seen while a
         // Bluetooth output switched mode), so both run on a dispatch thread,
@@ -83,6 +83,7 @@ public final class AudioFilePlayer: LinePlayer, @unchecked Sendable {
             return false
         }
         defer { level.set(0) }
+        await onStart()
         while true {
             try? await Task.sleep(for: .milliseconds(50))
             let (isPlaying, wasStopped, loudness) = lock.withLock { (p.isPlaying, stopped.contains(id), p.outputLevel) }

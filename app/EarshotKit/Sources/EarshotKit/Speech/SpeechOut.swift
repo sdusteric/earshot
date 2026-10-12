@@ -7,10 +7,16 @@ public protocol Synthesizer: Sendable {
 }
 
 public protocol LinePlayer: Sendable {
-    /// Plays the file for one line. True when it played to the end, false when stopped.
-    func play(_ url: URL, id: UUID) async -> Bool
+    /// Plays the file for one line. True when it played to the end, false when
+    /// stopped. Calls `started` once the audio is really playing, never for a
+    /// line that couldn't start.
+    func play(_ url: URL, id: UUID, started: @escaping @Sendable () async -> Void) async -> Bool
     /// Stops that line's playback, even when its play has not started yet.
     func stop(_ id: UUID) async
+}
+
+extension LinePlayer {
+    public func play(_ url: URL, id: UUID) async -> Bool { await play(url, id: id, started: {}) }
 }
 
 public protocol MicSource: Sendable {
@@ -18,6 +24,13 @@ public protocol MicSource: Sendable {
     var isBusy: Bool { get async }
     /// Every change of isBusy.
     func changes() -> AsyncStream<Bool>
+}
+
+/// Never busy: the default when nothing asks Earshot to keep quiet.
+public struct NeverBusy: MicSource {
+    public init() {}
+    public var isBusy: Bool { get async { false } }
+    public func changes() -> AsyncStream<Bool> { AsyncStream { _ in } }
 }
 
 public protocol Ducking: Sendable {
@@ -53,6 +66,9 @@ public actor SpeechOut {
     private let synth: any Synthesizer
     private let player: any LinePlayer
     private let mic: any MicSource
+    /// While busy (a full screen app is in front), lines Earshot starts on its
+    /// own wait, like during a call. Answers to what you asked still play.
+    private let quiet: any MicSource
     private let ducker: any Ducking
     private let answered: @Sendable (SpokenLine) -> Bool
     private let settle: Duration
@@ -85,6 +101,9 @@ public actor SpeechOut {
     private var holdGeneration = 0
     private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
     private var lastMicBusy = false
+    private var lastQuiet = false
+    /// This run lowered other apps, so its end must bring them back.
+    private var ducked = false
     private var catchUpGeneration = 0
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var stateConts: [UUID: AsyncStream<State>.Continuation] = [:]
@@ -92,12 +111,13 @@ public actor SpeechOut {
         didSet { if state != oldValue { stateConts.values.forEach { $0.yield(state) } } }
     }
 
-    public init(synth: any Synthesizer, player: any LinePlayer, mic: any MicSource, ducker: any Ducking,
+    public init(synth: any Synthesizer, player: any LinePlayer, mic: any MicSource, quiet: any MicSource = NeverBusy(),
+                ducker: any Ducking,
                 answered: @escaping @Sendable (SpokenLine) -> Bool = SpokenLine.transcriptAnswered,
                 settle: Duration = .seconds(4), maxWait: TimeInterval = 60, lineTimeout: Duration = .seconds(30),
                 callTimeout: Duration = .seconds(3), synthTimeout: Duration = .seconds(25),
                 clock: @escaping @Sendable () -> Date = Date.init, holdTimeout: Duration = .seconds(3)) {
-        self.synth = synth; self.player = player; self.mic = mic; self.ducker = ducker
+        self.synth = synth; self.player = player; self.mic = mic; self.quiet = quiet; self.ducker = ducker
         self.answered = answered; self.settle = settle; self.maxWait = maxWait
         self.lineTimeout = lineTimeout; self.callTimeout = callTimeout; self.synthTimeout = synthTimeout
         self.clock = clock; self.holdTimeout = holdTimeout
@@ -110,6 +130,10 @@ public actor SpeechOut {
         let changes = mic.changes()
         Task { [weak self] in
             for await busy in changes { await self?.micChanged(busy) }
+        }
+        let quietChanges = quiet.changes()
+        Task { [weak self] in
+            for await q in quietChanges { await self?.quietChanged(q) }
         }
     }
 
@@ -124,7 +148,7 @@ public actor SpeechOut {
     private func removeStateCont(_ id: UUID) { stateConts[id] = nil }
 
     public func enqueue(_ line: SpokenLine) async {
-        if line.kind != .roll, await micBusy() {
+        if await mustWait(line) {
             hold(line)   // a confirm line is not held: it is stale after a call
             return
         }
@@ -245,7 +269,6 @@ public actor SpeechOut {
     }
 
     private func run() async {
-        var ducked = false
         while true {
         while !queue.isEmpty, listening == 0, !holdActive {
             let line = queue.removeFirst()
@@ -254,12 +277,12 @@ public actor SpeechOut {
                 holdIDs.remove(line.id)
                 continue
             }
-            if line.kind != .roll, await micBusy() { hold(line); continue }
+            if await mustWait(line) { hold(line); continue }
             let synth = self.synth
             let made = await bounded(synthTimeout, URL?.none) { await synth.audio(for: line) }
             let url = made ?? Self.errorTone
             // A call may have started while the audio was made.
-            if line.kind != .roll, await micBusy() { hold(line); continue }
+            if await mustWait(line) { hold(line); continue }
             // You began talking while the audio was made: it waits for endListening.
             if listening > 0 {
                 // Same order rule as enqueue: answers stay ahead of other lines.
@@ -272,10 +295,6 @@ public actor SpeechOut {
             interrupted = false
             bargedIn = false
             state = .speaking
-            // Every line renews the ducking, so its safety cap never cuts a long run short.
-            let ducker = self.ducker
-            await bounded(callTimeout, ()) { await ducker.begin() }
-            ducked = true
             emit(.started(line))
             let finished: Bool
             var playedToEnd = false
@@ -328,7 +347,38 @@ public actor SpeechOut {
     /// player stuck in a blocking call is left behind; it cannot hold the queue.
     private func playWithTimeout(_ url: URL, id: UUID) async -> Bool? {
         let player = self.player
-        return await bounded(lineTimeout, Bool?.none) { await player.play(url, id: id) }
+        return await bounded(lineTimeout, Bool?.none) {
+            await player.play(url, id: id) { await self.playbackStarted(id) }
+        }
+    }
+
+    /// Lowers other apps once the line really plays, so a line that can't
+    /// start (an output that won't wake) leaves them alone. Every line renews
+    /// the ducking, so its safety cap never cuts a long run short.
+    private func playbackStarted(_ id: UUID) async {
+        guard currentLine == id else { return }
+        ducked = true
+        let ducker = self.ducker
+        await bounded(callTimeout, ()) { await ducker.begin() }
+    }
+
+    /// A call holds every line but the roll call; a full screen app holds the
+    /// lines Earshot starts on its own, not the answers to what you asked.
+    private func mustWait(_ line: SpokenLine) async -> Bool {
+        if line.kind != .roll, await micBusy() { return true }
+        if line.kind != .roll, line.kind != .confirm, await isQuiet() { return true }
+        return false
+    }
+
+    private func isQuiet() async -> Bool {
+        let quiet = self.quiet
+        return await bounded(callTimeout, lastQuiet) { await quiet.isBusy }
+    }
+
+    private func quietChanged(_ q: Bool) async {
+        lastQuiet = q
+        catchUpGeneration += 1
+        if !q { scheduleCatchUp() }
     }
 
     /// The mic check, with a time limit: a Core Audio read that hangs falls
@@ -364,7 +414,7 @@ public actor SpeechOut {
     }
 
     private func catchUp(ifStill generation: Int) async {
-        guard generation == catchUpGeneration, !held.isEmpty, !(await micBusy()) else { return }
+        guard generation == catchUpGeneration, !held.isEmpty, !(await micBusy()), !(await isQuiet()) else { return }
         guard generation == catchUpGeneration else { return }   // a change arrived while asking the mic
         let now = clock()
         // Catch-up lines were already waiting; they count as new for the 60 s rule.
