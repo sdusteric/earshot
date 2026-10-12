@@ -1,0 +1,338 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-12T00:00:00Z",
+  "title": "Design System: Earshot",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Orb Ground",
+        "canonical": "#0b0d12",
+        "tonalRamp": [
+          "#030304",
+          "#040507",
+          "#06070a",
+          "#08090d",
+          "#090b0f",
+          "#0b0d12",
+          "#0d0f15",
+          "#0e1117"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised Glass",
+        "canonical": "#11141b",
+        "tonalRamp": [
+          "#040507",
+          "#07080b",
+          "#090b0f",
+          "#0c0e13",
+          "#0e1117",
+          "#11141b",
+          "#14171f",
+          "#161a23"
+        ]
+      },
+      "track": {
+        "role": "neutral",
+        "displayName": "Ring Track",
+        "canonical": "#1c202b",
+        "tonalRamp": [
+          "#07080b",
+          "#0b0d11",
+          "#0f1218",
+          "#14161e",
+          "#181b25",
+          "#1c202b",
+          "#202531",
+          "#242a38"
+        ]
+      },
+      "tick": {
+        "role": "neutral",
+        "displayName": "Hour Tick",
+        "canonical": "#3b4152",
+        "tonalRamp": [
+          "#0f1014",
+          "#181a21",
+          "#20242d",
+          "#292e39",
+          "#323746",
+          "#3b4152",
+          "#444b5e",
+          "#4d546b"
+        ]
+      },
+      "you-blue": {
+        "role": "primary",
+        "displayName": "You Blue",
+        "canonical": "#63c4ff",
+        "tonalRamp": [
+          "#193140",
+          "#284e66",
+          "#366c8c",
+          "#4589b2",
+          "#54a7d9",
+          "#63c4ff",
+          "#72e1ff",
+          "#81ffff"
+        ]
+      },
+      "voice-amber": {
+        "role": "primary",
+        "displayName": "Voice Amber",
+        "canonical": "#ffbd6b",
+        "tonalRamp": [
+          "#402f1b",
+          "#664c2b",
+          "#8c683b",
+          "#b2844b",
+          "#d9a15b",
+          "#ffbd6b",
+          "#ffd97b",
+          "#fff68b"
+        ]
+      },
+      "working-violet": {
+        "role": "secondary",
+        "displayName": "Working Violet",
+        "canonical": "#ab8fff",
+        "tonalRamp": [
+          "#2b2440",
+          "#443966",
+          "#5e4f8c",
+          "#7864b2",
+          "#917ad9",
+          "#ab8fff",
+          "#c5a4ff",
+          "#debaff"
+        ]
+      },
+      "needs-orange": {
+        "role": "tertiary",
+        "displayName": "Needs Orange",
+        "canonical": "#ff9f0a",
+        "tonalRamp": [
+          "#402802",
+          "#664004",
+          "#8c5706",
+          "#b26f07",
+          "#d98708",
+          "#ff9f0a",
+          "#ffb70c",
+          "#ffcf0d"
+        ]
+      },
+      "failed-red": {
+        "role": "tertiary",
+        "displayName": "Failed Red",
+        "canonical": "#ff453a",
+        "tonalRamp": [
+          "#40110e",
+          "#661c17",
+          "#8c2620",
+          "#b23029",
+          "#d93b31",
+          "#ff453a",
+          "#ff4f43",
+          "#ff5a4b"
+        ]
+      },
+      "done-green": {
+        "role": "tertiary",
+        "displayName": "Done Green",
+        "canonical": "#32d74b",
+        "tonalRamp": [
+          "#0c3613",
+          "#14561e",
+          "#1c7629",
+          "#239634",
+          "#2ab740",
+          "#32d74b",
+          "#39f756",
+          "#41ff62"
+        ]
+      },
+      "session-working-blue": {
+        "role": "tertiary",
+        "displayName": "Session Working Blue",
+        "canonical": "#0a84ff",
+        "tonalRamp": [
+          "#022140",
+          "#043566",
+          "#06498c",
+          "#075cb2",
+          "#0870d9",
+          "#0a84ff",
+          "#0c98ff",
+          "#0dacff"
+        ]
+      },
+      "orb-white": {
+        "role": "neutral",
+        "displayName": "Orb White",
+        "canonical": "#f2f5ff",
+        "tonalRamp": [
+          "#3c3d40",
+          "#616266",
+          "#85878c",
+          "#a9acb2",
+          "#ced0d9",
+          "#f2f5ff",
+          "#ffffff",
+          "#ffffff"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "recap": {
+        "displayName": "Recap",
+        "purpose": "The one line that says who needs you, 24pt semibold."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "List and window titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Session names."
+      },
+      "callout": {
+        "displayName": "Callout",
+        "purpose": "Line text and replies."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Ring names, clock labels, callout metadata."
+      }
+    },
+    "shadows": [
+      {
+        "name": "callout",
+        "value": "0 4px 12px rgba(0,0,0,0.4)",
+        "purpose": "The only shadow in the Activity window, under the dial hover callout."
+      }
+    ],
+    "motion": [
+      {
+        "name": "orb-color-blend",
+        "value": "0.25s linear blend between state colors",
+        "purpose": "Orb changes hue between listening, working, speaking."
+      },
+      {
+        "name": "idle-turn",
+        "value": "slow continuous rotation",
+        "purpose": "Activity-window orb turns while idle."
+      },
+      {
+        "name": "type-in",
+        "value": "letter by letter for lines under 20s old; off with Reduce Motion",
+        "purpose": "Newest line in the now strip."
+      }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Dial Callout",
+      "kind": "card",
+      "refersTo": "dial-callout",
+      "description": "Hover readout for one dot on the dial.",
+      "html": "<div class=\"ds-callout\"><div class=\"ds-callout-line\">Deploy is waiting on your answer</div><div class=\"ds-callout-reply\">Which environment?</div><div class=\"ds-callout-meta\">Billing service  9:41 AM</div></div>",
+      "css": ".ds-callout{width:230px;box-sizing:border-box;padding:8px 10px;background:#11141b;border:1px solid rgba(59,65,82,.6);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.4);font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff}.ds-callout-line{font-size:13px}.ds-callout-reply{font-size:11px;color:rgba(235,235,245,.6);margin-top:3px}.ds-callout-meta{font-size:10px;color:rgba(235,235,245,.3);margin-top:3px}"
+    },
+    {
+      "name": "Session Ring Label",
+      "kind": "chip",
+      "refersTo": "",
+      "description": "Ring name in the session's state color, set just clockwise of now.",
+      "html": "<span class=\"ds-ring-label\">Blog</span>",
+      "css": ".ds-ring-label{font-family:-apple-system,system-ui,sans-serif;font-size:10px;font-weight:500;color:#ff9f0a}"
+    },
+    {
+      "name": "Line Dot",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "A dot per line on a ring, with a ground halo. Need lines are larger.",
+      "html": "<span class=\"ds-dot-halo\"><span class=\"ds-dot\"></span></span>",
+      "css": ".ds-dot-halo{display:inline-block;padding:2px;background:#0b0d12;border-radius:50%}.ds-dot{display:block;width:9px;height:9px;border-radius:50%;background:#63c4ff}"
+    },
+    {
+      "name": "Now Tick",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "The amber tick and label that mark now at the top of the dial.",
+      "html": "<div class=\"ds-now\"><span class=\"ds-now-label\">now</span><span class=\"ds-now-tick\"></span></div>",
+      "css": ".ds-now{display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-family:-apple-system,system-ui,sans-serif}.ds-now-label{font-size:10px;font-weight:600;color:#ffbd6b}.ds-now-tick{width:2px;height:16px;background:#ffbd6b}"
+    },
+    {
+      "name": "Orb Disc",
+      "kind": "custom",
+      "refersTo": "orb-disc",
+      "description": "The orb on its black disc with a Tick outline.",
+      "html": "<div class=\"ds-orb\"></div>",
+      "css": ".ds-orb{width:96px;height:96px;border-radius:50%;background:radial-gradient(circle at 50% 50%,rgba(99,196,255,.5),rgba(99,196,255,0) 70%),#000;border:1px solid #3b4152}"
+    },
+    {
+      "name": "History Row",
+      "kind": "custom",
+      "refersTo": "history-row",
+      "description": "Session row with state dot and hover fill.",
+      "html": "<div class=\"ds-row\"><span class=\"ds-row-dot\"></span><div><div class=\"ds-row-name\">Blog</div><div class=\"ds-row-state\">waiting on your answer</div></div></div>",
+      "css": ".ds-row{display:flex;gap:10px;align-items:flex-start;padding:8px;border-radius:6px;font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff}.ds-row:hover{background:rgba(255,255,255,.06)}.ds-row-dot{width:8px;height:8px;border-radius:50%;background:#ff9f0a;margin-top:6px}.ds-row-name{font-size:13px;font-weight:500}.ds-row-state{font-size:12px;color:rgba(235,235,245,.6)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Orb's Glass",
+    "overview": "Earshot is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (blue for you, violet for working, amber for Earshot's voice). The Activity window always renders dark.\n\nThe Activity window is built around one idea: History keeps one day, so the day wraps around the orb as a 24-hour dial. The dial fills the window height on the left; the right side is plain text on the same ground, using system type and system controls.",
+    "keyCharacteristics": [
+      "Cool near-black ground with a faint blue tint.",
+      "Color is state, not decoration.",
+      "Dots, thin tracks, and hairline ticks.",
+      "System type with one weight step for headlines.",
+      "Motion is slow and tied to state."
+    ],
+    "rules": [
+      {
+        "name": "The One Meaning Rule",
+        "body": "A hue has one job. Blue is you, amber is Earshot, violet is working, and orange, red, green are session states. Do not use them as accents.",
+        "section": "colors"
+      },
+      {
+        "name": "The Amber Is Earshot Rule",
+        "body": "Amber marks Earshot's own voice and the stretch since you last looked. It does not mark warnings; orange does.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Weight Step Rule",
+        "body": "Headlines are semibold, ring names and \"now\" are medium or semibold at caption size, everything else is regular.",
+        "section": "typography"
+      },
+      {
+        "name": "The System Type Rule",
+        "body": "Use the system font and text styles so Dynamic Type settings and macOS defaults apply. The one fixed size is the 24pt recap.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tonal Depth Rule",
+        "body": "Raise a surface by stepping to the next neutral (Ground to Raised), not by adding a shadow. The callout is the one exception.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do start from Ground (#0b0d12) and its neutral steps for any new dark surface in the Activity window.",
+      "Do take state colors from DialPalette, OrbMode.rgb, and SessionStyle.color, and keep their meanings.",
+      "Do use system type styles and system controls; add one semibold step for headlines.",
+      "Do keep motion tied to state (orb color change, idle turn, typing in) and honor Reduce Motion.",
+      "Do give every dial element a VoiceOver summary or label, since the dial draws its dots in a canvas."
+    ],
+    "donts": [
+      "Don't use amber, blue, or violet as general accents or button fills.",
+      "Don't add a sidebar of filters or a card around the dial.",
+      "Don't use a second type family or weights beyond regular, medium, and semibold.",
+      "Don't add drop shadows to surfaces other than the hover callout.",
+      "Don't let a ring arc claim work across a gap of more than 30 minutes between lines."
+    ]
+  }
+}
