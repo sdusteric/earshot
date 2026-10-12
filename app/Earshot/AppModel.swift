@@ -325,6 +325,18 @@ final class AppModel {
         }
     }
 
+    /// Clicking the orb: one command, as after "Hey Earshot". Refused like the
+    /// hotkey when Earshot can't listen now; the closed chime says so.
+    func tapToTalk() {
+        guard let stack else { return }
+        let i = listenInputs(configBox.value)
+        guard ListenPolicy.commandBlock(i) == nil else {
+            Task { await stack.play(.closed) }
+            return
+        }
+        Task { await stack.listener.tapToTalk() }
+    }
+
     func requestMic() async {
         _ = await AVCaptureDevice.requestAccess(for: .audio)
         await listeningChanged()

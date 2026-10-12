@@ -110,3 +110,4 @@ bash scripts/send-integration.sh
 | Activity window | Panel, Activity; pick a session in the sidebar; search for a word | Only that session's lines; search narrows them; Clear History asks first |
 | History settings | Settings, General, History: Until Earshot quits, then quit and reopen | The history is empty after the restart and no history file is left |
 | Mute choices | Panel, the speaker button: Mute Until I Unmute | The icon shows the slash until you unmute; the plugin's fallback voice stays quiet too |
+| Activity orb | Open Activity and leave Earshot idle; then click the orb and say "what's everyone doing" | The orb turns slowly in white; the click chimes, the orb changes color while it listens, and the roll call plays |

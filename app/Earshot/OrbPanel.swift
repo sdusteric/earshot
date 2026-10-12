@@ -211,6 +211,8 @@ struct OrbView: View {
     var size: CGFloat = OrbPanel.size
     /// The color while nothing is happening; nil keeps the last state's color.
     var restingColor: EarshotConfig.OrbColor?
+    /// Turns slowly while idle instead of stopping (the Activity window's orb).
+    var spinsWhenIdle = false
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sphere = ParticleSphere()
@@ -218,7 +220,8 @@ struct OrbView: View {
     var body: some View {
         let mode = OrbMode(model)
         let color = mode == nil ? (restingColor ?? model.config.orbColor) : model.config.orbColor
-        TimelineView(.animation(paused: mode == nil)) { timeline in
+        // Idle, a slow turn needs far fewer frames.
+        TimelineView(.animation(minimumInterval: mode == nil ? 1.0 / 30 : nil, paused: mode == nil && !spinsWhenIdle)) { timeline in
             Canvas { gc, size in
                 let target: Float = switch mode {
                 case .listening: model.micLevel?.value ?? 0
@@ -226,7 +229,7 @@ struct OrbView: View {
                 default: 0
                 }
                 sphere.step(to: timeline.date, mode: mode, level: target, reduceMotion: reduceMotion,
-                            color: color)
+                            color: color, idleSpin: spinsWhenIdle)
                 sphere.draw(in: &gc, size: size)
             }
         }
@@ -265,7 +268,10 @@ struct OrbView: View {
     }
 
     /// `mode` nil means the panel is fading out: keep drawing the last mode, settling.
-    func step(to now: Date, mode: OrbMode?, level target: Float, reduceMotion: Bool, color choice: EarshotConfig.OrbColor) {
+    func step(to now: Date, mode: OrbMode?, level target: Float, reduceMotion: Bool, color choice: EarshotConfig.OrbColor,
+              idleSpin: Bool = false) {
+        // The first frame takes the color at once; later ones fade toward it.
+        if last == nil { color = (mode ?? self.mode).rgb(choice) }
         dt = last.map { min(0.05, max(0, now.timeIntervalSince($0))) } ?? 0
         last = now
         t += dt
@@ -277,7 +283,10 @@ struct OrbView: View {
         let tau = goal > level ? 0.04 : 0.14
         level += (goal - level) * min(1, dt / tau)
         color += (self.mode.rgb(choice) - color) * min(1, dt / 0.25)
-        if !reduceMotion { rotation += dt * (self.mode == .working ? 1.5 : 0.3 + level * 1.1) }
+        if !reduceMotion {
+            let speed = mode == nil && idleSpin ? 0.15 : (self.mode == .working ? 1.5 : 0.3 + level * 1.1)
+            rotation += dt * speed
+        }
     }
 
     func draw(in gc: inout GraphicsContext, size: CGSize) {

@@ -29,15 +29,23 @@ struct ActivityView: View {
             }
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 8) {
-                    OrbView(size: 76, restingColor: .white)
+                    OrbView(size: 76, restingColor: .white, spinsWhenIdle: true)
                         .background(Circle().fill(.black.opacity(0.88)))
                         .clipShape(.circle)
+                        .contentShape(.circle)
+                        .onTapGesture { model.tapToTalk() }
+                        .help("Click and say a command")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint("Listens for one command")
                     Text(model.statusLine)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                    if model.listenPhase == .off || model.listenPhase == .waiting {
+                        Text("Click the orb to talk").font(.caption).foregroundStyle(.tertiary)
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 12)

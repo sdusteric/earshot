@@ -318,6 +318,31 @@ public actor Listener {
         await chimes.play(.listening)
     }
 
+    /// You clicked the orb: listens for one command, as after "Hey Earshot" on
+    /// its own, ending when you stop talking or after the wake word's silence.
+    public func tapToTalk() async {
+        guard !refused, capture == nil, !hotkeyHeld else { return }
+        pendingOpens += 1
+        await openMic()
+        await gate.reset()
+        pendingOpens -= 1
+        guard micOpen, !refused, capture == nil, !hotkeyHeld else {
+            await closeMicIfIdle()
+            settlePhase()
+            return
+        }
+        var c = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
+        // The listening chime is not part of the command.
+        c.acceptFrom = .now + timing.followUpSettle
+        capture = c
+        phase = .capturing(.wake)
+        startPrewarm()
+        await observer?.captureBegan(.wake)
+        scheduleTimeout(c.id, after: timing.wakeSilence)
+        if capture?.id == c.id { capture?.acceptFrom = .now + timing.followUpSettle }
+        await chimes.play(.listening)
+    }
+
     /// Another app opened the mic: drop what is being heard and close the mic.
     public func setMicBusy(_ busy: Bool) async {
         micBusy = busy
