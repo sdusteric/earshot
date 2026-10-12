@@ -3,13 +3,18 @@ import EarshotKit
 import SwiftUI
 
 /// A small orb at the top of the screen while Earshot hears a command, works
-/// on it, or talks. It never takes focus and ignores clicks.
+/// on it, or talks. It never takes focus. Drag it anywhere; it stays there
+/// until you double-click it, which puts it back at the top center.
 @MainActor final class OrbPanel {
     static let size: CGFloat = 112
+    private static let positionKey = "orbCenter"
 
     private let panel: NSPanel
+    private let glass = NSGlassEffectView()
     private let model: AppModel
     private var shown = false
+    /// True while Earshot moves the panel itself, so only your drags are saved.
+    private var placing = false
 
     init(model: AppModel) {
         self.model = model
@@ -20,10 +25,18 @@ import SwiftUI
         panel.isFloatingPanel = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.ignoresMouseEvents = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.contentView = NSHostingView(rootView: OrbView().environment(model))
+        panel.hasShadow = false   // the glass draws its own
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        glass.style = .regular
+        glass.cornerRadius = Self.size / 2
+        if #available(macOS 27, *) { glass.effectIsInteractive = true }
+        let hosting = OrbHostingView(rootView: AnyView(OrbView().environment(model)))
+        hosting.onReset = { [weak self] in self?.resetPosition() }
+        glass.contentView = hosting
+        panel.contentView = glass
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveMove() }
+        }
         observe()
     }
 
@@ -59,13 +72,14 @@ import SwiftUI
     }
 
     private func update() {
-        if OrbMode(model) != nil {
-            guard let screen = NSScreen.main else { return }
-            let f = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: f.midX - panel.frame.width / 2, y: f.maxY - panel.frame.height - 8))
+        if let mode = OrbMode(model) {
+            glass.tintColor = mode.glassTint
             guard !shown else { return }
             shown = true
-            if !panel.isVisible { panel.alphaValue = 0 }
+            if !panel.isVisible {
+                place()
+                panel.alphaValue = 0
+            }
             panel.orderFrontRegardless()
             NSAnimationContext.runAnimationGroup { $0.duration = 0.18; panel.animator().alphaValue = 1 }
         } else if shown {
@@ -79,6 +93,48 @@ import SwiftUI
                 }
             })
         }
+    }
+
+    /// Where you last dragged it, if that spot is still on a screen; otherwise
+    /// the top center of the screen you are using.
+    private func place() {
+        let half = Self.size / 2
+        var center: NSPoint?
+        if let saved = UserDefaults.standard.array(forKey: Self.positionKey) as? [Double], saved.count == 2 {
+            let p = NSPoint(x: saved[0], y: saved[1])
+            if NSScreen.screens.contains(where: { $0.frame.insetBy(dx: half, dy: half).contains(p) }) { center = p }
+        }
+        if center == nil, let f = NSScreen.main?.visibleFrame {
+            center = NSPoint(x: f.midX, y: f.maxY - half - 8)
+        }
+        guard let c = center else { return }
+        placing = true
+        panel.setFrameOrigin(NSPoint(x: c.x - half, y: c.y - half))
+        placing = false
+    }
+
+    private func saveMove() {
+        guard !placing else { return }
+        let f = panel.frame
+        UserDefaults.standard.set([Double(f.midX), Double(f.midY)], forKey: Self.positionKey)
+    }
+
+    private func resetPosition() {
+        UserDefaults.standard.removeObject(forKey: Self.positionKey)
+        NSAnimationContext.runAnimationGroup { _ in place() }
+    }
+}
+
+/// Drags the panel from anywhere on the orb. The panel never becomes key, so
+/// the app you are using keeps focus. A double-click asks for the reset.
+private final class OrbHostingView: NSHostingView<AnyView> {
+    var onReset: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { onReset?(); return }
+        window?.performDrag(with: event)
     }
 }
 
@@ -105,18 +161,29 @@ enum OrbMode: Equatable {
     }
 
     /// Blue while listening, violet while working, amber while speaking.
-    var rgb: SIMD3<Double> {
-        switch self {
-        case .listening: [0.39, 0.77, 1.0]
-        case .working: [0.67, 0.56, 1.0]
-        case .speaking: [1.0, 0.74, 0.42]
+    /// On light glass the colors are deeper, so the points stay visible.
+    func rgb(dark: Bool) -> SIMD3<Double> {
+        switch (self, dark) {
+        case (.listening, true): [0.39, 0.77, 1.0]
+        case (.working, true): [0.67, 0.56, 1.0]
+        case (.speaking, true): [1.0, 0.74, 0.42]
+        case (.listening, false): [0.0, 0.42, 0.9]
+        case (.working, false): [0.4, 0.27, 0.88]
+        case (.speaking, false): [0.86, 0.43, 0.0]
         }
+    }
+
+    /// A light wash of the same color over the glass.
+    var glassTint: NSColor {
+        let c = rgb(dark: true)
+        return NSColor(red: c.x, green: c.y, blue: c.z, alpha: 0.14)
     }
 }
 
 private struct OrbView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @State private var sphere = ParticleSphere()
 
     var body: some View {
@@ -128,12 +195,12 @@ private struct OrbView: View {
                 case .speaking: model.speakLevel?.value ?? 0
                 default: 0
                 }
-                sphere.step(to: timeline.date, mode: mode, level: target, reduceMotion: reduceMotion)
+                sphere.step(to: timeline.date, mode: mode, level: target, reduceMotion: reduceMotion,
+                            dark: colorScheme == .dark)
                 sphere.draw(in: &gc, size: size)
             }
         }
         .frame(width: OrbPanel.size, height: OrbPanel.size)
-        .glassEffect(.regular.tint(.black.opacity(0.55)), in: .circle)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(mode?.label ?? "Earshot")
     }
@@ -152,7 +219,8 @@ private struct OrbView: View {
     private var t: Double = 0
     private var rotation: Double = 0
     private var level: Double = 0
-    private var color: SIMD3<Double> = OrbMode.listening.rgb
+    private var color: SIMD3<Double> = OrbMode.listening.rgb(dark: true)
+    private var dark = true
     private var mode: OrbMode = .listening
     private var reduceMotion = false
     private var dt: Double = 0
@@ -167,17 +235,18 @@ private struct OrbView: View {
     }
 
     /// `mode` nil means the panel is fading out: keep drawing the last mode, settling.
-    func step(to now: Date, mode: OrbMode?, level target: Float, reduceMotion: Bool) {
+    func step(to now: Date, mode: OrbMode?, level target: Float, reduceMotion: Bool, dark: Bool) {
         dt = last.map { min(0.05, max(0, now.timeIntervalSince($0))) } ?? 0
         last = now
         t += dt
         if let mode { self.mode = mode }
         self.reduceMotion = reduceMotion
+        self.dark = dark
         // The levels arrive 12 to 20 times a second: rise fast, fall slower.
         let goal = mode == nil ? 0 : Double(target)
         let tau = goal > level ? 0.04 : 0.14
         level += (goal - level) * min(1, dt / tau)
-        color += (self.mode.rgb - color) * min(1, dt / 0.25)
+        color += (self.mode.rgb(dark: dark) - color) * min(1, dt / 0.25)
         if !reduceMotion { rotation += dt * (self.mode == .working ? 1.5 : 0.3 + level * 1.1) }
     }
 
@@ -189,7 +258,8 @@ private struct OrbView: View {
         let tt = reduceMotion ? 0 : t
         let tilt = 0.42, ct = cos(tilt), st = sin(tilt), cr = cos(rotation), sr = sin(rotation)
 
-        gc.blendMode = .plusLighter
+        // Light adds up on dark glass; on light glass points draw over each other.
+        gc.blendMode = dark ? .plusLighter : .normal
         let glow = radius * 1.25
         gc.fill(Path(ellipseIn: CGRect(x: c.x - glow, y: c.y - glow, width: glow * 2, height: glow * 2)),
                 with: .radialGradient(Gradient(colors: [tint.opacity((0.08 + 0.42 * L) * breathe), tint.opacity(0)]),
