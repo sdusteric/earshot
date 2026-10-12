@@ -27,7 +27,24 @@ struct ActivityView: View {
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 190)
+            .safeAreaInset(edge: .top) {
+                VStack(spacing: 8) {
+                    OrbView(size: 76, restingColor: .white)
+                        .background(Circle().fill(.black.opacity(0.88)))
+                        .clipShape(.circle)
+                    Text(model.statusLine)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+            }
+            .navigationSplitViewColumnWidth(min: 190, ideal: 210)
         } detail: {
             detail
                 .navigationTitle(title)

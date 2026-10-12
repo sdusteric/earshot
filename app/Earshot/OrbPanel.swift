@@ -205,13 +205,19 @@ enum OrbMode: Equatable {
     }
 }
 
-private struct OrbView: View {
+/// The particle sphere. The floating panel uses it at full size on glass; the
+/// Activity window shows a smaller one that rests in white while Earshot is idle.
+struct OrbView: View {
+    var size: CGFloat = OrbPanel.size
+    /// The color while nothing is happening; nil keeps the last state's color.
+    var restingColor: EarshotConfig.OrbColor?
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sphere = ParticleSphere()
 
     var body: some View {
         let mode = OrbMode(model)
+        let color = mode == nil ? (restingColor ?? model.config.orbColor) : model.config.orbColor
         TimelineView(.animation(paused: mode == nil)) { timeline in
             Canvas { gc, size in
                 let target: Float = switch mode {
@@ -220,11 +226,11 @@ private struct OrbView: View {
                 default: 0
                 }
                 sphere.step(to: timeline.date, mode: mode, level: target, reduceMotion: reduceMotion,
-                            color: model.config.orbColor)
+                            color: color)
                 sphere.draw(in: &gc, size: size)
             }
         }
-        .frame(width: OrbPanel.size, height: OrbPanel.size)
+        .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(mode?.label ?? "Earshot")
     }

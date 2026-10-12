@@ -42,7 +42,7 @@ struct StatusPanel: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Earshot").font(.headline)
-                Text(statusLine)
+                Text(model.statusLine)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -62,39 +62,6 @@ struct StatusPanel: View {
         case .active: .accentColor
         case .holding: .orange
         case .idle, .ready: .primary
-        }
-    }
-
-    private var statusLine: String {
-        if let error = model.startError { return error }
-        if let until = model.mutedUntil {
-            return until == .distantFuture ? "Muted until you unmute"
-                : "Muted until \(until.formatted(date: .omitted, time: .shortened))"
-        }
-        switch model.listenPhase {
-        case .capturing: return "Listening"
-        case .transcribing: return "Working on it"
-        default: break
-        }
-        if model.speechState == .speaking { return "Speaking" }
-        if model.speechState == .holding { return "Lines are waiting until a call or full screen ends" }
-        switch model.modelState {
-        case .downloading(let p): return "Downloading speech models: \(Int(p * 100))%"
-        case .missing, .failed: return "Speaking. Listening needs the speech models."
-        case .ready: break
-        }
-        if let b = model.listenBlock {
-            if b == .wakeOff, let key = hotkeyName { return "Hold \(key) to talk" }
-            return ListenPolicy.menuLine(b)
-        }
-        return "Listening for \u{201C}Hey Earshot\u{201D}"
-    }
-
-    private var hotkeyName: String? {
-        switch model.config.hotkey {
-        case .rightOption: "Right Option"
-        case .rightCommand: "Right Command"
-        case .off: nil
         }
     }
 
@@ -393,4 +360,41 @@ struct HistoryRow: View {
         let session = entry.sessionName.map { ". \($0)" } ?? ""
         return who + reply + session
     }
+}
+
+extension AppModel {
+    /// One line on what Earshot is doing, for the panel and the Activity window.
+    var statusLine: String {
+        if let error = startError { return error }
+        if let until = mutedUntil {
+            return until == .distantFuture ? "Muted until you unmute"
+                : "Muted until \(until.formatted(date: .omitted, time: .shortened))"
+        }
+        switch listenPhase {
+        case .capturing: return "Listening"
+        case .transcribing: return "Working on it"
+        default: break
+        }
+        if speechState == .speaking { return "Speaking" }
+        if speechState == .holding { return "Lines are waiting until a call or full screen ends" }
+        switch modelState {
+        case .downloading(let p): return "Downloading speech models: \(Int(p * 100))%"
+        case .missing, .failed: return "Speaking. Listening needs the speech models."
+        case .ready: break
+        }
+        if let b = listenBlock {
+            if b == .wakeOff, let key = hotkeyName { return "Hold \(key) to talk" }
+            return ListenPolicy.menuLine(b)
+        }
+        return "Listening for \u{201C}Hey Earshot\u{201D}"
+    }
+
+    var hotkeyName: String? {
+        switch config.hotkey {
+        case .rightOption: "Right Option"
+        case .rightCommand: "Right Command"
+        case .off: nil
+        }
+    }
+
 }
