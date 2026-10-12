@@ -196,22 +196,35 @@ struct DayDial: View {
         // Rings: a track for a lane with lines today, a hairline for one without,
         // and each session's span from its first line to its last (on to now
         // while it works or waits on you), in its state color.
-        var spans: [String: (Date, Date)] = [:]
+        // A gap of more than half an hour between lines ends a stretch, so the
+        // arc never claims work nobody heard about.
+        var times: [String: [Date]] = [:]
         for e in entries {
             guard let lane = layout.lane(for: e) else { continue }
-            let s = spans[lane.id]
-            spans[lane.id] = (min(s?.0 ?? e.date, e.date), max(s?.1 ?? e.date, e.date))
+            times[lane.id, default: []].append(e.date)
+        }
+        var spans: [String: [(Date, Date)]] = [:]
+        for (id, ts) in times {
+            var out: [(Date, Date)] = []
+            for t in ts.sorted() {
+                if let last = out.last, t.timeIntervalSince(last.1) <= 1800 { out[out.count - 1].1 = t } else { out.append((t, t)) }
+            }
+            spans[id] = out
         }
         for lane in layout.lanes {
             let focused = focusLane == nil || focusLane == lane.id
             var ring = Path()
             ring.addEllipse(in: CGRect(x: c.x - lane.radius, y: c.y - lane.radius, width: lane.radius * 2, height: lane.radius * 2))
-            if let span = spans[lane.id] {
+            if let stretches = spans[lane.id] {
                 gc.stroke(ring, with: .color(focused ? DialPalette.track : DialPalette.track.opacity(0.45)), lineWidth: 14)
-                let end = lane.active ? layout.now : span.1
-                let start = min(span.0, end.addingTimeInterval(-300))   // even a single line shows a short arc
-                arc(&gc, from: start, to: end, radius: lane.radius,
-                    color: lane.color.opacity(focused ? 0.55 : 0.2), width: 6)
+                for (i, span) in stretches.enumerated() {
+                    // The latest stretch runs on to now while the session works or waits, if it spoke lately.
+                    let runsOn = i == stretches.count - 1 && lane.active && layout.now.timeIntervalSince(span.1) <= 1800
+                    let end = runsOn ? layout.now : span.1
+                    let start = min(span.0, end.addingTimeInterval(-300))   // even a single line shows a short arc
+                    arc(&gc, from: start, to: end, radius: lane.radius,
+                        color: lane.color.opacity(focused ? 0.55 : 0.2), width: 6)
+                }
             } else {
                 gc.stroke(ring, with: .color(DialPalette.tick.opacity(focused ? 0.7 : 0.3)), lineWidth: 1)
             }
@@ -220,7 +233,7 @@ struct DayDial: View {
         // Each ring's name, just past now, where a day-old moment would sit.
         for lane in layout.lanes {
             let focused = focusLane == nil || focusLane == lane.id
-            let a = -Double.pi / 2 + 0.05
+            let a = -Double.pi / 2 + 0.16   // clockwise of now, clear of the newest dots
             let p = CGPoint(x: c.x + cos(a) * lane.radius, y: c.y + sin(a) * lane.radius)
             let name = Text(lane.id == DialLayout.youLane ? "You" : Self.shortName(lane.name))
                 .font(.caption2.weight(.medium))
@@ -229,7 +242,11 @@ struct DayDial: View {
         }
 
         // A dot per line: nearer now is brighter, a match for the search is larger.
-        for e in entries {
+        // Lines that would sit on top of each other on a ring draw as one dot.
+        var drawn: [CGPoint] = []
+        for e in entries.sorted(by: { $0.date > $1.date }) {
+            if let p = layout.position(e), drawn.contains(where: { hypot($0.x - p.x, $0.y - p.y) < 8 }) { continue }
+            if let p = layout.position(e) { drawn.append(p) }
             guard let lane = layout.lane(for: e), let p = layout.position(e) else { continue }
             let age = layout.now.timeIntervalSince(e.date) / DialLayout.day
             let dim = focusLane == nil || focusLane == lane.id ? 1.0 : 0.3

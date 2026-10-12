@@ -156,17 +156,52 @@ struct ActivityView: View {
     // MARK: Data
 
     /// Sessions for the rings: ones in today's history and open ones, newest first.
+    /// Sessions for the rings and the Show menu: the ones the recap names come
+    /// first (they get the five rings), then the rest of today's history.
     private var sessionList: [(id: String, name: String)] {
-        var seen: [String: String] = [:]
-        var order: [String] = []
+        var order: [String] = recapSessions.map(\.id)
         for e in model.history.reversed() {
-            guard let id = e.session, seen[id] == nil else { continue }
-            seen[id] = e.sessionName ?? model.sessionName(id) ?? "session"
+            guard let id = e.session, !order.contains(id) else { continue }
             order.append(id)
         }
-        for s in model.sessions where seen[s.id] == nil { seen[s.id] = s.name; order.append(s.id) }
-        for s in model.liveSessions where seen[s.id] == nil { seen[s.id] = s.name; order.append(s.id) }
-        return order.map { ($0, seen[$0] ?? $0) }
+        for s in model.sessions where !order.contains(s.id) { order.append(s.id) }
+        return order.map { ($0, displayName($0)) }
+    }
+
+    /// One name per session everywhere in this window: the plugin's, then
+    /// the name today's lines used, then Claude Code's own label.
+    private func displayName(_ id: String) -> String {
+        model.sessions.first { $0.id == id }?.name
+            ?? model.history.last { $0.session == id && $0.sessionName != nil }?.sessionName
+            ?? model.liveSessions.first { $0.id == id }?.name
+            ?? "session"
+    }
+
+    /// The sessions the recap speaks about, in its order.
+    private var recapSessions: [(id: String, sentence: String)] {
+        let order: [SessionState] = [.needs, .reply, .stuck, .failed, .done, .working]
+        let known = model.sessions
+            .filter { order.contains($0.state) }
+            .sorted { (order.firstIndex(of: $0.state) ?? 9) < (order.firstIndex(of: $1.state) ?? 9) }
+            .map { s -> (id: String, sentence: String) in
+                let n = SessionStyle.title(displayName(s.id))
+                let verb = switch s.state {
+                case .needs: "needs you."
+                case .reply: "is waiting on your answer."
+                case .stuck: "might be stuck."
+                case .failed: "hit an error."
+                case .done: "finished."
+                default: "is still working."
+                }
+                return (s.id, "\(n) \(verb)")
+            }
+        if !known.isEmpty { return Array(known.prefix(3)) }
+        // The plugin hasn't reported yet: what Claude Code itself says.
+        return model.liveSessions
+            .filter { $0.waiting || $0.busy }
+            .sorted { ($0.waiting ? 0 : 1) < ($1.waiting ? 0 : 1) }
+            .prefix(3)
+            .map { s in (s.id, "\(SessionStyle.title(displayName(s.id))) \(s.waiting ? "needs you." : "is working.")") }
     }
 
     /// At most five session rings; older sessions' dots stay off the dial but in the list.
@@ -231,32 +266,9 @@ struct ActivityView: View {
 
     /// Who needs you first, then who is stuck, finished, or working: one short sentence each.
     private var recap: String {
-        let order: [SessionState] = [.needs, .reply, .stuck, .failed, .done, .working]
-        let sorted = model.sessions.sorted { (order.firstIndex(of: $0.state) ?? 9) < (order.firstIndex(of: $1.state) ?? 9) }
-        let all: [String] = sorted.compactMap { s -> String? in
-            let n = SessionStyle.title(s.name)
-            switch s.state {
-            case .needs: return "\(n) needs you."
-            case .reply: return "\(n) is waiting on your answer."
-            case .stuck: return "\(n) might be stuck."
-            case .failed: return "\(n) hit an error."
-            case .done: return "\(n) finished."
-            case .working: return "\(n) is still working."
-            case .open, .closed: return nil
-            }
-        }
-        let parts = Array(all.prefix(3))
-        if parts.isEmpty, model.sessions.isEmpty, !model.liveSessions.isEmpty {
-            // The plugin hasn't reported yet: what Claude Code itself says.
-            let live = model.liveSessions.sorted { ($0.waiting ? 0 : $0.busy ? 1 : 2) < ($1.waiting ? 0 : $1.busy ? 1 : 2) }
-            let said = live.filter { $0.waiting || $0.busy }.prefix(3).map { s in
-                let n = SessionStyle.title(s.name)
-                return s.waiting ? "\(n) needs you." : "\(n) is working."
-            }
-            return said.isEmpty ? "Nothing needs you right now." : said.joined(separator: " ")
-        }
-        if parts.isEmpty { return model.sessions.isEmpty ? "No Claude Code sessions are open." : "Nothing needs you right now." }
-        return parts.joined(separator: " ")
+        let parts = recapSessions.map(\.sentence)
+        if !parts.isEmpty { return parts.joined(separator: " ") }
+        return model.sessions.isEmpty && model.liveSessions.isEmpty ? "No Claude Code sessions are open." : "Nothing needs you right now."
     }
 
     private var listTitle: String {
