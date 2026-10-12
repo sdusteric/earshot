@@ -26,6 +26,13 @@ struct EarshotApp: App {
                 .task {
                     model.start()
                     if orb == nil { orb = OrbPanel(model: model) }
+                    #if DEBUG
+                    // For checking the window during development: open with -openActivity YES.
+                    if UserDefaults.standard.bool(forKey: "openActivity") {
+                        NSApp.activate()
+                        openWindow(id: "activity")
+                    }
+                    #endif
                     if !Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion).isEmpty {
                         NSApp.activate()
                         openWindow(id: "onboarding")
@@ -37,7 +44,7 @@ struct EarshotApp: App {
         Window("Activity", id: "activity") {
             ActivityView().environment(model)
         }
-        .defaultSize(width: 760, height: 540)
+        .defaultSize(width: 1180, height: 760)
 
         Settings { SettingsView().environment(model) }
 

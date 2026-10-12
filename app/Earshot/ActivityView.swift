@@ -1,80 +1,112 @@
 import EarshotKit
 import SwiftUI
 
-/// Everything Earshot said and heard in the last day: by session, by who
-/// spoke, searchable, with each line one click from being said again.
+/// The day around the orb: a 24-hour dial on the left, and on the right the
+/// recap of what needs you, Earshot's newest line, and the lines for the
+/// stretch of the day you pick. Clicking the orb listens for a command.
 struct ActivityView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("activityLastSeen") private var lastSeenStamp: Double = 0
+    @State private var since: Date?
+    @State private var selection: ClosedRange<Date>?
     @State private var search = ""
     @State private var confirmClear = false
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: Binding(get: { model.activityFilter }, set: { if let f = $0 { model.activityFilter = f } })) {
-                Label("All", systemImage: "tray.full").tag(ActivityFilter.all)
-                Label("You said", systemImage: "person.wave.2").tag(ActivityFilter.you)
-                Label("Earshot said", systemImage: "waveform").tag(ActivityFilter.earshot)
-                if !sessionNames.isEmpty {
-                    Section("Sessions") {
-                        ForEach(sessionNames, id: \.id) { s in
-                            Label {
-                                Text(SessionStyle.title(s.name))
-                            } icon: {
-                                Circle().fill(color(for: s.id)).frame(width: 8, height: 8)
-                            }
-                            .tag(ActivityFilter.session(s.id))
+        TimelineView(.periodic(from: .now, by: 30)) { t in
+            content(now: t.date)
+        }
+        .background(DialPalette.ground)
+        .preferredColorScheme(.dark)
+        .searchable(text: $search, placement: .toolbar, prompt: "Search what was said")
+        .toolbar {
+            ToolbarItem {
+                Menu {
+                    Picker("Show", selection: Binding(get: { model.activityFilter }, set: { model.activityFilter = $0 })) {
+                        Text("Everything").tag(ActivityFilter.all)
+                        Text("What you said").tag(ActivityFilter.you)
+                        Text("What Earshot said").tag(ActivityFilter.earshot)
+                        if !sessionList.isEmpty {
+                            Divider()
+                            ForEach(sessionList, id: \.id) { s in Text(SessionStyle.title(s.name)).tag(ActivityFilter.session(s.id)) }
                         }
                     }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Show", systemImage: model.activityFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                 }
+                .help("Show")
             }
-            .safeAreaInset(edge: .top) {
-                VStack(spacing: 8) {
-                    OrbView(size: 76, restingColor: .white, spinsWhenIdle: true)
-                        .background(Circle().fill(.black.opacity(0.88)))
-                        .clipShape(.circle)
-                        .contentShape(.circle)
-                        .onTapGesture { model.tapToTalk() }
-                        .help("Click and say a command")
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityHint("Listens for one command")
-                    Text(model.statusLine)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if model.listenPhase == .off || model.listenPhase == .waiting {
-                        Text("Click the orb to talk").font(.caption).foregroundStyle(.tertiary)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+            ToolbarItem {
+                Button("Clear History", systemImage: "trash") { confirmClear = true }
+                    .disabled(model.history.isEmpty)
+                    .help("Clear History")
             }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 210)
-        } detail: {
-            detail
-                .navigationTitle(title)
-                .searchable(text: $search, placement: .toolbar, prompt: "Search what was said")
-                .toolbar {
-                    ToolbarItem {
-                        Button("Clear History", systemImage: "trash") { confirmClear = true }
-                            .disabled(model.history.isEmpty)
-                            .help("Clear History")
-                    }
-                }
-                .confirmationDialog("Clear the history?", isPresented: $confirmClear) {
-                    Button("Clear History", role: .destructive) { model.clearHistory() }
-                } message: {
-                    Text("Everything Earshot said and heard is removed from this Mac.")
-                }
         }
-        .frame(minWidth: 620, minHeight: 420)
+        .confirmationDialog("Clear the history?", isPresented: $confirmClear) {
+            Button("Clear History", role: .destructive) { model.clearHistory(); selection = nil }
+        } message: {
+            Text("Everything Earshot said and heard is removed from this Mac.")
+        }
+        .navigationTitle("Activity")
+        .frame(minWidth: 980, minHeight: 640)
+        .onAppear { since = lastSeenStamp > 0 ? Date(timeIntervalSince1970: lastSeenStamp) : nil }
+        .onDisappear { lastSeenStamp = Date().timeIntervalSince1970 }
     }
 
-    @ViewBuilder private var detail: some View {
-        let items = filtered
+    private func content(now: Date) -> some View {
+        GeometryReader { geo in
+            let dialSize = min(geo.size.height - 32, geo.size.width * 0.56)
+            let layout = DialLayout(size: dialSize, now: now, sessions: lanes)
+            HStack(alignment: .top, spacing: 0) {
+                DayDial(entries: dayEntries(now), layout: layout, since: since, selection: selection,
+                        highlighted: searchMatches, focusLane: focusLane) { picked in
+                    pick(picked)
+                }
+                .padding(16)
+                .frame(width: dialSize + 32)
+                Divider().overlay(DialPalette.track)
+                detail(now: now)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    // MARK: Right side
+
+    private func detail(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(recapLabel(now)).font(.caption.weight(.semibold)).textCase(.uppercase).tracking(0.6).foregroundStyle(.secondary)
+                Text(recap).font(.system(size: 24, weight: .semibold)).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Say the Recap") { model.playTestLine(recap) }
+                        .disabled(model.sessions.isEmpty && model.liveSessions.isEmpty)
+                    Button("Talk") { model.tapToTalk() }
+                }
+                .controlSize(.regular)
+                NowStrip(entry: model.history.last).padding(.top, 8)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            .padding(.bottom, 18)
+
+            HStack {
+                Text(listTitle).font(.headline)
+                Spacer()
+                if selection != nil {
+                    Button("Show the Whole Day") { selection = nil }.buttonStyle(.link)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 6)
+            Divider().overlay(DialPalette.track)
+            list(now: now)
+        }
+    }
+
+    @ViewBuilder private func list(now: Date) -> some View {
+        let items = visible(now)
         if model.config.history == .off {
             ContentUnavailableView {
                 Label("History is off", systemImage: "clock.badge.xmark")
@@ -86,98 +118,170 @@ struct ActivityView: View {
                 ContentUnavailableView.search(text: search)
             } else {
                 ContentUnavailableView {
-                    Label(emptyTitle, systemImage: "waveform")
+                    Label(selection == nil ? "Nothing yet today" : "Nothing in this stretch", systemImage: "waveform")
                 } description: {
-                    Text(emptyText)
+                    Text(selection == nil
+                         ? "What Earshot says, and what you ask it, goes around the dial and shows up here. Click the orb to talk."
+                         : "Click another part of the dial, or show the whole day.")
                 }
             }
         } else {
-            List {
-                ForEach(groups(items), id: \.title) { g in
-                    Section(g.title) {
-                        ForEach(g.items) { e in
-                            HistoryRow(entry: e) { model.replay(e) }
-                                .padding(.vertical, 3)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+                    ForEach(hourGroups(items), id: \.start) { g in
+                        Section {
+                            ForEach(g.items) { e in
+                                HistoryRow(entry: e) { model.replay(e) }
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 8)
+                            }
+                        } header: {
+                            Text(g.start, format: .dateTime.hour().minute())
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 6)
+                                .background(DialPalette.ground)
                         }
                     }
                 }
+                .padding(.bottom, 16)
             }
         }
     }
 
-    // MARK: -
+    // MARK: Data
 
-    private var filtered: [HistoryEntry] {
+    /// Sessions for the rings: ones in today's history and open ones, newest first.
+    private var sessionList: [(id: String, name: String)] {
+        var seen: [String: String] = [:]
+        var order: [String] = []
+        for e in model.history.reversed() {
+            guard let id = e.session, seen[id] == nil else { continue }
+            seen[id] = e.sessionName ?? model.sessionName(id) ?? "session"
+            order.append(id)
+        }
+        for s in model.sessions where seen[s.id] == nil { seen[s.id] = s.name; order.append(s.id) }
+        for s in model.liveSessions where seen[s.id] == nil { seen[s.id] = s.name; order.append(s.id) }
+        return order.map { ($0, seen[$0] ?? $0) }
+    }
+
+    /// At most five session rings; older sessions' dots stay off the dial but in the list.
+    private var lanes: [(id: String, name: String, color: Color)] {
+        sessionList.prefix(5).map { s in
+            (s.id, s.name, model.sessions.first { $0.id == s.id }.map { SessionStyle.color($0.state) }
+                ?? model.liveSessions.first { $0.id == s.id }.map { $0.waiting ? .orange : ($0.busy ? .blue : .secondary) }
+                ?? .secondary)
+        }
+    }
+
+    private var focusLane: String? {
+        switch model.activityFilter {
+        case .session(let id): id
+        case .you: DialLayout.youLane
+        default: nil
+        }
+    }
+
+    private func dayEntries(_ now: Date) -> [HistoryEntry] {
+        model.history.filter { now.timeIntervalSince($0.date) < DialLayout.day }
+    }
+
+    private var searchMatches: Set<UUID> {
         let q = search.trimmingCharacters(in: .whitespaces)
-        return model.history.reversed().filter { e in
-            let matchesFilter: Bool = switch model.activityFilter {
+        guard !q.isEmpty else { return [] }
+        return Set(model.history.filter { matches($0, q) }.map(\.id))
+    }
+
+    private func matches(_ e: HistoryEntry, _ q: String) -> Bool {
+        e.text.localizedCaseInsensitiveContains(q)
+            || (e.reply?.localizedCaseInsensitiveContains(q) ?? false)
+            || (e.sessionName?.localizedCaseInsensitiveContains(q) ?? false)
+    }
+
+    private func visible(_ now: Date) -> [HistoryEntry] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        return dayEntries(now).reversed().filter { e in
+            let byFilter: Bool = switch model.activityFilter {
             case .all: true
             case .you: e.kind == .heard
             case .earshot: e.kind == .said
             case .session(let id): e.session == id
             }
-            guard matchesFilter else { return false }
-            guard !q.isEmpty else { return true }
-            return e.text.localizedCaseInsensitiveContains(q)
-                || (e.reply?.localizedCaseInsensitiveContains(q) ?? false)
-                || (e.sessionName?.localizedCaseInsensitiveContains(q) ?? false)
+            guard byFilter else { return false }
+            if let selection, !selection.contains(e.date) { return false }
+            return q.isEmpty || matches(e, q)
         }
     }
 
-    private struct Group { let title: String; let items: [HistoryEntry] }
+    /// A click on the dial picks the hour around it; a click inside the picked hour clears it.
+    private func pick(_ t: Date?) {
+        guard let t else { selection = nil; return }
+        if let s = selection, s.contains(t) { selection = nil } else { selection = t.addingTimeInterval(-1800)...t.addingTimeInterval(1800) }
+    }
 
-    /// Today and Yesterday: history keeps one day, so there are at most two.
-    private func groups(_ items: [HistoryEntry]) -> [Group] {
+    private struct HourGroup { let start: Date; let items: [HistoryEntry] }
+
+    private func hourGroups(_ items: [HistoryEntry]) -> [HourGroup] {
         let cal = Calendar.current
-        let today = items.filter { cal.isDateInToday($0.date) }
-        let earlier = items.filter { !cal.isDateInToday($0.date) }
-        var out: [Group] = []
-        if !today.isEmpty { out.append(Group(title: "Today", items: today)) }
-        if !earlier.isEmpty { out.append(Group(title: "Yesterday", items: earlier)) }
-        return out
-    }
-
-    /// Sessions that appear in the history or are open now, newest first.
-    private var sessionNames: [(id: String, name: String)] {
-        var seen: [String: String] = [:]
-        var order: [String] = []
-        for s in model.sessions where seen[s.id] == nil { seen[s.id] = s.name; order.append(s.id) }
-        for e in model.history.reversed() {
-            guard let id = e.session, seen[id] == nil, let name = e.sessionName else { continue }
-            seen[id] = name
-            order.append(id)
+        var groups: [HourGroup] = []
+        for e in items {
+            let start = cal.dateInterval(of: .hour, for: e.date)?.start ?? e.date
+            if let last = groups.last, last.start == start {
+                groups[groups.count - 1] = HourGroup(start: start, items: last.items + [e])
+            } else {
+                groups.append(HourGroup(start: start, items: [e]))
+            }
         }
-        return order.map { ($0, seen[$0] ?? $0) }
+        return groups
     }
 
-    private func color(for id: String) -> Color {
-        model.sessions.first { $0.id == id }.map { SessionStyle.color($0.state) } ?? .secondary
-    }
+    // MARK: Words
 
-    private var title: String {
-        switch model.activityFilter {
-        case .all: "Activity"
-        case .you: "You said"
-        case .earshot: "Earshot said"
-        case .session(let id): sessionNames.first { $0.id == id }.map { SessionStyle.title($0.name) } ?? "Session"
+    /// Who needs you first, then who is stuck, finished, or working: one short sentence each.
+    private var recap: String {
+        let order: [SessionState] = [.needs, .reply, .stuck, .failed, .done, .working]
+        let sorted = model.sessions.sorted { (order.firstIndex(of: $0.state) ?? 9) < (order.firstIndex(of: $1.state) ?? 9) }
+        let all: [String] = sorted.compactMap { s -> String? in
+            let n = SessionStyle.title(s.name)
+            switch s.state {
+            case .needs: return "\(n) needs you."
+            case .reply: return "\(n) is waiting on your answer."
+            case .stuck: return "\(n) might be stuck."
+            case .failed: return "\(n) hit an error."
+            case .done: return "\(n) finished."
+            case .working: return "\(n) is still working."
+            case .open, .closed: return nil
+            }
         }
+        let parts = Array(all.prefix(3))
+        if parts.isEmpty, model.sessions.isEmpty, !model.liveSessions.isEmpty {
+            // The plugin hasn't reported yet: what Claude Code itself says.
+            let live = model.liveSessions.sorted { ($0.waiting ? 0 : $0.busy ? 1 : 2) < ($1.waiting ? 0 : $1.busy ? 1 : 2) }
+            let said = live.filter { $0.waiting || $0.busy }.prefix(3).map { s in
+                let n = SessionStyle.title(s.name)
+                return s.waiting ? "\(n) needs you." : "\(n) is working."
+            }
+            return said.isEmpty ? "Nothing needs you right now." : said.joined(separator: " ")
+        }
+        if parts.isEmpty { return model.sessions.isEmpty ? "No Claude Code sessions are open." : "Nothing needs you right now." }
+        return parts.joined(separator: " ")
     }
 
-    private var emptyTitle: String {
-        switch model.activityFilter {
-        case .you: "Nothing you said yet"
-        case .session: "Nothing about this session yet"
-        default: "Nothing yet"
-        }
+    private func recapLabel(_ now: Date) -> String {
+        guard let since, since < now else { return "Right now" }
+        let minutes = Int(now.timeIntervalSince(since) / 60)
+        if minutes < 2 { return "Right now" }
+        if minutes < 90 { return "Since you last looked, \(minutes) minutes ago" }
+        return "Since you last looked, \(minutes / 60) hours ago"
     }
 
-    private var emptyText: String {
-        switch model.activityFilter {
-        case .you: "Hold the hotkey and give a command. What you said and what Earshot did shows up here."
-        case .session: "When Earshot says something about this session, it shows up here."
-        default: model.config.history == .session
-            ? "What Earshot says and hears shows up here until Earshot quits."
-            : "What Earshot says and hears shows up here, kept for a day."
+    private var listTitle: String {
+        if let selection {
+            let f = Date.FormatStyle().hour().minute()
+            return "\(selection.lowerBound.formatted(f)) to \(selection.upperBound.formatted(f))"
         }
+        return "Today"
     }
 }

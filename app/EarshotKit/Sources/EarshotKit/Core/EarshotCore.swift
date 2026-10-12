@@ -72,7 +72,8 @@ public final class EarshotCore: Sendable {
                 switch message {
                 case .say(let s):
                     await events.add("line \(s.kind.rawValue)")
-                    await speech.enqueue(SpokenLine(text: s.text, kind: s.kind, session: s.session, transcript: s.transcript))
+                    await speech.enqueue(SpokenLine(text: s.text, kind: s.kind, session: s.session, transcript: s.transcript,
+                                                         name: s.name))
                 case .status(let s):
                     let before = await sessions.apply(s)
                     if before == .needs || before == .reply, s.state != .needs, s.state != .reply {

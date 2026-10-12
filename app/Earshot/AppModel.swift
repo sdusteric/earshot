@@ -9,6 +9,8 @@ import SwiftUI
 @MainActor @Observable
 final class AppModel {
     var sessions: [SessionInfo] = []
+    /// What `claude agents` lists: running sessions even before the plugin reports them.
+    var liveSessions: [LiveSession] = []
     /// What Earshot said and heard, oldest first (see HistoryStore).
     var history: [HistoryEntry] = []
     /// Whether Claude Code has the Earshot plugin, and an install under way.
@@ -204,9 +206,14 @@ final class AppModel {
     private func record(_ line: SpokenLine) async {
         if unrecorded.remove(line.id) != nil { return }
         guard line.kind != .confirm else { return }
-        let name = sessions.first { $0.id == line.session }?.name
+        let name = line.name ?? sessionName(line.session)
         await historyStore?.add(HistoryEntry(kind: .said, text: line.text, session: line.session.isEmpty ? nil : line.session,
                                              sessionName: name, lineKind: line.kind))
+    }
+
+    /// A session's spoken name from the plugin's statuses, or from `claude agents`.
+    func sessionName(_ id: String) -> String? {
+        sessions.first { $0.id == id }?.name ?? liveSessions.first { $0.id == id }?.name
     }
 
     /// The last thing Earshot said about this session, for the panel.
@@ -231,7 +238,9 @@ final class AppModel {
             lastDirectoryCheck = Date()
             refreshDirectory(stack)
         }
-        directorySessions = await stack.directory.sessions.count
+        let live = await stack.directory.sessions
+        directorySessions = live.count
+        if live != liveSessions { liveSessions = live }
         i = listenInputs(c)
         listenBlock = ListenPolicy.wakeBlock(i)
         hotkeyTap?.setHotkey(c.hotkey)
@@ -257,7 +266,9 @@ final class AppModel {
     private func refreshDirectory(_ stack: ListenStack) {
         Task {
             await stack.directory.refresh(ifOlderThan: 60)
-            let count = await stack.directory.sessions.count
+            let live = await stack.directory.sessions
+            if live != liveSessions { liveSessions = live }
+            let count = live.count
             if count != directorySessions {
                 directorySessions = count
                 await listeningChanged()

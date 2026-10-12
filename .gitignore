@@ -10,3 +10,8 @@ app/build/
 app/.build/
 app/Earshot.xcodeproj/
 tests/eval/listener/
+
+# Impeccable scratch: decision sketches and review captures
+.impeccable/mocks/
+.impeccable/review/
+.impeccable/questions/

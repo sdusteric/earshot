@@ -10,11 +10,13 @@ public struct SpokenLine: Sendable, Equatable, Identifiable {
     /// transcript means you answered, for example with Esc, which fires no hook.
     public var transcript: String?
     public var received: Date
+    /// The session's spoken name, when the plugin sent one ("billing service").
+    public var name: String?
 
     public init(id: UUID = UUID(), text: String, kind: LineKind, session: String, transcript: String? = nil,
-                received: Date = Date()) {
+                received: Date = Date(), name: String? = nil) {
         self.id = id; self.text = text; self.kind = kind; self.session = session
-        self.transcript = transcript; self.received = received
+        self.transcript = transcript; self.received = received; self.name = name
     }
 
     /// speak.sh's still_waiting, turned around: the transcript changed more
