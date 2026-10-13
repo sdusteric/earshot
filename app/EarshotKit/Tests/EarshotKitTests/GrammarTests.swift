@@ -10,6 +10,9 @@ import Testing
         ("what is everyone doing", .status(target: nil)),
         ("Um, what's everybody doing?", .status(target: nil)),
         ("Roll call.", .status(target: nil)),
+        ("Hey, how are you doing?", .status(target: nil)),
+        ("How's it going?", .status(target: nil)),
+        ("What's up?", .status(target: nil)),
         ("Status.", .status(target: nil)),
         ("What's going on?", .status(target: nil)),
         ("Can you give me a status update?", .status(target: nil)),
@@ -89,7 +92,7 @@ import Testing
         "Could billing maybe look at the flaky test",
         "Let's have the blog rewrite the intro",
         "How's the weather",                       // not a session: the model decides
-        "How are you",
+        "How are you feeling about the deploy",
     ])
     func unmatchedGoesToTheModel(_ said: String) {
         #expect(Grammar.parse(said, known: Self.known) == nil)

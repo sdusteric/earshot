@@ -54,8 +54,8 @@ actor SlowCommandModel: CommandModel {
     @Test func theModelOnlySeesTheUnboostedWords() async {
         let model = FakeModel(answer: .unknown)
         let p = CommandParser(model: model)
-        _ = await p.parse("Hey, how are you wedding", plain: "Hey, how are you doing", sessions: ["wedding"])
-        #expect(await model.asked == ["Hey, how are you doing"])
+        _ = await p.parse("Hey, how are you wedding today", plain: "Hey, how are you doing today", sessions: ["wedding"])
+        #expect(await model.asked == ["Hey, how are you doing today"])
     }
 
     @Test func noModelMeansUnknown() async {

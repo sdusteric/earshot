@@ -139,6 +139,9 @@ public enum Grammar {
         "status update", "give me a status update", "give me a status", "status report", "what's happening",
         "what's going on", "what is going on", "how's everything going", "how is everything going",
         "how's everything", "what's the status", "everyone's status",
+        // Asked of Earshot itself, these mean the same: how are things going.
+        "how are you doing", "how are you", "how you doing", "how're you doing", "how's it going",
+        "how is it going", "how are things", "how are things going", "what's up", "what's new",
     ]
 
     /// (starts with, ends with) around a target.
