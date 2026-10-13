@@ -16,17 +16,22 @@ public final class EarshotCore: Sendable {
     public let events: EventLog
     public let approvals: ApprovalBook
     public let availability: ListenAvailability
+    /// Notifications for a session that needs you while Earshot can't speak.
+    public let banners: Banners
+    private let away = AwayBook()
     private let server: LineServer
     private let inbox: AsyncStream<AppMessage>.Continuation
     private let stream: AsyncStream<AppMessage>
 
     public init(socketPath: String = EarshotCore.socketPath, speech: SpeechOut, sessions: SessionStore, events: EventLog,
-                approvals: ApprovalBook = ApprovalBook(), availability: ListenAvailability = ListenAvailability()) {
+                approvals: ApprovalBook = ApprovalBook(), availability: ListenAvailability = ListenAvailability(),
+                banners: Banners = Banners()) {
         self.speech = speech
         self.sessions = sessions
         self.events = events
         self.approvals = approvals
         self.availability = availability
+        self.banners = banners
         let (stream, inbox) = AsyncStream<AppMessage>.makeStream()
         self.stream = stream
         self.inbox = inbox
@@ -67,18 +72,32 @@ public final class EarshotCore: Sendable {
     public func start() async throws {
         await speech.start()
         let (stream, speech, sessions, events, approvals) = (self.stream, self.speech, self.sessions, self.events, self.approvals)
+        let (banners, away) = (self.banners, self.away)
+        // A line held for a call or a full screen app can become a banner.
+        let held = await speech.heldLines()
+        Task {
+            for await line in held { await banners.unspoken(line, name: await sessions.name(of: line.session)) }
+        }
         Task {
             for await message in stream {
                 switch message {
                 case .say(let s):
-                    await events.add("line \(s.kind.rawValue)")
-                    await speech.enqueue(SpokenLine(text: s.text, kind: s.kind, session: s.session, transcript: s.transcript,
-                                                         name: s.name))
+                    let line = SpokenLine(text: s.text, kind: s.kind, session: s.session, transcript: s.transcript, name: s.name)
+                    await away.note(line)
+                    if s.muted == true {
+                        // The plugin is muted: nothing is said, but a session that needs you gets a banner.
+                        await events.add("line \(s.kind.rawValue), muted")
+                        await banners.unspoken(line, name: await sessions.name(of: s.session))
+                    } else {
+                        await events.add("line \(s.kind.rawValue)")
+                        await speech.enqueue(line)
+                    }
                 case .status(let s):
                     let before = await sessions.apply(s)
                     if before == .needs || before == .reply, s.state != .needs, s.state != .reply {
                         await speech.sessionAnswered(s.session)
                     }
+                    if before != nil { await banners.sessionChanged(s.session, to: s.state) }
                 case .approval(let a):
                     let taken = await approvals.apply(a)
                     await events.add(a.isClosed ? "approval closed (\(a.by ?? "?"))" : (taken ? "approval open" : "approval refused"))
@@ -92,6 +111,22 @@ public final class EarshotCore: Sendable {
     public func stop() {
         server.stop()
         inbox.finish()
+    }
+
+    /// The Mac locked or went to sleep: what changes from now on goes into the recap.
+    public func wentAway(at date: Date = Date()) async { await away.left(at: date) }
+
+    /// You came back. After 10 minutes or more away with something changed,
+    /// the recap is queued (when `speak` allows it) and returned.
+    @discardableResult
+    public func cameBack(at date: Date = Date(), speak: Bool) async -> AwayRecap.Recap? {
+        let list = await sessions.sessions
+        let states = Dictionary(list.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        let names = Dictionary(list.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        guard let recap = await away.back(at: date, states: states, names: names), speak else { return nil }
+        await events.add("recap")
+        await speech.sayRecap(recap)
+        return recap
     }
 
     /// The real thing: Kokoro, ElevenLabs and say from the config, the real
@@ -111,7 +146,8 @@ public final class EarshotCore: Sendable {
         })
         let fullScreen = FullScreenWatch { config().quietInFullScreen }
         let speech = SpeechOut(synth: synth, player: player, mic: mic, quiet: fullScreen, ducker: ducker)
-        let core = EarshotCore(speech: speech, sessions: SessionStore(), events: EventLog())
+        let core = EarshotCore(speech: speech, sessions: SessionStore(), events: EventLog(),
+                               banners: Banners { config().banner })
         return (core, ducker, mic, synth, player.level, fullScreen)
     }
 }

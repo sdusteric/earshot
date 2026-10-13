@@ -100,9 +100,37 @@ private struct SpeakingTab: View {
             } footer: {
                 Footnote(fullScreenLine + " During a call, Earshot also waits, then catches up.")
             }
+
+            Section {
+                Toggle("Show a banner when Earshot can't speak",
+                       isOn: Binding(get: { model.config.banner },
+                                     set: { on in model.save { $0.set("EARSHOT_BANNER", on ? nil : "off") } }))
+            } footer: {
+                Footnote(bannerLine)
+            }
+
+            Section {
+                Toggle("Say a recap when you come back",
+                       isOn: Binding(get: { model.config.recap },
+                                     set: { on in model.save { $0.set("EARSHOT_RECAP", on ? nil : "off") } }))
+            } header: {
+                Text("Coming back")
+            } footer: {
+                Footnote("After the Mac was locked or asleep for 10 minutes or more, Earshot says in one line which sessions finished, need you, or ran into trouble. Lines it sums up aren't said again.")
+            }
         }
         .formStyle(.grouped)
-        .onAppear { model.reloadConfig() }
+        .onAppear {
+            model.reloadConfig()
+            model.refreshNotifications()
+        }
+    }
+
+    private var bannerLine: String {
+        if model.config.banner, model.notificationsDenied {
+            return "Notifications for Earshot are off in System Settings, Notifications. Turn them on there to see banners."
+        }
+        return "While Earshot is muted, in a call, or quiet for a full screen app, a session that needs you shows a notification. Click it to open Activity. macOS asks to allow notifications the first time."
     }
 
     private var levelLine: String {

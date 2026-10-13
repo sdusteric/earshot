@@ -72,6 +72,29 @@ import Testing
         #expect(q.count == 2)
     }
 
+    @Test func aRecapDropsTheHeldLinesItCovers() {
+        var q = HoldQueue()
+        q.hold(line("done a before you left", .done, "a", at: 0))
+        q.hold(line("done a", .done, "a", at: 100))
+        q.hold(line("needs a", .need, "a", at: 110))
+        q.hold(line("done b", .done, "b", at: 120))
+        q.dropCovered(sessions: ["a"], since: t0.addingTimeInterval(50))
+        #expect(texts(q.takeCatchUp(now: t0.addingTimeInterval(125)) { _ in false })
+                == ["While you were on the mic:", "done a before you left", "done b"])
+    }
+
+    /// The recap has its own opening, so it goes first and the intro and the
+    /// limit of four count only the other lines.
+    @Test func aHeldRecapComesFirst() {
+        var q = HoldQueue()
+        q.hold(line("done b", .done, "b", at: 0))
+        q.hold(line("While you were away: Blog finished.", .recap, "", at: 5))
+        let out = q.takeCatchUp(now: t0.addingTimeInterval(40)) { _ in false }
+        #expect(texts(out) == ["While you were away: Blog finished.", "While you were on the mic:", "done b"])
+        q.hold(line("While you were away: Docs finished.", .recap, "", at: 100))
+        #expect(texts(q.takeCatchUp(now: t0.addingTimeInterval(140)) { _ in false }) == ["While you were away: Docs finished."])
+    }
+
     @Test func transcriptNewerThanTheLineMeansAnswered() throws {
         let url = FileManager.default.temporaryDirectory.appending(path: "ek-tr-\(UUID().uuidString)")
         try Data("x".utf8).write(to: url)

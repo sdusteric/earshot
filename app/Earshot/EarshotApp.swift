@@ -23,6 +23,11 @@ struct EarshotApp: App {
         } label: {
             Image(nsImage: MenuIcon.image(model.menuIcon))
                 .accessibilityLabel(model.menuIcon.label)
+                // A click on a banner (see BannerPoster).
+                .onChange(of: model.activityRequests) {
+                    NSApp.activate()
+                    openWindow(id: "activity")
+                }
                 .task {
                     model.start()
                     if orb == nil { orb = OrbPanel(model: model) }

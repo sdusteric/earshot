@@ -19,6 +19,17 @@ public struct SpokenLine: Sendable, Equatable, Identifiable {
         self.transcript = transcript; self.received = received; self.name = name
     }
 
+    /// The session waits on you: a "needs you" line, or a session's line that
+    /// ends by asking something ("Want one more round, or ship it?"), which
+    /// the plugin sends as a finished turn. Earshot's own lines never count.
+    public var asksYou: Bool {
+        switch kind {
+        case .need, .reply: true
+        case .done, .alert, .beat, .ack: text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+        case .roll, .intro, .confirm, .recap: false
+        }
+    }
+
     /// speak.sh's still_waiting, turned around: the transcript changed more
     /// than 2 seconds after the line arrived.
     public static func transcriptAnswered(_ line: SpokenLine) -> Bool {

@@ -253,6 +253,35 @@ actor SlowEndDucker: Ducking {
         #expect(await player.played == ["needs you"])
     }
 
+    /// Lines held while you were away are not said one by one after the recap
+    /// that sums them up; the recap itself waits for the call like they do.
+    @Test func theRecapWaitsForTheCallAndReplacesTheLinesItCovers() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        let left = Date().addingTimeInterval(-1)
+        mic.set(true)
+        await s.enqueue(line("Blog finished the migration.", .done, "a"))
+        await s.enqueue(line("Hey, docs needs your OK.", .need, "b"))
+        await s.sayRecap(AwayRecap.Recap(text: "While you were away: Blog finished.", sessions: ["a"], since: left))
+        #expect(await player.played.isEmpty)
+        mic.set(false)
+        await eventually { await player.played.count == 2 }
+        await s.waitUntilIdle()
+        #expect(await player.played == ["While you were away: Blog finished.", "Hey, docs needs your OK."])
+    }
+
+    @Test func heldLinesAreReported() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        let held = await s.heldLines()
+        mic.set(true)
+        await s.enqueue(line("Hey, blog needs your OK.", .need, "a"))
+        await s.enqueue(line("Still on it.", .beat, "a"))   // not kept, so not reported
+        mic.set(false)
+        var it = held.makeAsyncIterator()
+        #expect(await it.next()?.text == "Hey, blog needs your OK.")
+    }
+
     @Test func rollCallPlaysDuringACall() async {
         let player = FakePlayer()
         let s = await make(player)

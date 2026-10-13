@@ -79,6 +79,15 @@ import Testing
         #expect(EarshotConfig(text: "EARSHOT_DUCK_LEVEL=50").duckLevel == 0.5)
     }
 
+    @Test func recapAndBannerAreOnUnlessTurnedOff() {
+        let c = EarshotConfig(text: "")
+        #expect(c.recap && c.banner)
+        #expect(EarshotConfig(text: "EARSHOT_RECAP=on\nEARSHOT_BANNER=on").recap)
+        #expect(EarshotConfig(text: "EARSHOT_RECAP=on\nEARSHOT_BANNER=on").banner)
+        #expect(!EarshotConfig(text: "EARSHOT_RECAP=off").recap)
+        #expect(!EarshotConfig(text: "EARSHOT_BANNER=off").banner)
+    }
+
     @Test func missingFileIsEmpty() {
         #expect(EarshotConfig.load(from: URL(fileURLWithPath: "/nonexistent/config")).text == "")
     }

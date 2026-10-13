@@ -28,14 +28,16 @@ case "$ENGINE" in kokoro|elevenlabs|say) ;; *) ENGINE=kokoro ;; esac
 # dictated, so typed prompts get spoken updates too.
 # A roll call is something you asked for, so it plays even when muted or with
 # /voice off. ($4 is the kind when play runs a line.)
+MUTED=
 if [ "$1" != rollcall ] && ! { [ "$1" = play ] && [ "$4" = roll ]; }; then
   [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] || exit 0
   # Muted: an empty file mutes until it is removed; a time (epoch seconds)
   # mutes until then. Earshot for Mac writes the time for "Mute for 1 hour".
+  # What muted stops is decided once the app's socket is known (see below).
   MUTE=${EARSHOT_MUTE:-$HOME/.config/earshot/mute}
   if [ -e "$MUTE" ]; then
     until=$(head -c 20 "$MUTE" 2>/dev/null | tr -cd 0-9)
-    { [ -z "$until" ] || [ "$until" -gt "$(date +%s)" ]; } && exit 0
+    { [ -z "$until" ] || [ "$until" -gt "$(date +%s)" ]; } && MUTED=1
   fi
 fi
 
@@ -75,6 +77,14 @@ app_up() { [ -n "$APP_SOCK" ] && [ -S "$APP_SOCK" ]; }
 app_send() { app_up && /bin/zsh -f "$APP_SEND" "$APP_SOCK" "$1"; }
 # Voice answers need the app: without it, a permission prompt costs no more.
 [ "$1" = decide ] && ! app_up && exit 0
+# Muted, nothing is said. Without the app, nothing runs. With Earshot for Mac,
+# the hooks still run and hand their lines to the app marked muted, so its
+# session list stays current and it can show a banner for a session that needs
+# you. Voice answers, playback and the catch-up still stop here.
+if [ -n "$MUTED" ]; then
+  case "$1" in decide|play|release) exit 0 ;; esac
+  app_up || exit 0
+fi
 
 # mic_state: the helper's answer. 0 an app is capturing (a call, or you
 # dictating), 1 free, 2 the device runs but the app is unknown (macOS before 14.2).
@@ -175,11 +185,15 @@ synth() {
 speak() {
   local asked out dl tmp fb
   if app_up && app_send "$(jq -nc --arg t "$1" --arg k "$2" --arg s "$3" --arg n "${who:-}" --arg tr "${transcript:-}" \
+      --arg m "$MUTED" \
       '{v: 1, type: "say", text: $t, kind: $k, session: $s} + (if $n != "" then {name: $n} else {} end)
-       + (if $tr != "" and ($k == "need" or $k == "reply") then {transcript: $tr} else {} end)')"; then
+       + (if $tr != "" and ($k == "need" or $k == "reply") then {transcript: $tr} else {} end)
+       + (if $m != "" then {muted: true} else {} end)')"; then
     echo "$(date '+%F %T') the app took ($2): $1" >> "$LOG"
     return
   fi
+  # Muted: a line the app did not take is dropped, not said here.
+  [ -n "$MUTED" ] && return
   if [ "$2" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
   # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
   [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }

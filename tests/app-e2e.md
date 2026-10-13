@@ -114,3 +114,10 @@ bash scripts/send-integration.sh
 | Plugin missing | Disable the plugin (claude plugin disable earshot@earshot), then open the panel | The panel says the plugin is turned off with a Turn On button; after it, Settings, General shows Connected |
 | Plugin install on a fresh Mac | With no earshot marketplace or plugin, click Install in the welcome steps | Claude Code adds the marketplace and installs the plugin; the row shows Connected |
 | Interrupted model download | Quit Earshot while the speech models download, then reopen | The panel says the download didn't finish, with Finish Download |
+| Recap | Lock the screen for 10 minutes while one session finishes and another asks for an OK, then unlock | One line: "While you were away: ... needs you. ... finished." |
+| Recap during a call | The same, but join a call before you unlock | Nothing until the call ends; then the recap, and the lines it named are not said again one by one |
+| No recap | Lock for 5 minutes with a session finishing; or lock for 10 minutes while muted | Nothing is said when you unlock |
+| Banner while muted | Mute, then have a session ask for an OK | The first time, macOS asks to allow notifications; then one banner with the session's name and the line; its reminders add no second banner; nothing is said |
+| Banner click | Click the banner | The Activity window opens |
+| Banner in a call or full screen | In a call, or in a full screen app, have a session ask something | One banner; a session that finishes without a question shows none |
+| Banners off | Settings, Speaking: turn off the banner, mute, have a session ask for an OK | No banner |
