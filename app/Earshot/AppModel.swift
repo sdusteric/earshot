@@ -20,6 +20,10 @@ final class AppModel {
     var pluginWorking = false
     /// What the Activity window shows; set before opening it from the panel.
     var activityFilter: ActivityFilter = .all
+    /// Goes up when a click on a banner asks for the Activity window (see EarshotApp).
+    var activityRequests = 0
+    /// You turned Earshot's notifications off in System Settings.
+    var notificationsDenied = false
     var speechState: SpeechOut.State = .idle
     var listenPhase: Listener.Phase = .off
     var listenBlock: ListenBlock?
@@ -66,6 +70,7 @@ final class AppModel {
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
     /// The closed chime for a hold refused under secure input, once it is a real hold.
     @ObservationIgnored private var refusedHold: Task<Void, Never>?
+    @ObservationIgnored private var bannerPoster: BannerPoster?
 
     static let muteFile = URL.earshotDir.appending(path: "mute")
 
@@ -100,6 +105,22 @@ final class AppModel {
         mic = live.mic
         speakLevel = live.speakLevel
         readMute()
+        let poster = BannerPoster { [weak self] in self?.openActivity() }
+        bannerPoster = poster
+        Task {
+            await live.core.banners.connect(show: { await poster.show($0) }, remove: { poster.remove($0) })
+            notificationsDenied = await BannerPoster.denied()
+        }
+        // Locked or asleep is away; coming back after 10 minutes or more may say a recap.
+        Task {
+            var away = false
+            for await s in watch.changes() {
+                let now = s.locked || s.asleep
+                if now, !away { await live.core.wentAway() }
+                if !now, away { await live.core.cameBack(speak: box.value.recap && !Self.muteActive()) }
+                away = now
+            }
+        }
         Task {
             fullScreenNow = await live.fullScreen.isBusy
             for await busy in live.fullScreen.changes() {
@@ -203,6 +224,17 @@ final class AppModel {
     }
 
     func clearHistory() { Task { await historyStore?.clear() } }
+
+    /// A click on a banner: the Activity window, showing everything.
+    func openActivity() {
+        activityFilter = .all
+        activityRequests += 1
+    }
+
+    /// Re-reads whether notifications are allowed, which changes in System Settings.
+    func refreshNotifications() {
+        Task { notificationsDenied = await BannerPoster.denied() }
+    }
 
     /// A line Earshot started saying. Replies to what you said are saved with
     /// it by the voice loop, so confirm lines are skipped here.
@@ -464,6 +496,15 @@ final class AppModel {
         setMuted(nil)
     }
 
+    /// The mute file says muted now, read the way the plugin reads it, so a
+    /// mute set from the terminal counts too.
+    static func muteActive() -> Bool {
+        guard let text = try? String(contentsOf: muteFile, encoding: .utf8) else { return false }
+        let digits = text.filter { $0.isNumber }
+        if digits.isEmpty { return true }
+        return Date(timeIntervalSince1970: TimeInterval(digits) ?? 0) > Date()
+    }
+
     private func readMute() {
         guard let text = try? String(contentsOf: Self.muteFile, encoding: .utf8) else { return }
         let digits = text.filter { $0.isNumber }
@@ -495,6 +536,7 @@ final class AppModel {
         macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
         Engine: \(c.engine.rawValue), level \(c.level), style \(c.style)
         Full screen: \(c.fullScreen.rawValue), orb \(c.showOrb ? c.orbColor.rawValue : "off")
+        Recap: \(c.recap ? "on" : "off"), banners \(c.banner ? "on" : "off")\(notificationsDenied ? " (notifications not allowed)" : "")
         Lower other audio: \(c.duckEnabled ? "on, \(Int(c.duckLevel * 100))%" : "off")\(duckError.map { ", last error \($0)" } ?? "")
         Kokoro models: \(KokoroEngine.modelsPresent ? "present" : "missing")
         Sessions: \(sessions.count)

@@ -92,6 +92,12 @@ public struct EarshotConfig: Sendable, Equatable {
     public var fullScreen: FullScreen { nonEmpty("EARSHOT_FULLSCREEN").flatMap(FullScreen.init) ?? .silent }
     /// Earshot's own lines wait while an app is full screen.
     public var quietInFullScreen: Bool { fullScreen != .speak }
+    /// App only: after 10 minutes or more locked or asleep, say one line about
+    /// what changed. "off" turns it off.
+    public var recap: Bool { self["EARSHOT_RECAP"] != "off" }
+    /// App only: while muted, in a call or quiet for a full screen app, a
+    /// session that needs you shows a notification. "off" turns it off.
+    public var banner: Bool { self["EARSHOT_BANNER"] != "off" }
     /// The orb shows while Earshot listens, works or talks. "off" hides it.
     public var showOrb: Bool { self["EARSHOT_ORB"] != "off" }
     /// The orb's color: "state" changes it with what Earshot is doing.

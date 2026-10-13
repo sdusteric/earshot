@@ -2,20 +2,23 @@ import Foundation
 
 /// Kinds of spoken lines, named as the plugin names them (see `tell` in speak.sh).
 public enum LineKind: String, Codable, Sendable, CaseIterable {
-    case need, reply, alert, done, beat, ack, roll, intro, confirm
+    /// recap is the app's own line when you come back (see AwayRecap). The
+    /// plugin never sends it.
+    case need, reply, alert, done, beat, ack, roll, intro, confirm, recap
 
     /// Kept for the catch-up while another app uses the mic. Progress updates
     /// and "On it" are stale by then.
     public var isHeld: Bool {
         switch self {
-        case .need, .reply, .alert, .done: true
+        case .need, .reply, .alert, .done, .recap: true
         default: false
         }
     }
 
-    /// Catch-up order: lines that need you, then alerts, then finished lines.
+    /// Catch-up order: the recap, lines that need you, then alerts, then finished lines.
     public var catchUpRank: Int {
         switch self {
+        case .recap: -1
         case .need, .reply: 0
         case .alert: 1
         default: 2
@@ -44,11 +47,13 @@ public enum AppMessage: Sendable, Equatable {
         public var transcript: String?
         /// When the plugin sent it, in epoch milliseconds (app-send.zsh adds it).
         public var sent: Double?
+        /// The plugin is muted: the line is not said, but it can still show a banner.
+        public var muted: Bool?
 
         public init(text: String, kind: LineKind, session: String, name: String? = nil, transcript: String? = nil,
-                    sent: Double? = nil) {
+                    sent: Double? = nil, muted: Bool? = nil) {
             self.text = text; self.kind = kind; self.session = session
-            self.name = name; self.transcript = transcript; self.sent = sent
+            self.name = name; self.transcript = transcript; self.sent = sent; self.muted = muted
         }
 
         public init(from decoder: any Decoder) throws {
@@ -59,6 +64,7 @@ public enum AppMessage: Sendable, Equatable {
             name = try c.decodeIfPresent(String.self, forKey: .name)
             transcript = try c.decodeIfPresent(String.self, forKey: .transcript)
             sent = try c.decodeIfPresent(Double.self, forKey: .sent)
+            muted = try c.decodeIfPresent(Bool.self, forKey: .muted)
         }
     }
 

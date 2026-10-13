@@ -10,6 +10,11 @@ import Testing
         #expect(m == .say(.init(text: "Hi", kind: .need, session: "s1", name: "billing service", transcript: "/t.jsonl")))
     }
 
+    @Test func decodesAMutedSay() throws {
+        let m = try decode(#"{"v":1,"type":"say","text":"Hi","kind":"need","session":"s1","muted":true}"#)
+        #expect(m == .say(.init(text: "Hi", kind: .need, session: "s1", muted: true)))
+    }
+
     @Test func sayWithoutSessionIsAllowed() throws {
         let m = try decode(#"{"v":1,"type":"say","text":"Two sessions.","kind":"roll"}"#)
         #expect(m == .say(.init(text: "Two sessions.", kind: .roll, session: "")))

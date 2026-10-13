@@ -72,6 +72,106 @@ final class Box<T>: @unchecked Sendable {
         #expect(await player.played == ["one", "two", "three"])
     }
 
+    /// Away for an hour during a call: when you come back, the recap is said
+    /// once the call ends, and the lines it covers are not said again.
+    @Test func theRecapCoversTheLinesHeldWhileYouWereAway() async throws {
+        let player = FakePlayer()
+        let mic = FakeMic()
+        let speech = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: FakeDucker(), settle: .milliseconds(30))
+        let p = path()
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog())
+        try await core.start()
+        defer { core.stop() }
+        mic.set(true)
+        await core.wentAway(at: Date().addingTimeInterval(-3600))
+        _ = try send(p, #"{"v":1,"type":"status","session":"a","state":"done","name":"billing service"}"#)
+        _ = try send(p, #"{"v":1,"type":"say","text":"Fixed the rounding bug.","kind":"done","session":"a","name":"billing service"}"#)
+        _ = try send(p, #"{"v":1,"type":"say","text":"Hey, blog needs your OK.","kind":"need","session":"b","name":"blog"}"#)
+        for _ in 0..<100 where await speech.state != .holding { try await Task.sleep(for: .milliseconds(10)) }
+        let recap = await core.cameBack(speak: true)
+        #expect(recap?.text == "While you were away: Blog needs you. Billing service finished.")
+        mic.set(false)
+        for _ in 0..<200 where await player.played.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        await speech.waitUntilIdle()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await player.played == ["While you were away: Blog needs you. Billing service finished."])
+    }
+
+    @Test func noRecapWhenItMayNotSpeak() async throws {
+        let player = FakePlayer()
+        let speech = SpeechOut(synth: FakeSynth(), player: player, mic: FakeMic(), ducker: FakeDucker())
+        let p = path()
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog())
+        try await core.start()
+        defer { core.stop() }
+        await core.wentAway(at: Date().addingTimeInterval(-3600))
+        _ = try send(p, #"{"v":1,"type":"say","text":"Done.","kind":"done","session":"a","name":"blog","muted":true}"#)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await core.cameBack(speak: false) == nil)
+        await speech.waitUntilIdle()
+        #expect(await player.played.isEmpty)
+    }
+
+    /// Muted lines are never said. A session that needs you gets one banner,
+    /// a new one only after it went back to work.
+    @Test func mutedLinesMakeOneBannerForASessionThatNeedsYou() async throws {
+        let player = FakePlayer()
+        let speech = SpeechOut(synth: FakeSynth(), player: player, mic: FakeMic(), ducker: FakeDucker())
+        let p = path()
+        let banners = Banners()
+        let shown = Box<[Banner]>([]), removed = Box<[String]>([])
+        await banners.connect(show: { shown.value.append($0) }, remove: { removed.value.append($0) })
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog(), banners: banners)
+        try await core.start()
+        defer { core.stop() }
+        let need = #"{"v":1,"type":"say","text":"Hey, blog needs your OK.","kind":"need","session":"a","name":"blog","muted":true}"#
+        #expect(try send(p, need) == #"{"ok":true}"#)
+        _ = try send(p, #"{"v":1,"type":"say","text":"Fixed it.","kind":"done","session":"b","name":"docs","muted":true}"#)
+        _ = try send(p, #"{"v":1,"type":"say","text":"It's been 2 minutes. Blog is still waiting on you.","kind":"need","session":"a","name":"blog","muted":true}"#)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(shown.value == [Banner(session: "a", title: "Blog", body: "Hey, blog needs your OK.")])
+        _ = try send(p, #"{"v":1,"type":"status","session":"a","state":"working","name":"blog"}"#)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(removed.value == ["a"])
+        _ = try send(p, need)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(shown.value.count == 2)
+        await speech.waitUntilIdle()
+        #expect(await player.played.isEmpty)
+    }
+
+    @Test func aLineHeldForACallMakesABanner() async throws {
+        let mic = FakeMic()
+        let speech = SpeechOut(synth: FakeSynth(), player: FakePlayer(), mic: mic, ducker: FakeDucker())
+        let p = path()
+        let banners = Banners()
+        let shown = Box<[Banner]>([])
+        await banners.connect(show: { shown.value.append($0) }, remove: { _ in })
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog(), banners: banners)
+        try await core.start()
+        defer { core.stop() }
+        mic.set(true)
+        _ = try send(p, #"{"v":1,"type":"say","text":"Want one more round, or ship it?","kind":"done","session":"a","name":"blog"}"#)
+        _ = try send(p, #"{"v":1,"type":"say","text":"Fixed it.","kind":"done","session":"b","name":"docs"}"#)
+        for _ in 0..<100 where shown.value.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(shown.value.map(\.body) == ["Want one more round, or ship it?"])
+    }
+
+    @Test func noBannerWhenTheSettingIsOff() async throws {
+        let speech = SpeechOut(synth: FakeSynth(), player: FakePlayer(), mic: FakeMic(), ducker: FakeDucker())
+        let p = path()
+        let banners = Banners(enabled: { false })
+        let shown = Box<[Banner]>([])
+        await banners.connect(show: { shown.value.append($0) }, remove: { _ in })
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog(), banners: banners)
+        try await core.start()
+        defer { core.stop() }
+        _ = try send(p, #"{"v":1,"type":"say","text":"Hey, blog needs your OK.","kind":"need","session":"a","muted":true}"#)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(shown.value.isEmpty)
+    }
+
     @Test func rejectsWhatItCannotRead() async throws {
         let speech = SpeechOut(synth: FakeSynth(), player: FakePlayer(), mic: FakeMic(), ducker: FakeDucker())
         let p = path()

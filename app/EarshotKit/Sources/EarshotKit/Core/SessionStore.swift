@@ -54,6 +54,9 @@ public actor SessionStore {
             .sorted { (Self.rank($0.state), $0.updated) < (Self.rank($1.state), $1.updated) }
     }
 
+    /// The session's spoken name, when it reported one.
+    public func name(of session: String) -> String? { byID[session]?.name }
+
     private func prune() {
         let cutoff = clock().addingTimeInterval(-Self.maxAge)
         for (id, s) in byID where s.updated <= cutoff {

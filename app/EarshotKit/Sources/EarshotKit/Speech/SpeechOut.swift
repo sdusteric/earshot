@@ -100,6 +100,7 @@ public actor SpeechOut {
     private var holdLine: UUID?
     private var holdGeneration = 0
     private var lineConts: [UUID: AsyncStream<LineEvent>.Continuation] = [:]
+    private var heldConts: [UUID: AsyncStream<SpokenLine>.Continuation] = [:]
     private var lastMicBusy = false
     private var lastQuiet = false
     /// This run lowered other apps, so its end must bring them back.
@@ -166,6 +167,15 @@ public actor SpeechOut {
     public func sessionAnswered(_ session: String) {
         held.dropAnswered(session: session)
         updateState()
+    }
+
+    /// Says the recap like any other line: it waits during a call or a full
+    /// screen app. The held lines it sums up are dropped, so they are not
+    /// said again one by one.
+    public func sayRecap(_ recap: AwayRecap.Recap) async {
+        held.dropCovered(sessions: recap.sessions, since: recap.since)
+        updateState()
+        await enqueue(SpokenLine(text: recap.text, kind: .recap, session: ""))
     }
 
     /// You started talking (the wake word, the hotkey, a follow-up). The line
@@ -243,6 +253,17 @@ public actor SpeechOut {
     private func removeLineCont(_ id: UUID) { lineConts[id] = nil }
     private func emit(_ e: LineEvent) { lineConts.values.forEach { $0.yield(e) } }
 
+    /// Every line kept for later because of a call or a full screen app, each
+    /// time it is kept (a line can wait more than once).
+    public func heldLines() -> AsyncStream<SpokenLine> {
+        let (stream, cont) = AsyncStream<SpokenLine>.makeStream()
+        let id = UUID()
+        heldConts[id] = cont
+        cont.onTermination = { [weak self] _ in Task { await self?.removeHeldCont(id) } }
+        return stream
+    }
+    private func removeHeldCont(_ id: UUID) { heldConts[id] = nil }
+
     /// Returns when nothing is queued or playing.
     public func waitUntilIdle() async {
         if !running && queue.isEmpty { return }
@@ -254,7 +275,10 @@ public actor SpeechOut {
     private func hold(_ line: SpokenLine) {
         // A held line that is said again gets its hold anew when it starts.
         holdIDs.remove(line.id)
-        if line.kind.isHeld { log.info("held \(line.kind.rawValue, privacy: .public)") }
+        if line.kind.isHeld {
+            log.info("held \(line.kind.rawValue, privacy: .public)")
+            heldConts.values.forEach { $0.yield(line) }
+        }
         held.hold(line)
         updateState()
         // The mic may have freed while this line was on its way here, after

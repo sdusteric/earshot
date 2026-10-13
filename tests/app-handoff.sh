@@ -27,6 +27,7 @@ sleep 0.3
 expect "the app takes the finished line" "$(took '"type":"say".*Fixed the rounding bug')" 1
 expect "the plugin stays silent when the app took it" "$(said 'Fixed the rounding bug')" 0
 expect "the line carries its kind" "$(took '"kind":"done"')" 1
+expect "a line said while not muted is not marked muted" "$(took '"muted"')" 0
 expect "the line carries the time it was sent, in ms" "$(took '^{"sent":[0-9]\{13\},"v":1,"type":"say"')" 1
 [ "$(took '"type":"status".*"state":"done"')" -ge 1 ] && ok "status changes reach the app" || bad "status changes reach the app"
 
@@ -74,6 +75,17 @@ expect "a mute that ended does not mute" "$(said 'After mute line')" 1
 : > "$EARSHOT_MUTE"
 EARSHOT_APP_SOCK= bash "$S" say "Plain mute line" >/dev/null
 expect "an empty mute file still mutes" "$(said 'Plain mute line')" 0
+# Muted with the app running: the hooks still run, so the app can show a banner.
+fake ok; : > "$APPLOG"; : > "$OUT"
+hook start m1 '{}'; hook stop m1 '{"last_assistant_message":"🗣 Muted app line?"}'; sleep 0.3
+expect "muted with the app: the app gets the line, marked muted" "$(took '"type":"say".*Muted app line.*"muted":true')" 1
+expect "muted with the app: the plugin says nothing" "$(said 'Muted app line')" 0
+[ "$(took '"type":"status".*"session":"m1"')" -ge 1 ] && ok "muted with the app: statuses still reach the app" \
+  || bad "muted with the app: statuses still reach the app"
+fake reject; : > "$OUT"
+hook start m2 '{}'; hook stop m2 '{"last_assistant_message":"🗣 Muted refused line."}'
+expect "muted: a line the app refuses is not said" "$(said 'Muted refused line')" 0
+fake ok
 rm -f "$EARSHOT_MUTE"
 
 pkill -f "fake-app.pl $SOCK"
