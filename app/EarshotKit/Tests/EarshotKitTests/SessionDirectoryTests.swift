@@ -102,6 +102,14 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         #expect(r.id == "a")
     }
 
+    /// "How is reflow going" asked "which one?" between reflow and Project status.
+    @Test func theSpokenNameWinsOverASharedFolder() async {
+        let (d, _) = await directory([agent("a", "reflow"), agent("b", "reflow", name: "Project status")])
+        let names = await d.sessions.map(\.name).sorted()
+        guard case .one(let s) = await d.resolve("reflow") else { Issue.record("expected one; names \(names)"); return }
+        #expect(s.id == "a")
+    }
+
     @Test func anUnknownNameIsNone() async {
         let (d, _) = await directory([agent("a", "billing-service"), agent("c", "blog")])
         #expect(await d.resolve("payments") == .none)

@@ -206,6 +206,11 @@ public actor SessionDirectory {
                 && max(NameMatch.score(label, $0.label), NameMatch.score(label, $0.title)) >= Self.threshold }
             if hits.count == 1 { return .one(hits[0]) }
         }
+        // The name Earshot says a session by is unique, so saying it back picks that
+        // session, even when another session shares its folder ("reflow" and
+        // "Project status", both in reflow).
+        let spoken = sessions.filter { !t.isEmpty && NameMatch.normalize($0.name) == t }
+        if spoken.count == 1 { return .one(spoken[0]) }
         // In order: the project, the label, the title, the spoken name.
         for key in [\LiveSession.project, \.label, \.title, \.name] {
             let exact = sessions.filter { NameMatch.normalize($0[keyPath: key]) == t && !t.isEmpty }
