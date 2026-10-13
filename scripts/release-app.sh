@@ -65,8 +65,8 @@ make_dmg() {
   rm -rf "$stage"
 }
 
-# yml <key>: the first quoted value of <key> in project.yml.
-yml() { sed -n "s/^ *$1: *\"\([^\"]*\)\".*/\1/p" "$SPEC" | head -1; }
+# yml <key>: the first value of <key> in project.yml, quoted or not.
+yml() { sed -n -E "s/^ *$1: *\"?([^\"# ]*)\"? *(#.*)?$/\1/p" "$SPEC" | head -1; }
 
 # version_ge <a> <b>: true when version a is b or newer.
 version_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]; }
@@ -116,6 +116,7 @@ note() { echo "  note     $*"; }
 echo "Earshot for Mac release checks"
 echo "  version  $ver, build $build, tag $tag, team $team"
 
+[ -n "$team" ] || missing "DEVELOPMENT_TEAM is not set in app/project.yml." "Set it to the Apple team ID."
 for tool in xcodebuild codesign spctl ditto hdiutil shasum xmllint plutil git; do
   command -v "$tool" >/dev/null || missing "$tool is not on PATH." "Install Xcode and its command line tools."
 done
