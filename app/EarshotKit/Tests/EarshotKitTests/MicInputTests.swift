@@ -95,3 +95,37 @@ import Testing
         #expect(AudioDevices.chooseInput(setting: nil, inputs: [zoom, headset], outputIsBluetooth: true) == nil)
     }
 }
+
+@Suite struct MicOrderTests {
+    @Test func theMicThatWorkedGoesFirstAndRecentFailuresGoLast() {
+        let now = ContinuousClock.now
+        let o = MicInput.order(["BuiltIn", "USB", nil], lastGood: .some("USB"), failedAt: ["BuiltIn": now], now: now)
+        #expect(o == ["USB", nil, "BuiltIn"])
+    }
+
+    @Test func aFailureFromLongAgoIsTriedInItsPlaceAgain() {
+        let now = ContinuousClock.now
+        let o = MicInput.order(["BuiltIn", "USB", nil], lastGood: nil, failedAt: ["BuiltIn": now - .seconds(700)], now: now)
+        #expect(o == ["BuiltIn", "USB", nil])
+    }
+
+    @Test func theSystemDefaultCanBeTheOneThatWorked() {
+        let o = MicInput.order(["BuiltIn", nil], lastGood: .some(nil), failedAt: [:], now: .now)
+        #expect(o == [nil, "BuiltIn"])
+    }
+}
+
+@Suite struct LidClosedTests {
+    let builtIn = AudioDevices.Device(uid: "BuiltIn", name: "MacBook Pro Microphone", hasInput: true, isBluetooth: false, isBuiltIn: true)
+    let camera = AudioDevices.Device(uid: "USB", name: "Insta360 Link", hasInput: true, isBluetooth: false, isBuiltIn: false)
+
+    @Test func withTheLidClosedTheBuiltInMicIsSkipped() {
+        let c = AudioDevices.inputCandidates(setting: nil, inputs: [builtIn, camera], outputIsBluetooth: true, lidClosed: true)
+        #expect(c == ["USB", nil])
+    }
+
+    @Test func aBuiltInMicYouChoseIsStillTried() {
+        let c = AudioDevices.inputCandidates(setting: "BuiltIn", inputs: [builtIn, camera], outputIsBluetooth: true, lidClosed: true)
+        #expect(c.first == "BuiltIn")
+    }
+}
