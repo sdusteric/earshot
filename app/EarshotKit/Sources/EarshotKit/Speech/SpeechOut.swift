@@ -303,7 +303,10 @@ public actor SpeechOut {
             }
             if await mustWait(line) { hold(line); continue }
             let synth = self.synth
-            let made = await bounded(synthTimeout, URL?.none) { await synth.audio(for: line) }
+            // A long line plays sentence by sentence: the first starts while the rest are made.
+            let pieces = Self.pieces(of: line)
+            let first = pieces[0]
+            let made = await bounded(synthTimeout, URL?.none) { await synth.audio(for: first) }
             let url = made ?? Self.errorTone
             // A call may have started while the audio was made.
             if await mustWait(line) { hold(line); continue }
@@ -324,7 +327,7 @@ public actor SpeechOut {
             var playedToEnd = false
             if interrupted || bargedIn {
                 finished = false   // a call or your voice began while the ducking started
-            } else if let done = await playWithTimeout(url, id: line.id) {
+            } else if let done = await playPieces(url, then: made == nil ? [] : Array(pieces.dropFirst()), id: line.id) {
                 finished = done
                 playedToEnd = done
             } else {
@@ -365,6 +368,67 @@ public actor SpeechOut {
         let waiters = idleWaiters
         idleWaiters.removeAll()
         waiters.forEach { $0.resume() }
+    }
+
+    /// Plays a line's pieces in turn, making each next one while the one before
+    /// plays. Stops at a piece that is stopped, times out, or can't be made.
+    private func playPieces(_ first: URL, then rest: [SpokenLine], id: UUID) async -> Bool? {
+        let synth = self.synth, timeout = synthTimeout
+        func make(_ p: SpokenLine?) -> Task<URL?, Never>? {
+            p.map { p in Task { await bounded(timeout, URL?.none) { await synth.audio(for: p) } } }
+        }
+        var url = first
+        var later = rest[...]
+        var upcoming = make(later.popFirst())
+        while true {
+            guard let done = await playWithTimeout(url, id: id) else { upcoming?.cancel(); return nil }
+            guard done, !interrupted, !bargedIn, let next = upcoming else { upcoming?.cancel(); return done }
+            guard let nextURL = await next.value else { return true }
+            url = nextURL
+            upcoming = make(later.popFirst())
+        }
+    }
+
+    /// A line over 80 characters as its first sentence, then pieces of at
+    /// least 60 characters. Short lines stay whole and keep their cached audio.
+    static func pieces(of line: SpokenLine) -> [SpokenLine] {
+        guard line.text.count > 80 else { return [line] }
+        let sentences = Self.sentences(line.text)
+        guard sentences.count > 1 else { return [line] }
+        var texts = [sentences[0]]
+        var current = ""
+        for s in sentences.dropFirst() {
+            current = current.isEmpty ? s : current + " " + s
+            if current.count >= 60 { texts.append(current); current = "" }
+        }
+        if !current.isEmpty {
+            if texts.count > 1 { texts[texts.count - 1] += " " + current } else { texts.append(current) }
+        }
+        return texts.map {
+            SpokenLine(text: $0, kind: line.kind, session: line.session, transcript: line.transcript,
+                       received: line.received, name: line.name)
+        }
+    }
+
+    /// Splits after ".", "!" or "?" when a space and a capital, digit or quote follow.
+    static func sentences(_ text: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            current.append(chars[i])
+            if ".!?".contains(chars[i]), i + 2 < chars.count, chars[i + 1] == " ",
+               chars[i + 2].isUppercase || chars[i + 2].isNumber || chars[i + 2] == "\"" {
+                out.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+                i += 1   // the space
+            }
+            i += 1
+        }
+        let last = current.trimmingCharacters(in: .whitespaces)
+        if !last.isEmpty { out.append(last) }
+        return out
     }
 
     /// The player's result, or nil when it took longer than lineTimeout. A

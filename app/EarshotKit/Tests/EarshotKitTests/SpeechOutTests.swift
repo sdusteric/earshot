@@ -137,6 +137,20 @@ actor SlowEndDucker: Ducking {
         return s
     }
 
+    /// A long roll call starts after its first sentence is made, not the whole answer.
+    @Test func aLongLinePlaysSentenceBySentence() async {
+        let player = FakePlayer()
+        let s = await make(player)
+        let roll = "14 sessions. Finebrief is working on the onboarding emails. Reflow is waiting on you. Blog finished the draft."
+        var events = await s.lineEvents().makeAsyncIterator()
+        await s.enqueue(line(roll, .confirm, ""))
+        await eventually { await player.played.count == 2 }
+        // A short last sentence joins the piece before it.
+        #expect(await player.played == ["14 sessions.",
+                                        "Finebrief is working on the onboarding emails. Reflow is waiting on you. Blog finished the draft."])
+        if case .started(let l) = await events.next() { #expect(l.text == roll) } else { Issue.record("no start") }
+    }
+
     @Test func holdAfterPausesTheQueueUntilReleased() async {
         let player = FakePlayer(blocking: true)
         let s = await makeHolding(player)
@@ -665,5 +679,16 @@ actor SlowEndDucker: Ducking {
         await s.endListening()
         await eventually { await player.played.count == 2 }
         #expect(await player.played == ["Sent.", "x"])
+    }
+}
+
+@Suite struct LinePiecesTests {
+    @Test func shortLinesStayWhole() {
+        let l = SpokenLine(text: "Sorry, I didn't get that.", kind: .confirm, session: "")
+        #expect(SpeechOut.pieces(of: l) == [l])
+    }
+
+    @Test func sentencesSplitOnlyBeforeACapitalOrDigit() {
+        #expect(SpeechOut.sentences("It took 1.5 s. Then e.g. this ran. 3 left!") == ["It took 1.5 s.", "Then e.g. this ran.", "3 left!"])
     }
 }
