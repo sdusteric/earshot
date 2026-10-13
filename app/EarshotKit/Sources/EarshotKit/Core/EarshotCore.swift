@@ -177,7 +177,18 @@ public final class LiveSynth: Synthesizer, @unchecked Sendable {
         let c = config()
         guard c.engine == .kokoro else { return }
         await engine(for: c).prepare()
+        // Earshot's fixed answers go into the audio cache now, so the first
+        // "Sorry, I didn't get that." starts as fast as the hundredth.
+        for text in Self.fixedReplies {
+            _ = await audio(for: SpokenLine(text: text, kind: .confirm, session: ""))
+        }
     }
+
+    /// Answers Earshot gives in the same words every time.
+    static let fixedReplies = [
+        Dispatcher.didntGetIt, "Approved.", "Told it no.", "Couldn't answer it.",
+        "Hold the hotkey to answer it.", "That was too long for me. Try a shorter command.",
+    ]
 
     private func engine(for c: EarshotConfig) -> KokoroEngine {
         lock.withLock {
