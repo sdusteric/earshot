@@ -19,8 +19,16 @@ public enum RollCall {
         let total = sessions.count
         let head = "\(count(total)) session\(total == 1 ? "" : "s")."
         let ordered = sessions.sorted { (rank($0), $0.since ?? now) < (rank($1), $1.since ?? now) }
-        var parts = [head] + ordered.prefix(6).map { sentence($0, now: now) }
-        if total > 6 { parts.append("And \(total - 6) more.") }
+        // Sessions doing something are named; idle ones are only counted, so
+        // fourteen sessions don't mean fourteen "is idle"s.
+        let named = ordered.filter { effectiveState($0) != .open }
+        let idle = total - named.count
+        var parts = [head] + named.prefix(6).map { sentence($0, now: now) }
+        if named.count > 6 { parts.append("And \(named.count - 6) more.") }
+        if idle > 0 {
+            parts.append(named.isEmpty ? (idle == 1 ? "It's idle." : "All idle.")
+                         : idle == 1 ? "One other is idle." : "The other \(idle) are idle.")
+        }
         if let note = closing(sessions, hour: hour ?? Calendar.current.component(.hour, from: now)) { parts.append(note) }
         return parts.joined(separator: " ")
     }
@@ -47,7 +55,7 @@ public enum RollCall {
             guard let d = s.detail, !d.isEmpty else { return "\(n) finished." }
             let detail = d.prefix(1).lowercased() + d.dropFirst()
             return "\(n) finished: \(detail)\(".!?".contains(d.last ?? " ") ? "" : ".")"
-        default: return "\(n) is open."
+        default: return "\(n) is idle."
         }
     }
 

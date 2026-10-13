@@ -234,18 +234,32 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         #expect(line == "Three sessions. Billing service needs your OK to run the database migration. Invoice api is working, 12 minutes in. Docs site finished: fixed the broken links.")
         #expect(RollCall.line([], now: now) == "No Claude sessions are open.")
         #expect(RollCall.sentence(s("x", "blog", nil, busy: true), now: now) == "Blog is working.")
-        #expect(RollCall.sentence(s("x", "blog", nil), now: now) == "Blog is open.")
+        #expect(RollCall.sentence(s("x", "blog", nil), now: now) == "Blog is idle.")
     }
 
     @Test func rollCallNamesSixThenCounts() {
         let now = Date()
         let list = (1...8).map { i in
             LiveSession(id: "\(i)", pid: 1, kind: "interactive", cwd: "/p", project: "p\(i)", title: "", label: "",
-                        name: "p\(i)", busy: false, waiting: false, state: .open, detail: nil, since: now.addingTimeInterval(Double(i)))
+                        name: "p\(i)", busy: true, waiting: false, state: .working, detail: nil, since: now.addingTimeInterval(Double(i)))
         }
         let line = RollCall.line(list, now: now, hour: 14)
-        #expect(line.hasPrefix("Eight sessions. P1 is open."))
+        #expect(line.hasPrefix("Eight sessions. P1 is working, just started."))
         #expect(line.hasSuffix("And 2 more. Nothing needs you."))
+    }
+
+    /// Idle sessions are counted, not named one by one.
+    @Test func idleSessionsAreCounted() {
+        let now = Date()
+        func s(_ name: String, _ state: SessionState) -> LiveSession {
+            LiveSession(id: name, pid: 1, kind: "interactive", cwd: "/p", project: name, title: "", label: "", name: name,
+                        busy: state == .working, waiting: false, state: state, detail: nil, since: now)
+        }
+        #expect(RollCall.line([s("blog", .working), s("docs", .open), s("api", .open)], now: now, hour: 14)
+                == "Three sessions. Blog is working, just started. The other 2 are idle. Nothing needs you.")
+        #expect(RollCall.line([s("blog", .working), s("docs", .open)], now: now, hour: 14)
+                == "Two sessions. Blog is working, just started. One other is idle. Nothing needs you.")
+        #expect(RollCall.line([s("docs", .open), s("api", .open)], now: now, hour: 14) == "Two sessions. All idle. Nothing needs you.")
     }
 }
 
@@ -270,7 +284,7 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
 
     @Test func theRollCallEndsWithWhatItNoticed() {
         let quiet = [s("blog", .done), s("docs", .open)]
-        #expect(RollCall.line(quiet, now: now, hour: 15) == "Two sessions. Blog finished. Docs is open. Nothing needs you.")
+        #expect(RollCall.line(quiet, now: now, hour: 15) == "Two sessions. Blog finished. One other is idle. Nothing needs you.")
         let late = [s("billing", .working, mins: 5)]
         #expect(RollCall.line(late, now: now, hour: 1) == "One session. Billing is working, 5 minutes in. It's past midnight, and one's still going.")
         let waiting = [s("reflow", .needs, mins: 2)]
