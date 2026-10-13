@@ -8,7 +8,7 @@ cask "earshot" do
 
   url "https://github.com/sdusteric/earshot/releases/download/app-v#{version}/Earshot-#{version}.dmg"
   name "Earshot"
-  desc "Voice notifications for Claude Code"
+  desc "Voice companion for Claude Code sessions"
   homepage "https://github.com/sdusteric/earshot"
 
   livecheck do
@@ -21,8 +21,15 @@ cask "earshot" do
 
   app "Earshot.app"
 
+  uninstall quit: "com.earshot.app"
+
+  # Left out on purpose: ~/.cache/fluidaudio (the Kokoro voice) and ~/.config/earshot
+  # (settings and the ElevenLabs key). The Earshot plugin uses both, so removing them
+  # would break plugin-only use.
   zap trash: [
     "~/Library/Application Support/Earshot",
+    "~/Library/Application Support/FluidAudio",
+    "~/Library/Saved Application State/com.earshot.app.savedState",
     "~/Library/Caches/com.earshot.app",
     "~/Library/HTTPStorages/com.earshot.app",
     "~/Library/Preferences/com.earshot.app.plist",
