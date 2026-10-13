@@ -28,7 +28,7 @@ struct DialLayout {
     init(size: CGFloat, now: Date, sessions: [(id: String, name: String, color: Color, active: Bool)]) {
         self.size = size
         self.now = now
-        outer = size / 2 - 52
+        outer = size / 2 - 76   // room for the hour labels at the sides
         orbSize = size * 0.3
         let inner = orbSize / 2 + 30
         let count = CGFloat(sessions.count + 1)
@@ -103,7 +103,7 @@ struct DayDial: View {
     let focusLane: String?
     let select: (Date?) -> Void
     @Environment(AppModel.self) private var model
-    @State private var hover: HistoryEntry?
+    @State private var hover: Dot?
 
     var body: some View {
         ZStack {
@@ -117,7 +117,7 @@ struct DayDial: View {
                 .help("Click and say a command")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Listens for one command")
-            if let hover, let p = layout.position(hover) { callout(hover, at: p) }
+            if let hover { callout(hover) }
         }
         .frame(width: layout.size, height: layout.size)
         .contentShape(.rect)
@@ -128,8 +128,8 @@ struct DayDial: View {
             }
         }
         .gesture(SpatialTapGesture().onEnded { v in
-            if let e = nearest(to: v.location) {
-                select(e.date)
+            if let d = nearest(to: v.location) {
+                select(d.entry.date)
             } else {
                 select(layout.time(at: v.location))
             }
@@ -146,14 +146,33 @@ struct DayDial: View {
         return "Today around the orb. \(entries.count) \(entries.count == 1 ? "line" : "lines"), the newest at \(t)\(about)."
     }
 
-    private func nearest(to p: CGPoint) -> HistoryEntry? {
-        var best: (HistoryEntry, CGFloat)?
-        for e in entries {
-            guard let q = layout.position(e) else { continue }
-            let d = hypot(q.x - p.x, q.y - p.y)
-            if d < 12, d < (best?.1 ?? .infinity) { best = (e, d) }
+    /// One drawn dot: the newest line there, and the older ones merged into it.
+    struct Dot {
+        let entry: HistoryEntry
+        let point: CGPoint
+        var count = 1
+        var oldest: Date
+    }
+
+    /// The dots as drawn: lines that would sit on top of each other on a ring
+    /// become one dot, so hover and click reach every dot that shows.
+    private var dots: [Dot] {
+        var out: [Dot] = []
+        for e in entries.sorted(by: { $0.date > $1.date }) {
+            guard let p = layout.position(e) else { continue }
+            if let i = out.firstIndex(where: { hypot($0.point.x - p.x, $0.point.y - p.y) < 8 }) {
+                out[i].count += 1
+                out[i].oldest = min(out[i].oldest, e.date)
+            } else {
+                out.append(Dot(entry: e, point: p, oldest: e.date))
+            }
         }
-        return best?.0
+        return out
+    }
+
+    private func nearest(to p: CGPoint) -> Dot? {
+        dots.filter { hypot($0.point.x - p.x, $0.point.y - p.y) < 12 }
+            .min { hypot($0.point.x - p.x, $0.point.y - p.y) < hypot($1.point.x - p.x, $1.point.y - p.y) }
     }
 
     private func draw(_ gc: inout GraphicsContext) {
@@ -180,7 +199,8 @@ struct DayDial: View {
             p.move(to: CGPoint(x: c.x + cos(a) * (layout.outer + 20), y: c.y + sin(a) * (layout.outer + 20)))
             p.addLine(to: CGPoint(x: c.x + cos(a) * (layout.outer + (major ? 30 : 25)), y: c.y + sin(a) * (layout.outer + (major ? 30 : 25))))
             gc.stroke(p, with: .color(DialPalette.tick), lineWidth: major ? 1.5 : 1)
-            if major {
+            let back = layout.now.timeIntervalSince(t)
+            if major, back > 1800, back < DialLayout.day - 1800 {   // never on top of "now"
                 let lp = CGPoint(x: c.x + cos(a) * (layout.outer + 33), y: c.y + sin(a) * (layout.outer + 33))
                 let label = Text(t, format: .dateTime.hour()).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 gc.draw(label, at: lp, anchor: anchor(for: a))
@@ -221,12 +241,19 @@ struct DayDial: View {
                     // The latest stretch runs on to now while the session works or waits, if it spoke lately.
                     let runsOn = i == stretches.count - 1 && lane.active && layout.now.timeIntervalSince(span.1) <= 1800
                     let end = runsOn ? layout.now : span.1
-                    let start = min(span.0, end.addingTimeInterval(-300))   // even a single line shows a short arc
-                    arc(&gc, from: start, to: end, radius: lane.radius,
+                    // A stretch shorter than a dot is just its dot.
+                    guard end.timeIntervalSince(span.0) >= 900 else { continue }
+                    arc(&gc, from: span.0, to: end, radius: lane.radius,
                         color: lane.color.opacity(focused ? 0.55 : 0.2), width: 6)
                 }
             } else {
                 gc.stroke(ring, with: .color(DialPalette.tick.opacity(focused ? 0.7 : 0.3)), lineWidth: 1)
+            }
+            // Working or waiting on you now: a mark at now in its state color, so
+            // the dial agrees with the recap even when the session has said nothing lately.
+            if lane.active {
+                arc(&gc, from: layout.now.addingTimeInterval(-1200), to: layout.now, radius: lane.radius,
+                    color: lane.color.opacity(focused ? 0.9 : 0.3), width: 6)
             }
         }
 
@@ -243,11 +270,9 @@ struct DayDial: View {
 
         // A dot per line: nearer now is brighter, a match for the search is larger.
         // Lines that would sit on top of each other on a ring draw as one dot.
-        var drawn: [CGPoint] = []
-        for e in entries.sorted(by: { $0.date > $1.date }) {
-            if let p = layout.position(e), drawn.contains(where: { hypot($0.x - p.x, $0.y - p.y) < 8 }) { continue }
-            if let p = layout.position(e) { drawn.append(p) }
-            guard let lane = layout.lane(for: e), let p = layout.position(e) else { continue }
+        for dot in dots {
+            let e = dot.entry, p = dot.point
+            guard let lane = layout.lane(for: e) else { continue }
             let age = layout.now.timeIntervalSince(e.date) / DialLayout.day
             let dim = focusLane == nil || focusLane == lane.id ? 1.0 : 0.3
             let lit = highlighted.isEmpty || highlighted.contains(e.id)
@@ -286,9 +311,16 @@ struct DayDial: View {
         UnitPoint(x: 0.5 - cos(a) * 0.5, y: 0.5 - sin(a) * 0.5)
     }
 
-    private func callout(_ e: HistoryEntry, at p: CGPoint) -> some View {
+    private func callout(_ dot: Dot) -> some View {
+        let e = dot.entry, p = dot.point
         let right = p.x < layout.size / 2
+        let f = Date.FormatStyle().hour().minute()
         return VStack(alignment: .leading, spacing: 3) {
+            if dot.count > 1 {
+                Text("\(dot.count) lines, \(dot.oldest.formatted(f)) to \(e.date.formatted(f)). The newest:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Text(e.kind == .heard ? "\u{201C}\(e.text)\u{201D}" : e.text).font(.callout).lineLimit(3)
             if let reply = e.reply { Text(reply).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             HStack(spacing: 6) {

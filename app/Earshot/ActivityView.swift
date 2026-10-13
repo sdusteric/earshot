@@ -13,6 +13,13 @@ struct ActivityView: View {
     @State private var confirmClear = false
     @Environment(\.controlActiveState) private var controlActiveState
 
+    /// The stretch to shade: since you last looked away, or on a first open
+    /// (nothing stored yet), since the start of today's history, which may
+    /// load after the window appears.
+    private var shadeFrom: Date? {
+        since ?? (lastSeenStamp == 0 ? model.history.first?.date : nil)
+    }
+
     /// When you last looked away from this window; the first time, the start of today's history.
     private var lastLooked: Date? {
         lastSeenStamp > 0 ? Date(timeIntervalSince1970: lastSeenStamp) : model.history.first?.date
@@ -69,7 +76,7 @@ struct ActivityView: View {
             let dialSize = min(geo.size.height - 32, geo.size.width * 0.56)
             let layout = DialLayout(size: dialSize, now: now, sessions: lanes)
             HStack(alignment: .top, spacing: 0) {
-                DayDial(entries: dayEntries(now), layout: layout, since: since, selection: selection,
+                DayDial(entries: dayEntries(now), layout: layout, since: shadeFrom, selection: selection,
                         highlighted: searchMatches, focusLane: focusLane) { picked in
                     pick(picked)
                 }
@@ -102,7 +109,7 @@ struct ActivityView: View {
 
             HStack(alignment: .firstTextBaseline) {
                 Text(listTitle).font(.headline)
-                if selection == nil, let since, since < now, now.timeIntervalSince(since) > 120 {
+                if selection == nil, let since = shadeFrom, since < now, now.timeIntervalSince(since) > 120 {
                     Text("Shaded on the dial: since \(since.formatted(date: .omitted, time: .shortened))")
                         .font(.callout)
                         .foregroundStyle(.secondary)
