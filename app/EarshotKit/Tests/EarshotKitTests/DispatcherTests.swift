@@ -234,7 +234,8 @@ actor FakeTransport: SessionTransport {
 
     @Test func statusForEveryoneIsTheRollCall() async {
         let (d, _, _) = make([agent("a", "billing-service", status: "busy"), agent("b", "blog")])
-        #expect(await d.run(.status(target: nil)).line == "Two sessions. Billing service is working. Blog is open.")
+        // Then a closing note, which depends on the hour.
+        #expect(await d.run(.status(target: nil)).line?.hasPrefix("Two sessions. Billing service is working. Blog is open. ") == true)
     }
 
     @Test func statusForOne() async {

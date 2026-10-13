@@ -139,9 +139,13 @@ public enum Grammar {
         "status update", "give me a status update", "give me a status", "status report", "what's happening",
         "what's going on", "what is going on", "how's everything going", "how is everything going",
         "how's everything", "what's the status", "everyone's status",
-        // Asked of Earshot itself, these mean the same: how are things going.
+    ]
+
+    /// Asked of Earshot itself: a short answer with what needs you.
+    static let greetings: Set<String> = [
         "how are you doing", "how are you", "how you doing", "how're you doing", "how's it going",
-        "how is it going", "how are things", "how are things going", "what's up", "what's new",
+        "how is it going", "how are things", "how are things going", "what's up", "what's new", "how are we doing",
+        "how's it looking", "how are you doing today", "hi", "hello", "hey there", "hi there", "hello there",
     ]
 
     /// (starts with, ends with) around a target.
@@ -215,6 +219,7 @@ public enum Grammar {
 
     private static func status(_ w: Words, known: [String]) -> Command? {
         if everyone.contains(w.key) { return .status(target: nil) }
+        if greetings.contains(w.key) { return .greet }
         for (pre, post) in statusShapes {
             guard var t = pre.isEmpty ? Optional(w) : w.after([pre]) else { continue }
             if !post.isEmpty { guard let b = t.before([post]) else { continue }; t = b }

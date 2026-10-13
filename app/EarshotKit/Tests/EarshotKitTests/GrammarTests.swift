@@ -10,9 +10,10 @@ import Testing
         ("what is everyone doing", .status(target: nil)),
         ("Um, what's everybody doing?", .status(target: nil)),
         ("Roll call.", .status(target: nil)),
-        ("Hey, how are you doing?", .status(target: nil)),
-        ("How's it going?", .status(target: nil)),
-        ("What's up?", .status(target: nil)),
+        ("Hey, how are you doing?", .greet),
+        ("How's it going?", .greet),
+        ("What's up?", .greet),
+        ("Hello.", .greet),
         ("Status.", .status(target: nil)),
         ("What's going on?", .status(target: nil)),
         ("Can you give me a status update?", .status(target: nil)),
@@ -154,7 +155,9 @@ import Testing
     }
 
     @Test func itIsAStatusPronoun() {
-        #expect(Grammar.parse("How's it going", known: Self.known) == .status(target: nil))
+        #expect(Grammar.parse("How's it doing", known: Self.known) == .status(target: nil))
+        // Asked of Earshot, "how's it going" is a greeting.
+        #expect(Grammar.parse("How's it going", known: Self.known) == .greet)
     }
 
     // Round 1 (G3): an answer's target must look like a known session.

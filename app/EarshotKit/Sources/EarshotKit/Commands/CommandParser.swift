@@ -59,8 +59,8 @@ public struct CommandParser: Sendable {
                 return .unknown
             }
             return .answer(allow: approves, target: target)
-        case .unknown:
-            return .unknown
+        case .greet, .unknown:
+            return c
         }
     }
 

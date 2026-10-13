@@ -283,6 +283,7 @@ public actor VoiceLoop: ListenObserver {
         switch c {
         case .send: "send"
         case .status: "status"
+        case .greet: "greet"
         case .stop: "stop"
         case .start: "start"
         case .answer: "answer"

@@ -8,6 +8,9 @@ public struct SessionInfo: Sendable, Equatable, Identifiable {
     public var updated: Date
     public var project: String?
     public var title: String?
+    /// When the session entered this state. Unlike updated, a repeat of the
+    /// same state leaves it alone, so "at it for an hour" counts the whole run.
+    public var since: Date = .distantPast
 }
 
 /// Open sessions, from the plugin's status messages. Sessions that need you
@@ -38,9 +41,11 @@ public actor SessionStore {
             let name = [status.name, status.project, byID[status.session]?.name]
                 .compactMap { $0 }.first { !$0.isEmpty } ?? "a session"
             let old = byID[status.session]
+            let now = clock()
             byID[status.session] = SessionInfo(id: status.session, name: name, state: status.state,
-                                               detail: status.detail, updated: clock(),
-                                               project: status.project ?? old?.project, title: status.title ?? old?.title)
+                                               detail: status.detail, updated: now,
+                                               project: status.project ?? old?.project, title: status.title ?? old?.title,
+                                               since: old.map { $0.state == status.state ? $0.since : now } ?? now)
         }
         prune()
         let list = sessions

@@ -5,6 +5,9 @@
 //   listen MINUTES           the live cascade on the mic, with CPU use per minute
 //   parse-eval TSV           the command parser on tests/eval/parser-cases.tsv
 //   wake-eval DIR            wake word and transcripts on recordings (DIR/manifest.tsv)
+//   hear WAV...              a recorded command as the app takes it: Parakeet with the
+//                            live session names, the parser, then the answer for a
+//                            status or greeting (read-only: nothing is sent)
 //   send TARGET PROMPT       one prompt through the real directory and dispatcher
 //   send-id ID PROMPT        the same, to the session with this id
 import AVFoundation
@@ -28,6 +31,7 @@ let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
         case "listen": try await listen(minutes: Double(a.count > 1 ? a[1] : "5") ?? 5)
         case "parse-eval" where a.count == 2: try await parseEval(URL(fileURLWithPath: a[1]))
         case "wake-eval" where a.count == 2: try await wakeEval(URL(fileURLWithPath: a[1]))
+        case "hear" where a.count >= 2: try await hear(a.dropFirst().map { URL(fileURLWithPath: $0) })
         case "send" where a.count == 3: await send(target: a[1], prompt: a[2])
         case "send-id" where a.count == 3: await send(id: a[1], prompt: a[2])
         default:
@@ -318,6 +322,28 @@ func wakeEval(_ dir: URL) async throws {
 }
 
 /// Sends one prompt through the real directory and dispatcher, as a voice command would.
+func hear(_ files: [URL]) async throws {
+    guard let (directory, dispatcher) = rig() else { return }
+    await directory.refresh()
+    let names = await directory.vocabulary()
+    print("sessions: \(names.joined(separator: ", "))")
+    let transcriber = ParakeetTranscriber()
+    let parser = CommandParser(model: FoundationCommandModel())
+    for url in files {
+        let samples = try AudioConverter().resampleAudioFile(url)
+        let t = ContinuousClock.now
+        let (text, plain) = try await transcriber.transcribeBoth(samples, vocabulary: names)
+        let c = await parser.parse(text, plain: plain, sessions: names)
+        var line = "(not run: it would act on a session)"
+        switch c {
+        case .greet, .status, .unknown: line = await dispatcher.run(c).line ?? "(nothing said)"
+        default: break
+        }
+        print("\(url.lastPathComponent): heard \"\(text)\"\(plain.map { " (plain: \"\($0)\")" } ?? "") -> \(c), \(ms(t)) ms")
+        print("  says: \(line)")
+    }
+}
+
 func send(target: String, prompt: String) async {
     guard let (_, dispatcher) = rig() else { return }
     let o = await dispatcher.run(.send(target: target, prompt: prompt))

@@ -6,6 +6,8 @@ public enum Command: Sendable, Equatable {
     case send(target: String?, prompt: String)
     /// No target: the roll call.
     case status(target: String?)
+    /// "How are you doing?": a short answer with what needs you, not the whole roll call.
+    case greet
     /// now: stop at once (background sessions), else after the current step.
     case stop(target: String?, now: Bool)
     case start(project: String, prompt: String?)

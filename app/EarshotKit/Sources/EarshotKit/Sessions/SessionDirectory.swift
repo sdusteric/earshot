@@ -142,7 +142,7 @@ public actor SessionDirectory {
             let label = title.isEmpty ? "" : await labeler.label(session: a.sessionId, title: title)
             merged.append(LiveSession(id: a.sessionId, pid: a.pid, kind: a.kind, cwd: a.cwd, project: project, title: title,
                                       label: label, name: project, busy: a.isBusy, waiting: a.isWaiting,
-                                      state: info?.state, detail: info?.detail, since: info?.updated))
+                                      state: info?.state, detail: info?.detail, since: info?.since))
         }
         // Sessions only the plugin knows, when agents failed: a session that
         // died without a closed message must not linger as a ghost.
@@ -153,7 +153,7 @@ public actor SessionDirectory {
             merged.append(LiveSession(id: id, pid: old?.pid, kind: old?.kind ?? "unknown", cwd: old?.cwd ?? "", project: info.project ?? info.name,
                                       title: title, label: label, name: info.name, busy: info.state == .working,
                                       waiting: info.state == .needs, state: info.state,
-                                      detail: info.detail, since: info.updated))
+                                      detail: info.detail, since: info.since))
         }
         let names = SpokenNames.names(merged.map { .init(id: $0.id, project: $0.project, title: $0.title, label: $0.label) })
         for i in merged.indices { merged[i].name = names[merged[i].id] ?? merged[i].project }

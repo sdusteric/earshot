@@ -41,6 +41,8 @@ public actor Dispatcher {
     /// Claude Code versions whose sockets did not work, for this run only.
     private var brokenVersions: Set<String> = []
     private var loggedNoVersion = false
+    /// The greeting's last opener, so two in a row don't start the same way.
+    private var lastOpener = -1
     private let log = Logger(subsystem: "com.earshot.app", category: "dispatch")
 
     public init(directory: SessionDirectory, store: SessionStore, transport: any SessionTransport, runner: any ClaudeRunner,
@@ -51,6 +53,13 @@ public actor Dispatcher {
         self.pollInterval = pollInterval
     }
 
+    private func freshOpener(_ n: Int) -> Int {
+        var i = Int.random(in: 0..<n)
+        if n > 1, i == lastOpener { i = (i + 1) % n }
+        lastOpener = i
+        return i
+    }
+
     public func run(_ c: Command) async -> Outcome {
         switch c {
         case .unknown:
@@ -58,6 +67,9 @@ public actor Dispatcher {
         case .status(nil):
             await directory.refresh(ifOlderThan: 2)
             return Outcome(line: RollCall.line(await directory.sessions, now: Date()))
+        case .greet:
+            await directory.refresh(ifOlderThan: 2)
+            return Outcome(line: RollCall.greeting(await directory.sessions, now: Date(), pick: freshOpener))
         case .answer(let allow, let target):
             return await answer(allow: allow, target: target)
         case .start(let project, let prompt):

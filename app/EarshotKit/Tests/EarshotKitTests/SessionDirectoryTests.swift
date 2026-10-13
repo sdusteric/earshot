@@ -221,7 +221,8 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
                         busy: busy, waiting: false, state: state, detail: detail, since: now.addingTimeInterval(-mins * 60))
         }
         let line = RollCall.line([s("a", "invoice api", .working, mins: 12), s("b", "docs site", .done, detail: "fixed the broken links"),
-                                  s("c", "billing service", .needs, detail: "needs your OK to run the database migration")], now: now)
+                                  s("c", "billing service", .needs, detail: "needs your OK to run the database migration")], now: now,
+                                 hour: 14)
         #expect(line == "Three sessions. Billing service needs your OK to run the database migration. Invoice api is working, 12 minutes in. Docs site finished: fixed the broken links.")
         #expect(RollCall.line([], now: now) == "No Claude sessions are open.")
         #expect(RollCall.sentence(s("x", "blog", nil, busy: true), now: now) == "Blog is working.")
@@ -234,8 +235,86 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
             LiveSession(id: "\(i)", pid: 1, kind: "interactive", cwd: "/p", project: "p\(i)", title: "", label: "",
                         name: "p\(i)", busy: false, waiting: false, state: .open, detail: nil, since: now.addingTimeInterval(Double(i)))
         }
-        let line = RollCall.line(list, now: now)
+        let line = RollCall.line(list, now: now, hour: 14)
         #expect(line.hasPrefix("Eight sessions. P1 is open."))
-        #expect(line.hasSuffix("And 2 more."))
+        #expect(line.hasSuffix("And 2 more. Nothing needs you."))
+    }
+}
+
+/// Earshot's voice: what it noticed, in a coworker's words.
+@Suite struct PersonalityTests {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func s(_ name: String, _ state: SessionState?, mins: Double = 0, detail: String? = nil) -> LiveSession {
+        LiveSession(id: name, pid: 1, kind: "interactive", cwd: "/p", project: name, title: "", label: "", name: name,
+                    busy: state == .working, waiting: state == .needs, state: state, detail: detail,
+                    since: now.addingTimeInterval(-mins * 60))
+    }
+
+    @Test func aLongRunAndALongWaitAreMentioned() {
+        #expect(RollCall.sentence(s("billing", .working, mins: 65), now: now) == "Billing's been at it for about an hour.")
+        #expect(RollCall.sentence(s("docs", .working, mins: 40), now: now) == "Docs has been at it for 40 minutes.")
+        #expect(RollCall.sentence(s("reflow", .needs, mins: 25), now: now) == "Reflow's been waiting on you for 25 minutes.")
+        #expect(RollCall.sentence(s("reflow", .needs, mins: 3), now: now) == "Reflow is waiting on you.")
+        #expect(RollCall.sentence(s("blog", .needs, mins: 130, detail: "wants to push to main"), now: now)
+                == "Blog wants to push to main. That was about 2 hours ago.")
+    }
+
+    @Test func theRollCallEndsWithWhatItNoticed() {
+        let quiet = [s("blog", .done), s("docs", .open)]
+        #expect(RollCall.line(quiet, now: now, hour: 15) == "Two sessions. Blog finished. Docs is open. Nothing needs you.")
+        let late = [s("billing", .working, mins: 5)]
+        #expect(RollCall.line(late, now: now, hour: 1) == "One session. Billing is working, 5 minutes in. It's past midnight, and one's still going.")
+        let waiting = [s("reflow", .needs, mins: 2)]
+        #expect(RollCall.line(waiting, now: now, hour: 15) == "One session. Reflow is waiting on you.")
+    }
+
+    @Test func aGreetingIsShortAndSaysWhatMatters() {
+        let all = [s("blog", .done), s("docs", .done), s("reflow", .needs, mins: 12), s("billing", .working, mins: 80),
+                   s("api", .working, mins: 4)]
+        #expect(RollCall.greeting(all, now: now, hour: 15, pick: { _ in 0 })
+                == "Doing okay. Reflow's been waiting on you for 12 minutes. Two are working. Billing's been at it for over an hour.")
+        #expect(RollCall.greeting([s("blog", .done)], now: now, hour: 15, pick: { _ in 1 })
+                == "All good here. Nothing's running, and nothing needs you.")
+        #expect(RollCall.greeting([s("api", .working, mins: 4), s("ui", .working, mins: 2)], now: now, hour: 23, pick: { _ in 2 })
+                == "Pretty good, thanks. Two are working. It's getting late, and two are still going.")
+        #expect(RollCall.greeting([], now: now, hour: 15, pick: { _ in 3 }) == "Not bad. No sessions are open.")
+    }
+
+    @Test func aGreetingNamesTwoThatNeedYouThenCounts() {
+        let all = [s("a", .needs), s("b", .failed), s("c", .stuck)]
+        #expect(RollCall.greeting(all, now: now, hour: 15, pick: { _ in 1 })
+                == "Good, mostly. A is waiting on you. B hit an error. And 1 more need you. Nothing else is running.")
+    }
+
+    @Test func durationsReadLikeSpeech() {
+        #expect(RollCall.duration(30) == "a minute")
+        #expect(RollCall.duration(12 * 60) == "12 minutes")
+        #expect(RollCall.duration(58 * 60) == "about an hour")
+        #expect(RollCall.duration(85 * 60) == "over an hour")
+        #expect(RollCall.duration(170 * 60) == "about 3 hours")
+    }
+
+    /// A state that repeats keeps its start time, so a long run counts from its start.
+    @Test func aRepeatedStateKeepsWhenItBegan() async {
+        let clock = TestClock(Date(timeIntervalSince1970: 1000))
+        let store = SessionStore(clock: { clock.now })
+        await store.apply(AppMessage.Status(session: "s", state: .working))
+        clock.now = Date(timeIntervalSince1970: 2000)
+        await store.apply(AppMessage.Status(session: "s", state: .working))
+        #expect(await store.sessions.first?.since == Date(timeIntervalSince1970: 1000))
+        clock.now = Date(timeIntervalSince1970: 3000)
+        await store.apply(AppMessage.Status(session: "s", state: .done))
+        #expect(await store.sessions.first?.since == Date(timeIntervalSince1970: 3000))
+    }
+}
+
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+    init(_ d: Date) { value = d }
+    var now: Date {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }
