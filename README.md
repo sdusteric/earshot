@@ -94,25 +94,59 @@ The blind votes are from the [Artificial Analysis Speech Arena](https://artifici
 
 ## Earshot for Mac (optional)
 
-Earshot for Mac is a menu bar app that works with the plugin. While it runs,
-it plays every line instead of the plugin:
+Earshot for Mac is a menu bar app that works with the plugin. It needs macOS 26
+or later. While it runs, it plays every line instead of the plugin. When it is
+not running, the plugin speaks for itself.
 
-- It turns music and videos down while it talks or listens, then back up.
-- Hold Right Option and talk, or turn on the wake word, "Hey Earshot". You can:
-  - send a session a prompt: "tell billing service to run the tests"
-  - ask what is going on: "what's everyone doing?" or "what's billing doing?"
-  - stop a session: "stop billing", or "stop billing now" for a background session
-  - start a session: "start a new session in blog to fix the header"
-  - answer a permission prompt: after "billing service needs your OK", say "yes" or "no"
-- Everything it hears stays on your Mac. Audio is kept in memory for a few seconds and never saved or sent. Commands are understood on the Mac too (Apple Intelligence, with a fixed set of phrases when it is off).
-- The menu shows your open sessions, the ones that need you first.
-- "Mute for 1 hour" is in the menu.
-- Settings for the voice, the level, the style and listening are in one place.
+**Menu bar panel.** It shows the status, your open sessions (the ones that need
+you first), recent lines you can replay, and these items:
 
-Listening needs macOS 26, the microphone permission, Input Monitoring for the hotkey, and about 1 GB of speech models, downloaded once.
+- Mute for 1 hour, until tomorrow morning, or until you unmute.
+- Activity, Settings, and Quit.
 
-It needs macOS 26 or later. The plugin works the same without it: when the app
-is not running, the plugin speaks for itself.
+**Orb.** A floating particle orb shows when Earshot is listening, working or
+speaking. Drag it to move it, double-click to reset its position. You can change
+its color or hide it in Settings, under Listening.
+
+**Activity window.** A 24-hour Day Dial around the orb shows your day. It also
+has a recap, search, and replay. Click the orb to talk.
+
+**Voice commands.** Hold Right Option (the default hotkey), say "Hey Earshot"
+(the wake word, off by default), or click the orb in Activity. You can:
+
+- send a session a prompt: "tell billing service to run the tests"
+- ask what is going on: "what's everyone doing?" or "what's billing doing?"
+- stop a session: "stop billing", or "stop billing now" for a background session
+- start a session: "start a new session in blog to fix the header"
+- answer a permission prompt: after "billing service needs your OK", say "yes" or "no"
+
+**Settings** has four pages: Speaking, Voice, Listening and General. You choose
+the speaker and the microphone there. Settings also checks for the Claude Code
+plugin, and installs, enables or updates it with `claude plugin` commands.
+
+**Other apps.**
+
+- Full screen apps keep Earshot silent by default. Set `EARSHOT_FULLSCREEN` to
+  `silent`, `answers` (speak only when you ask) or `speak`.
+- Other apps are turned down only while Earshot's voice plays.
+
+**Privacy.** See [PRIVACY.md](PRIVACY.md).
+
+- Audio is never saved. It stays in memory, in a ring buffer of about 10 seconds.
+- Earshot keeps what it said and what you said to it, as text, for 24 hours by
+  default. The file is `~/Library/Application Support/Earshot/history.jsonl`
+  (mode 0600, readable only by your account).
+- In Settings, General, History, choose **For 24 hours**, **Until Earshot quits**
+  or **Off** (`EARSHOT_HISTORY=day|session|off`). **Clear History** removes it now.
+- History never goes into logs or Copy Diagnostics.
+- Kokoro (the default) and the Mac's voice run on your Mac. ElevenLabs, when you
+  choose it, receives the text of each line.
+- Commands are understood on the Mac (Apple Intelligence, with a fixed set of
+  phrases when it is off).
+
+Listening needs the microphone permission, Input Monitoring for the hotkey, and
+about 1 GB of speech models, downloaded once. Lowering other apps needs the
+system audio capture permission.
 
 To build it from this repo, run `bash scripts/release-app.sh --local`, then open
 `app/build/release/Earshot.app`. It needs Xcode and XcodeGen
@@ -309,6 +343,8 @@ To change a setting, add a line to `~/.config/earshot/config`, for example
 | `EARSHOT_LOOP_REPEATS` | `3` | The number of repeats that causes a "might be stuck" warning |
 | `EARSHOT_REMIND_MINS` | `"2 5 10"` | The minutes after a prompt when Earshot reminds you that it still waits. Use quotes. |
 | `EARSHOT_HOLD_ON_MIC` | `on` | `on` waits while another app uses the microphone and catches you up after. `off` speaks right away. |
+| `EARSHOT_FULLSCREEN` | `silent` | Earshot for Mac only. What Earshot does while a full screen app is in front: `silent`, `answers` (speak only when you ask), or `speak`. |
+| `EARSHOT_HISTORY` | `day` | Earshot for Mac only. How long text history is kept: `day` (24 hours), `session` (until Earshot quits), or `off`. |
 
 ## Troubleshooting
 
@@ -366,7 +402,7 @@ need a paid plan.
 **Does my code leave my Mac?**
 With Kokoro, no: Earshot makes the speech on your Mac. With ElevenLabs, each
 spoken line (for example, a one-line summary of what Claude did) goes to
-ElevenLabs to be turned into speech.
+ElevenLabs to be turned into speech. Earshot for Mac keeps a text history on your Mac; see [PRIVACY.md](PRIVACY.md).
 
 **How is it different from a notification sound?**
 A sound tells you something happened. Earshot tells you what: which project,
