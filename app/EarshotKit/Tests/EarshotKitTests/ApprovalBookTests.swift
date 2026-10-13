@@ -92,6 +92,23 @@ import Testing
         #expect(await b.current.count == 3)
     }
 
+    /// The panel's rows: the list again when a prompt opens, is answered, or closes.
+    @Test func changesFollowOpenAnswerAndClose() async {
+        let b = book()
+        var it = await b.changes().makeAsyncIterator()
+        #expect(await it.next()?.isEmpty == true)
+        _ = await b.apply(message("1790000000-1-2"))
+        _ = await b.apply(message("1790000001-1-3", session: "s2"))
+        #expect(await it.next()?.map(\.id) == ["1790000000-1-2"])
+        let both = await it.next()
+        #expect(both?.map(\.id) == ["1790000000-1-2", "1790000001-1-3"])
+        #expect(both?.first?.line == "Billing service wants to run the migration")
+        _ = await b.answer("1790000000-1-2", allow: true)
+        #expect(await it.next()?.map(\.id) == ["1790000001-1-3"])
+        _ = await b.apply(.init(session: "s2", id: "1790000001-1-3", state: "closed", by: "screen"))
+        #expect(await it.next()?.isEmpty == true)
+    }
+
     /// The answer file is written next to it and renamed, so the hook never
     /// reads half a file, and an existing link at the path is not followed.
     @Test func doesNotFollowALinkAtTheAnswerPath() async throws {

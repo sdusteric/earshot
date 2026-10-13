@@ -226,6 +226,86 @@ actor CountingSpeaker: LineSpeaker {
         #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
     }
 
+    // MARK: Clicks
+
+    /// The hook reads the answer file and deletes it. A second write would make a new one.
+    func hookTakesTheAnswer() -> String? {
+        let path = "\(approvalsDir)/answer-s1-1-1-1"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        return try? String(contentsOfFile: path, encoding: .utf8)
+    }
+
+    @Test func aClickOnAllowWritesAllowOnce() async {
+        let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
+        let r = await rig([agent("s1", "billing-service")], history: history)
+        await r.book.apply(approval())
+        #expect(await r.loop.click("1-1-1", allow: true) == .written)
+        #expect(hookTakesTheAnswer() == "allow \(secret)\n")
+        #expect(await chimes.played == [.confirm])
+        #expect(await r.book.current.isEmpty)
+        #expect(await r.loop.click("1-1-1", allow: true) == .closed)
+        #expect(hookTakesTheAnswer() == nil)
+        #expect(await chimes.played == [.confirm])
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await r.player.played.isEmpty)   // a click is answered with the chime, not a line
+        let e = await history.entries
+        #expect(e.count == 1)
+        #expect(e.first?.kind == .heard)
+        #expect(e.first?.text == "Allowed")
+        #expect(e.first?.reply == "Approved.")
+        #expect(e.first?.session == "s1")
+        #expect(e.first?.sessionName != nil)
+    }
+
+    @Test func aClickOnDenyWritesDenyOnce() async {
+        let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
+        let r = await rig([agent("s1", "billing-service")], history: history)
+        await r.book.apply(approval())
+        #expect(await r.loop.click("1-1-1", allow: false) == .written)
+        #expect(hookTakesTheAnswer() == "deny \(secret)\n")
+        #expect(await r.loop.click("1-1-1", allow: false) == .closed)
+        #expect(hookTakesTheAnswer() == nil)
+        #expect(await chimes.played == [.confirm])
+        let e = await history.entries
+        #expect(e.map(\.text) == ["Denied"])
+        #expect(e.first?.reply == "Told it no.")
+    }
+
+    @Test func aClickAfterTheDialogClosedWritesNothing() async {
+        let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
+        let r = await rig([agent("s1", "billing-service")], history: history)
+        await r.book.apply(approval())
+        await r.book.apply(.init(session: "s1", id: "1-1-1", state: "closed", by: "screen"))
+        #expect(await r.loop.click("1-1-1", allow: true) == .closed)
+        #expect(hookTakesTheAnswer() == nil)
+        #expect(await chimes.played.isEmpty)
+        #expect(await history.entries.isEmpty)
+    }
+
+    @Test func aClickThenAYesWritesOnce() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        #expect(await r.loop.click("1-1-1", allow: true) == .written)
+        #expect(hookTakesTheAnswer() == "allow \(secret)\n")
+        r.heard.yield(said("Yes.", .followUp(.approval(id: "1-1-1"))))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(hookTakesTheAnswer() == nil)
+        #expect(await r.player.played.isEmpty)
+        #expect(await chimes.played == [.confirm])
+    }
+
+    @Test func aYesThenAClickWritesOnce() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("No.", .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == ["Told it no."] })
+        #expect(hookTakesTheAnswer() == "deny \(secret)\n")
+        #expect(await r.loop.click("1-1-1", allow: true) == .closed)
+        #expect(hookTakesTheAnswer() == nil)
+        #expect(await chimes.played == [.confirm])
+    }
+
     @Test func otherWordsInTheWindowDoNothing() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())

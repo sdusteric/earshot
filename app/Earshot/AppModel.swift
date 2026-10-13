@@ -13,6 +13,8 @@ final class AppModel {
     var liveSessions: [LiveSession] = []
     /// What Earshot said and heard, oldest first (see HistoryStore).
     var history: [HistoryEntry] = []
+    /// Permission prompts waiting on you, oldest first, for the Allow and Deny rows.
+    var approvals: [OpenApproval] = []
     /// Whether Claude Code has the Earshot plugin, and an install under way.
     var pluginStatus: PluginStatus = .checking
     var pluginWorking = false
@@ -111,6 +113,7 @@ final class AppModel {
             await live.synth.prepare()
         }
         Task { for await list in await live.core.sessions.changes() { sessions = list; await listeningChanged() } }
+        Task { for await list in await live.core.approvals.changes() { approvals = list } }
         Task { for await s in await live.core.speech.stateChanges() { speechState = s; updateActivity() } }
         Task {
             let stack = await ListenStack.live(core: live.core, history: history) { box.value }
@@ -219,6 +222,22 @@ final class AppModel {
     /// The last thing Earshot said about this session, for the panel.
     func lastLine(for session: String) -> HistoryEntry? {
         history.last { $0.kind == .said && $0.session == session }
+    }
+
+    // MARK: Approvals
+
+    /// Allow or Deny clicked on a prompt's row: written like a spoken answer.
+    /// A prompt already answered on screen just leaves the list.
+    func answer(_ approval: OpenApproval, allow: Bool) {
+        guard let stack else { return }
+        approvals.removeAll { $0.id == approval.id }
+        Task { await stack.loop.click(approval.id, allow: allow) }
+    }
+
+    /// Drops the rows of prompts whose hook is gone (killed without saying so).
+    func refreshApprovals() {
+        guard let core else { return }
+        Task { _ = await core.approvals.current }
     }
 
     // MARK: Listening
