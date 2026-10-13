@@ -39,9 +39,9 @@ struct ActivityView: View {
                         Text("Everything").tag(ActivityFilter.all)
                         Text("What you said").tag(ActivityFilter.you)
                         Text("What Earshot said").tag(ActivityFilter.earshot)
-                        if !sessionList.isEmpty {
+                        if !roster.ordered.isEmpty {
                             Divider()
-                            ForEach(sessionList, id: \.id) { s in Text(SessionStyle.title(s.name)).tag(ActivityFilter.session(s.id)) }
+                            ForEach(roster.ordered, id: \.id) { s in Text(SessionStyle.title(s.name)).tag(ActivityFilter.session(s.id)) }
                         }
                     }
                     .pickerStyle(.inline)
@@ -162,63 +162,22 @@ struct ActivityView: View {
 
     // MARK: Data
 
-    /// Sessions for the rings: ones in today's history and open ones, newest first.
-    /// Sessions for the rings and the Show menu: the ones the recap names come
-    /// first (they get the five rings), then the rest of today's history.
-    private var sessionList: [(id: String, name: String)] {
-        var order: [String] = recapSessions.map(\.id)
-        for e in model.history.reversed() {
-            guard let id = e.session, !order.contains(id) else { continue }
-            order.append(id)
-        }
-        for s in model.sessions where !order.contains(s.id) { order.append(s.id) }
-        return order.map { ($0, displayName($0)) }
-    }
-
-    /// One name per session everywhere in this window: the plugin's, then
-    /// the name today's lines used, then Claude Code's own label.
-    private func displayName(_ id: String) -> String {
-        model.sessions.first { $0.id == id }?.name
-            ?? model.history.last { $0.session == id && $0.sessionName != nil }?.sessionName
-            ?? model.liveSessions.first { $0.id == id }?.name
-            ?? "session"
-    }
-
-    /// The sessions the recap speaks about, in its order.
-    private var recapSessions: [(id: String, sentence: String)] {
-        let order: [SessionState] = [.needs, .reply, .stuck, .failed, .done, .working]
-        let known = model.sessions
-            .filter { order.contains($0.state) }
-            .sorted { (order.firstIndex(of: $0.state) ?? 9) < (order.firstIndex(of: $1.state) ?? 9) }
-            .map { s -> (id: String, sentence: String) in
-                let n = SessionStyle.title(displayName(s.id))
-                let verb = switch s.state {
-                case .needs: "needs you."
-                case .reply: "is waiting on your answer."
-                case .stuck: "might be stuck."
-                case .failed: "hit an error."
-                case .done: "finished."
-                default: "is still working."
-                }
-                return (s.id, "\(n) \(verb)")
-            }
-        if !known.isEmpty { return Array(known.prefix(3)) }
-        // The plugin hasn't reported yet: what Claude Code itself says.
-        return model.liveSessions
-            .filter { $0.waiting || $0.busy }
-            .sorted { ($0.waiting ? 0 : 1) < ($1.waiting ? 0 : 1) }
-            .prefix(3)
-            .map { s in (s.id, "\(SessionStyle.title(displayName(s.id))) \(s.waiting ? "needs you." : "is working.")") }
+    /// The sessions as this window speaks of them: the recap, the order of
+    /// the rings and the Show menu, and one name per session.
+    private var roster: ActivitySessions {
+        ActivitySessions(known: model.sessions.map(ActivitySessions.Known.init),
+                         live: model.liveSessions.map(ActivitySessions.Live.init),
+                         history: model.history)
     }
 
     /// At most five session rings; older sessions' dots stay off the dial but in the list.
     private var lanes: [(id: String, name: String, color: Color, active: Bool)] {
-        sessionList.prefix(5).map { s in
+        let roster = self.roster
+        return roster.ordered.prefix(5).map { s in
             let info = model.sessions.first { $0.id == s.id }
             let live = model.liveSessions.first { $0.id == s.id }
             let color = info.map { SessionStyle.color($0.state) } ?? live.map { $0.waiting ? .orange : ($0.busy ? .blue : .secondary) } ?? .secondary
-            let active = info.map { [.working, .needs, .reply].contains($0.state) } ?? live.map { $0.busy || $0.waiting } ?? false
-            return (s.id, s.name, color, active)
+            return (s.id, s.name, color, roster.isActive(s.id))
         }
     }
 
@@ -271,12 +230,7 @@ struct ActivityView: View {
 
     // MARK: Words
 
-    /// Who needs you first, then who is stuck, finished, or working: one short sentence each.
-    private var recap: String {
-        let parts = recapSessions.map(\.sentence)
-        if !parts.isEmpty { return parts.joined(separator: " ") }
-        return model.sessions.isEmpty && model.liveSessions.isEmpty ? "No Claude Code sessions are open." : "Nothing needs you right now."
-    }
+    private var recap: String { roster.recap }
 
     private var listTitle: String {
         if let selection {
