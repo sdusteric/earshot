@@ -2,6 +2,12 @@
 
 Date: 2026-10-11. Status: draft for review.
 
+Note, 2026-10-12: the history feature changed the privacy wording in this spec.
+Earshot now keeps what it said and what you said to it, as text, for 24 hours by
+default (Settings, General, History: 24 hours, until quit, or off). Audio is still
+never saved, and history stays out of logs and Copy Diagnostics. See `PRIVACY.md`.
+Where this spec says nothing is kept, read it with this note.
+
 ## Goal
 
 A companion menu bar app for the Earshot plugin. You say "Hey Earshot, tell
