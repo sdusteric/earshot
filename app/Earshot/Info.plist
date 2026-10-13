@@ -29,7 +29,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Earshot listens for "Hey Earshot" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved.</string>
 	<key>SUFeedURL</key>
-	<string>https://github.com/sdusteric/earshot/releases/latest/download/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SPARKLE_PUBLIC_KEY)</string>
 </dict>
