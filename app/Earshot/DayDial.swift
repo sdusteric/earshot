@@ -200,7 +200,8 @@ struct DayDial: View {
             p.addLine(to: CGPoint(x: c.x + cos(a) * (layout.outer + (major ? 30 : 25)), y: c.y + sin(a) * (layout.outer + (major ? 30 : 25))))
             gc.stroke(p, with: .color(DialPalette.tick), lineWidth: major ? 1.5 : 1)
             let back = layout.now.timeIntervalSince(t)
-            if major, back > 1800, back < DialLayout.day - 1800 {   // never on top of "now"
+            // An hour label within 75 minutes of now would crowd the "now" label.
+            if major, back > 4500, back < DialLayout.day - 4500 {
                 let lp = CGPoint(x: c.x + cos(a) * (layout.outer + 33), y: c.y + sin(a) * (layout.outer + 33))
                 let label = Text(t, format: .dateTime.hour()).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 gc.draw(label, at: lp, anchor: anchor(for: a))
