@@ -10,29 +10,13 @@ import Testing
     let usb = AudioDevices.Device(uid: "USB-1", name: "Yeti", hasInput: true, isBluetooth: false, isBuiltIn: false)
 
     @Test func aChosenInputThatIsPresentWins() {
-        #expect(AudioDevices.chooseInput(setting: "USB-1", inputs: [builtIn, usb], outputIsBluetooth: true) == "USB-1")
+        #expect(AudioDevices.chooseInput(setting: "USB-1", inputs: [builtIn, usb]) == "USB-1")
     }
 
-    /// Opening a Bluetooth headset's mic drops all its audio to call quality.
-    @Test func bluetoothOutputUsesTheBuiltInMic() {
-        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, builtIn], outputIsBluetooth: true)
-                == "BuiltInMicrophoneDevice")
-    }
-
-    @Test func otherwiseTheSystemDefault() {
-        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, builtIn], outputIsBluetooth: false) == nil)
-        #expect(AudioDevices.chooseInput(setting: "gone", inputs: [builtIn], outputIsBluetooth: false) == nil)
-    }
-
-    @Test func bluetoothOutputWithoutABuiltInMicFallsBack() {
-        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods], outputIsBluetooth: true) == nil)
-    }
-
-    /// A desktop Mac with AirPods and a USB mic must not open the AirPods mic.
-    @Test func bluetoothOutputWithoutABuiltInMicUsesAnotherWiredMic() {
-        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, usb], outputIsBluetooth: true) == "USB-1")
-        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, usb, builtIn], outputIsBluetooth: true)
-                == "BuiltInMicrophoneDevice")
+    /// Automatic is the system default, whatever is connected: switching mics is slow and unreliable.
+    @Test func automaticIsTheSystemDefault() {
+        #expect(AudioDevices.chooseInput(setting: nil, inputs: [airpods, builtIn, usb]) == nil)
+        #expect(AudioDevices.chooseInput(setting: "gone", inputs: [builtIn]) == nil)
     }
 
     /// Needs the mic and its permission: EARSHOT_TEST_MIC=1.
@@ -68,31 +52,15 @@ import Testing
 }
 
 @Suite struct InputCandidateTests {
-    let builtIn = AudioDevices.Device(uid: "BuiltIn", name: "MacBook Pro Microphone", hasInput: true, isBluetooth: false, isBuiltIn: true)
     let camera = AudioDevices.Device(uid: "USB", name: "Insta360 Link", hasInput: true, isBluetooth: false, isBuiltIn: false)
-    let zoom = AudioDevices.Device(uid: "Zoom", name: "ZoomAudioDevice", hasInput: true, isBluetooth: false, isBuiltIn: false,
-                                   hasOutput: true, isVirtual: true)
-    let headset = AudioDevices.Device(uid: "BT", name: "1000X", hasInput: true, isBluetooth: true, isBuiltIn: false)
 
-    /// A Bluetooth headset plays: the built-in mic first, then the camera's, then
-    /// the default; a meeting app's virtual device is never picked.
-    @Test func aMicThatGivesNoAudioFallsThroughToTheNext() {
-        let c = AudioDevices.inputCandidates(setting: nil, inputs: [zoom, headset, camera, builtIn], outputIsBluetooth: true)
-        #expect(c == ["BuiltIn", "USB", nil])
+    @Test func aChosenMicThenTheDefault() {
+        #expect(AudioDevices.inputCandidates(setting: "USB", inputs: [camera]) == ["USB", nil])
     }
 
-    @Test func theSettingComesFirstAndNothingRepeats() {
-        let c = AudioDevices.inputCandidates(setting: "USB", inputs: [builtIn, camera], outputIsBluetooth: true)
-        #expect(c == ["USB", "BuiltIn", nil])
-    }
-
-    @Test func withoutABluetoothOutputTheDefaultLeads() {
-        let c = AudioDevices.inputCandidates(setting: nil, inputs: [builtIn], outputIsBluetooth: false)
-        #expect(c == [nil, "BuiltIn"])
-    }
-
-    @Test func aVirtualDeviceIsNeverTheAutomaticChoice() {
-        #expect(AudioDevices.chooseInput(setting: nil, inputs: [zoom, headset], outputIsBluetooth: true) == nil)
+    @Test func automaticOrAMissingChoiceIsOnlyTheDefault() {
+        #expect(AudioDevices.inputCandidates(setting: nil, inputs: [camera]) == [nil])
+        #expect(AudioDevices.inputCandidates(setting: "gone", inputs: [camera]) == [nil])
     }
 }
 
@@ -112,20 +80,5 @@ import Testing
     @Test func theSystemDefaultCanBeTheOneThatWorked() {
         let o = MicInput.order(["BuiltIn", nil], lastGood: .some(nil), failedAt: [:], now: .now)
         #expect(o == [nil, "BuiltIn"])
-    }
-}
-
-@Suite struct LidClosedTests {
-    let builtIn = AudioDevices.Device(uid: "BuiltIn", name: "MacBook Pro Microphone", hasInput: true, isBluetooth: false, isBuiltIn: true)
-    let camera = AudioDevices.Device(uid: "USB", name: "Insta360 Link", hasInput: true, isBluetooth: false, isBuiltIn: false)
-
-    @Test func withTheLidClosedTheBuiltInMicIsSkipped() {
-        let c = AudioDevices.inputCandidates(setting: nil, inputs: [builtIn, camera], outputIsBluetooth: true, lidClosed: true)
-        #expect(c == ["USB", nil])
-    }
-
-    @Test func aBuiltInMicYouChoseIsStillTried() {
-        let c = AudioDevices.inputCandidates(setting: "BuiltIn", inputs: [builtIn, camera], outputIsBluetooth: true, lidClosed: true)
-        #expect(c.first == "BuiltIn")
     }
 }

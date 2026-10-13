@@ -1,5 +1,4 @@
 import AVFoundation
-import IOKit
 import CoreAudio
 import Foundation
 import os
@@ -16,21 +15,13 @@ public enum AudioDevices {
         public var isVirtual = false
     }
 
-    /// The mics to try, in order: the choice above, then the built-in mic,
-    /// then any other real mic that isn't Bluetooth, then the system default
-    /// (nil). A mic can be listed yet give no audio, such as a MacBook's own
-    /// mic with the lid closed, so opening falls through this list.
-    public static func inputCandidates(setting: String?, inputs: [Device], outputIsBluetooth: Bool,
-                                       lidClosed: Bool = false) -> [String?] {
-        // With the lid closed a MacBook's own mic opens but hears nothing.
-        let inputs = lidClosed ? inputs.filter { !$0.isBuiltIn || $0.uid == setting } : inputs
-        var out: [String?] = [chooseInput(setting: setting, inputs: inputs, outputIsBluetooth: outputIsBluetooth)]
-        for d in inputs where d.isBuiltIn && d.hasInput { out.append(d.uid) }
-        for d in inputs where d.hasInput && !d.isBluetooth && !d.isVirtual && !d.isBuiltIn { out.append(d.uid) }
-        out.append(nil)
-        var seen: [String?] = []
-        for c in out where !seen.contains(c) { seen.append(c) }
-        return seen
+    /// The mics to try, in order: the one you chose in Settings, when it is
+    /// here, then the system default (nil). Switching the engine to another
+    /// mic took about a second and sometimes delivered nothing, while the
+    /// system default opens in about 0.2 s, so Automatic is the system default.
+    public static func inputCandidates(setting: String?, inputs: [Device]) -> [String?] {
+        if let setting, inputs.contains(where: { $0.uid == setting && $0.hasInput }) { return [setting, nil] }
+        return [nil]
     }
 
     /// The speaker for Earshot's voice: the setting when that device is here, else nil (the system output).
@@ -39,27 +30,12 @@ public enum AudioDevices {
         return setting
     }
 
-    /// The mic to open. The setting, when that device is here; else, when the
-    /// output is Bluetooth (opening a Bluetooth mic switches the headset to call
-    /// quality), the built-in mic, or any mic that is not Bluetooth; else nil,
-    /// the system default.
-    public static func chooseInput(setting: String?, inputs: [Device], outputIsBluetooth: Bool) -> String? {
-        if let setting, inputs.contains(where: { $0.uid == setting && $0.hasInput }) { return setting }
-        guard outputIsBluetooth else { return nil }
-        if let b = inputs.first(where: { $0.isBuiltIn && $0.hasInput }) { return b.uid }
-        return inputs.first(where: { !$0.isBluetooth && !$0.isVirtual && $0.hasInput })?.uid
+    /// The mic to open: your choice, when that device is here; else nil, the system default.
+    public static func chooseInput(setting: String?, inputs: [Device]) -> String? {
+        inputCandidates(setting: setting, inputs: inputs)[0]
     }
 
     public static func all() -> [Device] { allIDs().compactMap(device) }
-
-    /// A MacBook with its lid closed (running on an external display).
-    public static func lidClosed() -> Bool {
-        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
-        guard root != 0 else { return false }
-        defer { IOObjectRelease(root) }
-        let v = IORegistryEntryCreateCFProperty(root, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)
-        return (v?.takeRetainedValue() as? Bool) ?? false
-    }
 
     /// The system's current default input or output, for "System default (name)".
     public static func systemDefault(input: Bool) -> Device? {
@@ -198,9 +174,7 @@ public actor MicInput: AudioInput {
     }
 
     private func build() throws {
-        let all = AudioDevices.inputCandidates(setting: deviceUID(), inputs: AudioDevices.all().filter(\.hasInput),
-                                               outputIsBluetooth: AudioDevices.defaultOutputIsBluetooth(),
-                                               lidClosed: AudioDevices.lidClosed())
+        let all = AudioDevices.inputCandidates(setting: deviceUID(), inputs: AudioDevices.all().filter(\.hasInput))
         let candidates = MicInput.order(all, lastGood: lastGood, failedAt: failedAt, now: .now)
         let began = ContinuousClock.now
         for uid in candidates {
@@ -244,7 +218,9 @@ public actor MicInput: AudioInput {
             return false
         }
         let cont = self.cont
+        let heard = HeardFlag()
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
+            heard.set()
             let s = resampler.convert(buffer)
             if !s.isEmpty { cont?.yield(s) }
         }
@@ -256,6 +232,13 @@ public actor MicInput: AudioInput {
             return false
         }
         self.engine = engine
+        if let uid {
+            // A mic you chose can open and still deliver nothing: then the default takes over.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                if !heard.isSet { await self?.deliveredNothing(uid, engine: engine) }
+            }
+        }
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
                                                           queue: nil) { [weak self] _ in
             Task { await self?.rebuild() }
@@ -278,6 +261,14 @@ public actor MicInput: AudioInput {
         return out.filter { !recentlyFailed($0) } + out.filter { recentlyFailed($0) }
     }
 
+    private func deliveredNothing(_ uid: String, engine: AVAudioEngine) {
+        guard self.engine === engine, cont != nil else { return }
+        log.error("the chosen mic delivered no audio; using the system default")
+        failedAt[uid] = .now
+        if lastGood == .some(uid) { lastGood = nil }
+        rebuild()
+    }
+
     private func rebuild() {
         guard cont != nil else { return }
         teardown()
@@ -296,4 +287,12 @@ public actor MicInput: AudioInput {
         if engine != nil { log.info("mic closed") }
         engine = nil
     }
+}
+
+/// Set by the tap's thread on the first buffer, read by the mic's actor.
+final class HeardFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.withLock { value = true } }
+    var isSet: Bool { lock.withLock { value } }
 }
