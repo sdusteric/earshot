@@ -54,13 +54,28 @@ import Testing
 @Suite struct InputCandidateTests {
     let camera = AudioDevices.Device(uid: "USB", name: "Insta360 Link", hasInput: true, isBluetooth: false, isBuiltIn: false)
 
+    let builtIn = AudioDevices.Device(uid: "BuiltIn", name: "MacBook Pro Microphone", hasInput: true,
+                                      isBluetooth: false, isBuiltIn: true)
+    let headset = AudioDevices.Device(uid: "BT", name: "WH-1000X", hasInput: true, isBluetooth: true, isBuiltIn: false)
+    let zoom = AudioDevices.Device(uid: "ZOOM", name: "ZoomAudioDevice", hasInput: true, isBluetooth: false,
+                                   isBuiltIn: false, isVirtual: true)
+
     @Test func aChosenMicThenTheDefault() {
-        #expect(AudioDevices.inputCandidates(setting: "USB", inputs: [camera]) == ["USB", nil])
+        #expect(AudioDevices.inputCandidates(setting: "USB", inputs: [camera], defaultUID: "BuiltIn") == ["USB", nil])
     }
 
-    @Test func automaticOrAMissingChoiceIsOnlyTheDefault() {
-        #expect(AudioDevices.inputCandidates(setting: nil, inputs: [camera]) == [nil])
-        #expect(AudioDevices.inputCandidates(setting: "gone", inputs: [camera]) == [nil])
+    @Test func automaticIsTheDefaultThenTheOtherRealMicsWiredFirst() {
+        let all = [headset, builtIn, camera, zoom]
+        #expect(AudioDevices.inputCandidates(setting: nil, inputs: all, defaultUID: "BuiltIn") == [nil, "USB", "BT"])
+        #expect(AudioDevices.inputCandidates(setting: "gone", inputs: all, defaultUID: "USB") == [nil, "BuiltIn", "BT"])
+    }
+
+    /// With the lid closed the built-in mic opens to pure silence.
+    @Test func theLidClosedSkipsTheBuiltInMic() {
+        let all = [builtIn, headset, camera]
+        #expect(AudioDevices.inputCandidates(setting: nil, inputs: all, defaultUID: "BuiltIn", lidClosed: true) == ["USB", "BT"])
+        #expect(AudioDevices.inputCandidates(setting: "BuiltIn", inputs: all, defaultUID: "USB", lidClosed: true) == [nil, "BT"])
+        #expect(AudioDevices.inputCandidates(setting: nil, inputs: [builtIn], defaultUID: "BuiltIn", lidClosed: true) == [nil])
     }
 }
 
@@ -75,6 +90,12 @@ import Testing
         let now = ContinuousClock.now
         let o = MicInput.order(["BuiltIn", "USB", nil], lastGood: nil, failedAt: ["BuiltIn": now - .seconds(700)], now: now)
         #expect(o == ["BuiltIn", "USB", nil])
+    }
+
+    @Test func aSilentSystemDefaultGoesLast() {
+        let now = ContinuousClock.now
+        let o = MicInput.order([nil, "USB"], lastGood: nil, failedAt: [nil: now], now: now)
+        #expect(o == ["USB", nil])
     }
 
     @Test func theSystemDefaultCanBeTheOneThatWorked() {

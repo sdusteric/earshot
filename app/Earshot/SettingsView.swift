@@ -382,7 +382,7 @@ private struct ListeningTab: View {
             } header: {
                 Text("Input")
             } footer: {
-                Footnote("Automatic uses the input chosen in System Settings, Sound. A Bluetooth headset's mic switches the headset to call quality while you hold the key; choose another mic here to avoid that. Audio stays on this Mac: Earshot keeps the last few seconds in memory to hear a command, and never saves or sends it. The text of what you say goes into the history (Settings, General).")
+                Footnote("Automatic uses the input chosen in System Settings, Sound, except a MacBook's own mic while the lid is closed. A Bluetooth headset's mic switches the headset to call quality while you hold the key; choose another mic here to avoid that. Audio stays on this Mac: Earshot keeps the last few seconds in memory to hear a command, and never saves or sends it. The text of what you say goes into the history (Settings, General).")
             }
 
             Section {
