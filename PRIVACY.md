@@ -26,7 +26,7 @@ It is a list of lines, with no audio.
 The plugin keeps its own files in private macOS folders for your user account:
 session status, reminder state, a log, and cached audio of lines it spoke.
 `~/.config/earshot/config` holds your settings and, if you use ElevenLabs, your API
-key (readable only by your account). The app keeps the key in the Keychain.
+key (readable only by your account). The app and the plugin both read the key from there.
 
 ## What is sent
 
