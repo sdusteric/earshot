@@ -20,9 +20,13 @@ public actor Listener {
         public let endedAt: ContinuousClock.Instant
         /// The command ran past the length cap: it was dropped, and text is empty.
         public let tooLong: Bool
+        /// What was heard without session names boosted, when the boost changed it.
+        /// The boost can turn a word into a name that sounds like it ("doing" into "wedding").
+        public let plain: String?
 
-        public init(text: String, trigger: Trigger, endedAt: ContinuousClock.Instant, tooLong: Bool = false) {
-            self.text = text; self.trigger = trigger; self.endedAt = endedAt; self.tooLong = tooLong
+        public init(text: String, trigger: Trigger, endedAt: ContinuousClock.Instant, tooLong: Bool = false,
+                    plain: String? = nil) {
+            self.text = text; self.trigger = trigger; self.endedAt = endedAt; self.tooLong = tooLong; self.plain = plain
         }
     }
 
@@ -564,9 +568,11 @@ public actor Listener {
         lastCaptureEnd = max(lastCaptureEnd, end)
         let clip = ring.samples(from: c.start, to: end)
         var text = ""
+        var plain: String?
         if clip.count >= timing.minClipSamples {
             do {
-                text = try await transcriber.transcribe(clip, vocabulary: vocabulary)
+                (text, plain) = try await transcriber.transcribeBoth(clip, vocabulary: vocabulary)
+                plain = plain?.trimmingCharacters(in: .whitespacesAndNewlines)
             } catch {
                 log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -598,7 +604,9 @@ public actor Listener {
         let heard = !text.isEmpty
         await observer?.captureEnded(heard: heard)
         if heard {
-            utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now))
+            // Only a hotkey command uses the unboosted words; a wake capture's text was cut above.
+            utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now,
+                                          plain: c.trigger == .hotkey ? plain : nil))
         } else if !refused, capture == nil {
             await chimes.play(.closed)
         }

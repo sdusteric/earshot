@@ -125,7 +125,9 @@ public actor VoiceLoop: ListenObserver {
     /// anything else there was not meant for Earshot.
     private func record(_ u: Listener.Utterance) async {
         guard let history else { return }
-        let text = Listener.stripWake(u.text) ?? u.text
+        // What was heard, before session names were boosted into it.
+        let said = u.plain ?? u.text
+        let text = Listener.stripWake(said) ?? said
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         if case .followUp(.approval) = u.trigger, Grammar.approvalWord(text) == nil { return }
         let e = HistoryEntry(kind: .heard, text: text)
@@ -157,7 +159,7 @@ public actor VoiceLoop: ListenObserver {
         case .wake, .hotkey:
             pending = nil
             afterLine.removeAll()
-            let c = await parser.parse(u.text, sessions: await directory.vocabulary())
+            let c = await parser.parse(u.text, plain: u.plain, sessions: await directory.vocabulary())
             signposter.emitEvent("command")
             await events.add("command \(Self.kind(c))")
             if u.trigger == .wake, case .answer = c {

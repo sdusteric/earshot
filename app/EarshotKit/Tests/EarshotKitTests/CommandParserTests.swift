@@ -37,6 +37,27 @@ actor SlowCommandModel: CommandModel {
         #expect(await model.asked == ["Run the tests."])
     }
 
+    /// The name boost turned "doing" into the session "wedding".
+    @Test func theUnboostedWordsWinWhenTheyMakeACommand() async {
+        let model = FakeModel(answer: .status(target: "wedding"))
+        let p = CommandParser(model: model)
+        #expect(await p.parse("How's everyone wedding", plain: "How's everyone doing", sessions: ["wedding"]) == .status(target: nil))
+        #expect(await model.asked.isEmpty)
+    }
+
+    @Test func theBoostedNameIsUsedWhenThePlainWordsMakeNoCommand() async {
+        let p = CommandParser(model: nil)
+        #expect(await p.parse("Tell finebrief to run the tests", plain: "Tell fine brief to run the tests", sessions: ["finebrief"])
+                == .send(target: "finebrief", prompt: "run the tests"))
+    }
+
+    @Test func theModelOnlySeesTheUnboostedWords() async {
+        let model = FakeModel(answer: .unknown)
+        let p = CommandParser(model: model)
+        _ = await p.parse("Hey, how are you wedding", plain: "Hey, how are you doing", sessions: ["wedding"])
+        #expect(await model.asked == ["Hey, how are you doing"])
+    }
+
     @Test func noModelMeansUnknown() async {
         #expect(await CommandParser(model: nil).parse("Run the tests.", sessions: []) == .unknown)
         let off = FakeModel(available: false, answer: .status(target: nil))

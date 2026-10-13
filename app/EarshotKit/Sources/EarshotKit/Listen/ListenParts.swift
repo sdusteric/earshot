@@ -25,8 +25,16 @@ public protocol WakeSpotter: Sendable {
 public protocol Transcriber: Sendable {
     /// The clip as text, with these names boosted. Throws when the model can't run.
     func transcribe(_ samples: [Float], vocabulary: [String]) async throws -> String
+    /// The same, plus what was heard without the names boosted when that differs.
+    func transcribeBoth(_ samples: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?)
     /// Loads the model, so the next command is not slow.
     func prewarm() async
+}
+
+extension Transcriber {
+    public func transcribeBoth(_ samples: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
+        (try await transcribe(samples, vocabulary: vocabulary), nil)
+    }
 }
 
 public enum Chime: Sendable, Equatable { case listening, closed, confirm }

@@ -18,15 +18,21 @@ public struct CommandParser: Sendable {
 
     public init(model: (any CommandModel)?, timeout: Duration = .seconds(2)) { self.model = model; self.timeout = timeout }
 
-    public func parse(_ text: String, sessions: [String]) async -> Command {
+    /// `plain`: the words heard without session names boosted, when the boost
+    /// changed them. They win when they already make a command, so a name that
+    /// sounds like a plain word ("wedding" for "doing") doesn't take over, and
+    /// the model only ever sees them, never a boost the grammar couldn't use.
+    public func parse(_ text: String, plain: String? = nil, sessions: [String]) async -> Command {
+        if let plain, let c = Grammar.parse(plain, known: sessions), c != .unknown { return c }
         if let c = Grammar.parse(text, known: sessions) { return c }
         guard let model else { return .unknown }
+        let heard = plain ?? text
         let answer = await bounded(timeout, Command?.none) {
             guard await model.isAvailable else { return nil }
-            return await model.parse(text, sessions: sessions)
+            return await model.parse(heard, sessions: sessions)
         }
         guard let c = answer else { return .unknown }
-        return Self.accept(c, heard: text)
+        return Self.accept(c, heard: heard)
     }
 
     /// Keeps a model answer only when the user's words back it up: every content word of

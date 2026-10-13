@@ -314,16 +314,21 @@ public actor ParakeetTranscriber: Transcriber {
     }
 
     public func transcribe(_ samples: [Float], vocabulary: [String]) async throws -> String {
+        try await transcribeBoth(samples, vocabulary: vocabulary).text
+    }
+
+    public func transcribeBoth(_ samples: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
         idleTask?.cancel()
         busy += 1
         defer { busy -= 1; scheduleUnload() }
         let asr = try await loaded()
         let result = try await run(asr, samples)
-        guard !vocabulary.isEmpty, !result.text.isEmpty, let timings = result.tokenTimings else { return result.text }
+        guard !vocabulary.isEmpty, !result.text.isEmpty, let timings = result.tokenTimings else { return (result.text, nil) }
         let session = try await boostingSession(vocabulary)
         guard let boosted = await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text,
-              Self.keepsBoost(plain: result.text, boosted: boosted, vocabulary: vocabulary) else { return result.text }
-        return boosted
+              boosted != result.text,
+              Self.keepsBoost(plain: result.text, boosted: boosted, vocabulary: vocabulary) else { return (result.text, nil) }
+        return (boosted, result.text)
     }
 
     /// The name boost may only swap a few misheard words for a name. Left
