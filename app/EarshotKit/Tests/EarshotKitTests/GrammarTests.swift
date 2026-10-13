@@ -69,6 +69,11 @@ import Testing
         ("No to billing.", .answer(allow: false, target: "billing")),
         ("Deny earshot.", .answer(allow: false, target: "earshot")),
         ("Yes to blog.", .answer(allow: true, target: "blog")),
+        // A bare "how's X", and how it gets misheard
+        ("How's the blog?", .status(target: "blog")),
+        ("How is billing service", .status(target: "billing service")),
+        ("How you blog", .status(target: "blog")),
+        ("How's your earshot", .status(target: "earshot")),
         // Matched a shape, nothing to send
         ("Tell billing to", .unknown),
         ("Tell billing to um", .unknown),
@@ -83,6 +88,8 @@ import Testing
         "Run the tests.",                          // no target named: the model decides
         "Could billing maybe look at the flaky test",
         "Let's have the blog rewrite the intro",
+        "How's the weather",                       // not a session: the model decides
+        "How are you",
     ])
     func unmatchedGoesToTheModel(_ said: String) {
         #expect(Grammar.parse(said, known: Self.known) == nil)

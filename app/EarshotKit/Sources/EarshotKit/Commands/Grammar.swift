@@ -146,7 +146,12 @@ public enum Grammar {
         ("what's the status of", ""), ("what is the status of", ""), ("what's", "doing"), ("what is", "doing"),
         ("whats", "doing"), ("how's", "doing"), ("how is", "doing"), ("how's", "going"), ("how is", "going"),
         ("status of", ""), ("status on", ""), ("what's up with", ""), ("where's", "at"), ("where is", "at"),
-        ("check on", ""), ("", "status"),
+        ("check on", ""),
+        // A bare "how's billing", and how it is often misheard ("how you billing").
+        // Only a known session name counts, so other questions still reach the model.
+        ("how's the", ""), ("how is the", ""), ("how's", ""), ("how is", ""), ("how are", ""), ("how you", ""),
+        ("how's your", ""), ("how your", ""),
+        ("", "status"),
     ]
 
     static let questionWords: Set<String> = ["what", "what's", "why", "how", "whether", "if", "when", "where",
