@@ -184,3 +184,27 @@ actor LoadCounter {
     private(set) var value = 0
     func next() -> Int { value += 1; return value }
 }
+
+@Suite struct NameBoostTests {
+    let names = ["earshot", "your home folder", "finebrief", "reflow", "release 1012"]
+
+    @Test func aBoostThatSwallowsASentenceIsIgnored() {
+        #expect(!ParakeetTranscriber.keepsBoost(plain: "Hey, how are you doing?", boosted: "Earshot doing?", vocabulary: names))
+    }
+
+    @Test func aBoostThatOnlyDropsWordsIsIgnored() {
+        #expect(!ParakeetTranscriber.keepsBoost(plain: "Tell your home folder I'm here", boosted: "Tell your home folder here",
+                                               vocabulary: names))
+    }
+
+    @Test func aBoostThatFixesAMisheardNameIsKept() {
+        #expect(ParakeetTranscriber.keepsBoost(plain: "Tell fine brief to run the tests", boosted: "Tell finebrief to run the tests",
+                                              vocabulary: names))
+        #expect(ParakeetTranscriber.keepsBoost(plain: "how's release ten twelve", boosted: "how's release 1012", vocabulary: names))
+        #expect(ParakeetTranscriber.keepsBoost(plain: "in re flow, run lint", boosted: "in reflow, run lint", vocabulary: names))
+    }
+
+    @Test func aBoostThatAddsOtherWordsIsIgnored() {
+        #expect(!ParakeetTranscriber.keepsBoost(plain: "stop it", boosted: "stop earshot now", vocabulary: names))
+    }
+}

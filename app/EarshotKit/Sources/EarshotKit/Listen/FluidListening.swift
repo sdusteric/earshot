@@ -321,7 +321,30 @@ public actor ParakeetTranscriber: Transcriber {
         let result = try await run(asr, samples)
         guard !vocabulary.isEmpty, !result.text.isEmpty, let timings = result.tokenTimings else { return result.text }
         let session = try await boostingSession(vocabulary)
-        return await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text ?? result.text
+        guard let boosted = await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text,
+              Self.keepsBoost(plain: result.text, boosted: boosted, vocabulary: vocabulary) else { return result.text }
+        return boosted
+    }
+
+    /// The name boost may only swap a few misheard words for a name. Left
+    /// alone it rewrote "Hey, how are you doing?" as "Earshot doing?" and
+    /// dropped words from plain sentences, so a boost that adds no name, adds
+    /// other words, or drops more than two words per name word is ignored.
+    static func keepsBoost(plain: String, boosted: String, vocabulary: [String]) -> Bool {
+        func words(_ s: String) -> [String] {
+            s.lowercased().split(whereSeparator: { $0.isWhitespace }).map { $0.trimmingCharacters(in: .punctuationCharacters) }
+                .filter { !$0.isEmpty }
+        }
+        func minus(_ a: [String], _ b: [String]) -> [String] {
+            var rest = b, out: [String] = []
+            for w in a { if let i = rest.firstIndex(of: w) { rest.remove(at: i) } else { out.append(w) } }
+            return out
+        }
+        let p = words(plain), b = words(boosted)
+        let names = Set(vocabulary.flatMap(words))
+        let added = minus(b, p), dropped = minus(p, b)
+        guard !added.isEmpty, added.allSatisfy(names.contains) else { return false }
+        return dropped.count <= max(2, added.count * 2)
     }
 
     public func unload() async {
