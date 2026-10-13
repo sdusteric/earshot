@@ -94,6 +94,7 @@ struct ActivityView: View {
     private func detail(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
+                if !model.approvals.isEmpty { ApprovalRows().padding(.bottom, 6) }
                 Text(recap).font(.system(size: 24, weight: .semibold)).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Button("Say the Recap") { model.playTestLine(recap) }

@@ -207,6 +207,33 @@ public actor VoiceLoop: ListenObserver {
         await speech.enqueue(line)
     }
 
+    // MARK: - Clicks
+
+    /// Allow or Deny clicked in the panel or the Activity window. The same write
+    /// as a spoken yes or no, with the confirm chime and no spoken reply. A prompt
+    /// that already closed (answered on screen, or by voice first) writes nothing.
+    @discardableResult
+    public func click(_ id: String, allow: Bool) async -> ApprovalBook.AnswerResult {
+        guard let a = await approvals.current.first(where: { $0.id == id }) else { return .closed }
+        let result = await approvals.answer(id, allow: allow)
+        let reply: String
+        switch result {
+        case .written:
+            await chimes.play(.confirm)
+            reply = allow ? "Approved." : "Told it no."
+        case .closed:
+            return result
+        case .failed:
+            reply = "Couldn't answer it."
+            await speech.enqueue(SpokenLine(text: reply, kind: .confirm, session: ""))
+        }
+        await events.add("command answer by click")
+        let name = await directory.session(a.session)?.name ?? a.name
+        await history?.add(HistoryEntry(kind: .heard, text: allow ? "Allowed" : "Denied", reply: reply,
+                                        session: a.session, sessionName: name))
+        return result
+    }
+
     // MARK: - Lines
 
     private func lineEvent(_ e: SpeechOut.LineEvent) async {

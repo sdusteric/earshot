@@ -18,6 +18,12 @@ struct StatusPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if !model.approvals.isEmpty {
+                ApprovalRows()
+                    .font(.callout)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+            }
             notices
             Divider()
             sessionsSection
@@ -27,7 +33,10 @@ struct StatusPanel: View {
             footer
         }
         .frame(width: 360)
-        .onAppear { model.refreshPermissions() }   // secure input or a permission may have changed
+        .onAppear {
+            model.refreshPermissions()   // secure input or a permission may have changed
+            model.refreshApprovals()
+        }
         .task { await model.checkPlugin() }
     }
 
@@ -244,6 +253,30 @@ private struct Notice: View {
             Text(text).font(.callout).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             if let action { Button(action, action: perform).controlSize(.small) }
+        }
+    }
+}
+
+/// Permission prompts waiting on you, each with Allow and Deny. A click answers
+/// it the way a spoken yes or no does. With one prompt, Return allows it.
+struct ApprovalRows: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let open = model.approvals
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(open) { a in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "hand.raised").foregroundStyle(.orange).accessibilityHidden(true)
+                    Text(a.line).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Deny") { model.answer(a, allow: false) }
+                    Button("Allow") { model.answer(a, allow: true) }
+                        .keyboardShortcut(open.count == 1 ? .defaultAction : nil)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(a.line)
+            }
         }
     }
 }

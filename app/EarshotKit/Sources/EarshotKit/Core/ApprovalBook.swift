@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import Synchronization
 
-public struct OpenApproval: Sendable, Equatable {
+public struct OpenApproval: Sendable, Equatable, Identifiable {
     public let session: String
     public let id: String
     /// The session as Earshot says it: "billing service".
@@ -13,6 +13,12 @@ public struct OpenApproval: Sendable, Equatable {
     let secret: String
     public let pid: Int32?
     public let opened: Date
+
+    /// For the Allow and Deny row: "Billing service wants to run the migration".
+    public var line: String {
+        let who = name.prefix(1).uppercased() + name.dropFirst()
+        return what.isEmpty ? "\(who) wants your OK" : "\(who) wants \(what)"
+    }
 }
 
 /// Permission prompts the plugin's decide hook waits on. The app answers one
