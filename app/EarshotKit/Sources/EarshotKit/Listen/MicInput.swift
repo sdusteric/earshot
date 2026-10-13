@@ -11,6 +11,22 @@ public enum AudioDevices {
         public let isBluetooth: Bool
         public let isBuiltIn: Bool
         public var hasOutput = false
+        /// Made by software (a meeting app's device, an aggregate), not a microphone.
+        public var isVirtual = false
+    }
+
+    /// The mics to try, in order: the choice above, then the built-in mic,
+    /// then any other real mic that isn't Bluetooth, then the system default
+    /// (nil). A mic can be listed yet give no audio, such as a MacBook's own
+    /// mic with the lid closed, so opening falls through this list.
+    public static func inputCandidates(setting: String?, inputs: [Device], outputIsBluetooth: Bool) -> [String?] {
+        var out: [String?] = [chooseInput(setting: setting, inputs: inputs, outputIsBluetooth: outputIsBluetooth)]
+        for d in inputs where d.isBuiltIn && d.hasInput { out.append(d.uid) }
+        for d in inputs where d.hasInput && !d.isBluetooth && !d.isVirtual && !d.isBuiltIn { out.append(d.uid) }
+        out.append(nil)
+        var seen: [String?] = []
+        for c in out where !seen.contains(c) { seen.append(c) }
+        return seen
     }
 
     /// The speaker for Earshot's voice: the setting when that device is here, else nil (the system output).
@@ -27,7 +43,7 @@ public enum AudioDevices {
         if let setting, inputs.contains(where: { $0.uid == setting && $0.hasInput }) { return setting }
         guard outputIsBluetooth else { return nil }
         if let b = inputs.first(where: { $0.isBuiltIn && $0.hasInput }) { return b.uid }
-        return inputs.first(where: { !$0.isBluetooth && $0.hasInput })?.uid
+        return inputs.first(where: { !$0.isBluetooth && !$0.isVirtual && $0.hasInput })?.uid
     }
 
     public static func all() -> [Device] { allIDs().compactMap(device) }
@@ -76,7 +92,8 @@ public enum AudioDevices {
                       hasInput: streamCount(id, kAudioObjectPropertyScopeInput) > 0,
                       isBluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE,
                       isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn,
-                      hasOutput: streamCount(id, kAudioObjectPropertyScopeOutput) > 0)
+                      hasOutput: streamCount(id, kAudioObjectPropertyScopeOutput) > 0,
+                      isVirtual: transport == kAudioDeviceTransportTypeVirtual || transport == kAudioDeviceTransportTypeAggregate)
     }
 
     private static func uidOf(_ id: AudioObjectID) -> String? { string(id, kAudioDevicePropertyDeviceUID) }
@@ -162,18 +179,34 @@ public actor MicInput: AudioInput {
     }
 
     private func build() throws {
+        let candidates = AudioDevices.inputCandidates(setting: deviceUID(), inputs: AudioDevices.all().filter(\.hasInput),
+                                                      outputIsBluetooth: AudioDevices.defaultOutputIsBluetooth())
+        for uid in candidates where open(uid) { return }
+        throw Failure.noInput
+    }
+
+    /// Opens the engine on one mic (nil: the system default). False when that
+    /// mic gives no usable audio, so the next one is tried. A tap whose format
+    /// doesn't match the hardware raises an Objective-C exception, which Swift
+    /// can't catch and which ends the app, so the formats are checked first.
+    private func open(_ uid: String?) -> Bool {
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        let choice = AudioDevices.chooseInput(setting: deviceUID(), inputs: AudioDevices.all().filter(\.hasInput),
-                                              outputIsBluetooth: AudioDevices.defaultOutputIsBluetooth())
-        if let uid = choice, var id = AudioDevices.deviceID(uid: uid), let unit = input.audioUnit {
+        if let uid {
+            guard var id = AudioDevices.deviceID(uid: uid), let unit = input.audioUnit else { return false }
             let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                               &id, UInt32(MemoryLayout<AudioObjectID>.size))
-            if status != noErr { log.error("couldn't choose the mic, status \(status, privacy: .public)") }
+            if status != noErr {
+                log.error("couldn't choose a mic, status \(status, privacy: .public)")
+                return false
+            }
         }
+        let hardware = input.inputFormat(forBus: 0)
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0, let resampler = Resampler(from: format) else {
-            throw Failure.noInput
+        guard hardware.sampleRate > 0, hardware.channelCount > 0, format.channelCount > 0,
+              format.sampleRate == hardware.sampleRate, let resampler = Resampler(from: format) else {
+            log.error("a mic gave no usable audio (\(uid == nil ? "the default" : "the chosen one", privacy: .public)); trying the next")
+            return false
         }
         let cont = self.cont
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
@@ -181,13 +214,20 @@ public actor MicInput: AudioInput {
             if !s.isEmpty { cont?.yield(s) }
         }
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            log.error("a mic didn't start: \(error.localizedDescription, privacy: .public); trying the next")
+            return false
+        }
         self.engine = engine
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
                                                           queue: nil) { [weak self] _ in
             Task { await self?.rebuild() }
         }
         log.info("mic open")
+        return true
     }
 
     private func rebuild() {

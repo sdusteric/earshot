@@ -168,3 +168,45 @@ import Testing
         #expect(b.banner(for: line("Hey, it needs you.", .need, "b", name: nil), name: nil)?.title == "A session")
     }
 }
+
+@Suite struct BannerDelayTests {
+    actor Posted {
+        var banners: [Banner] = []
+        func add(_ b: Banner) { banners.append(b) }
+    }
+
+    func make(_ posted: Posted) async -> Banners {
+        let b = Banners(delay: .milliseconds(120))
+        await b.connect(show: { await posted.add($0) }, remove: { _ in })
+        return b
+    }
+
+    let line = SpokenLine(text: "Blog wants to push to main. Allow it?", kind: .need, session: "s1", name: "blog")
+
+    @Test func aBannerWaitsThenPosts() async {
+        let posted = Posted()
+        let b = await make(posted)
+        await b.unspoken(line, name: nil)
+        #expect(await posted.banners.isEmpty)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await posted.banners.map(\.title) == ["Blog"])
+    }
+
+    @Test func aLineSaidWhileTheBannerWaitsPostsNothing() async {
+        let posted = Posted()
+        let b = await make(posted)
+        await b.unspoken(line, name: nil)
+        await b.lineSaid(line.id)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await posted.banners.isEmpty)
+    }
+
+    @Test func aSessionBackAtWorkWhileTheBannerWaitsPostsNothing() async {
+        let posted = Posted()
+        let b = await make(posted)
+        await b.unspoken(line, name: nil)
+        await b.sessionChanged("s1", to: .working)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await posted.banners.isEmpty)
+    }
+}

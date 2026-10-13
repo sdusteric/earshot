@@ -78,6 +78,11 @@ public final class EarshotCore: Sendable {
         Task {
             for await line in held { await banners.unspoken(line, name: await sessions.name(of: line.session)) }
         }
+        // A line that gets said after all (a short dictation held it) drops its waiting banner.
+        let said = await speech.lineEvents()
+        Task {
+            for await e in said { if case .started(let line) = e { await banners.lineSaid(line.id) } }
+        }
         Task {
             for await message in stream {
                 switch message {

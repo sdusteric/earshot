@@ -66,3 +66,32 @@ import Testing
         #expect(AudioDevices.chooseOutput(setting: nil, devices: [speakers]) == nil)
     }
 }
+
+@Suite struct InputCandidateTests {
+    let builtIn = AudioDevices.Device(uid: "BuiltIn", name: "MacBook Pro Microphone", hasInput: true, isBluetooth: false, isBuiltIn: true)
+    let camera = AudioDevices.Device(uid: "USB", name: "Insta360 Link", hasInput: true, isBluetooth: false, isBuiltIn: false)
+    let zoom = AudioDevices.Device(uid: "Zoom", name: "ZoomAudioDevice", hasInput: true, isBluetooth: false, isBuiltIn: false,
+                                   hasOutput: true, isVirtual: true)
+    let headset = AudioDevices.Device(uid: "BT", name: "1000X", hasInput: true, isBluetooth: true, isBuiltIn: false)
+
+    /// A Bluetooth headset plays: the built-in mic first, then the camera's, then
+    /// the default; a meeting app's virtual device is never picked.
+    @Test func aMicThatGivesNoAudioFallsThroughToTheNext() {
+        let c = AudioDevices.inputCandidates(setting: nil, inputs: [zoom, headset, camera, builtIn], outputIsBluetooth: true)
+        #expect(c == ["BuiltIn", "USB", nil])
+    }
+
+    @Test func theSettingComesFirstAndNothingRepeats() {
+        let c = AudioDevices.inputCandidates(setting: "USB", inputs: [builtIn, camera], outputIsBluetooth: true)
+        #expect(c == ["USB", "BuiltIn", nil])
+    }
+
+    @Test func withoutABluetoothOutputTheDefaultLeads() {
+        let c = AudioDevices.inputCandidates(setting: nil, inputs: [builtIn], outputIsBluetooth: false)
+        #expect(c == [nil, "BuiltIn"])
+    }
+
+    @Test func aVirtualDeviceIsNeverTheAutomaticChoice() {
+        #expect(AudioDevices.chooseInput(setting: nil, inputs: [zoom, headset], outputIsBluetooth: true) == nil)
+    }
+}

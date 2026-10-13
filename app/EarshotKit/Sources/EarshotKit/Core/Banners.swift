@@ -37,17 +37,33 @@ public struct BannerBook: Sendable {
 }
 
 /// Posts the banners. The app connects the poster; until then, and while the
-/// setting is off, nothing is posted.
+/// setting is off, nothing is posted. A banner waits a few seconds first, and
+/// is dropped when the line got said meanwhile (a short dictation held it) or
+/// the session went back to work.
 public actor Banners {
     public typealias Show = @Sendable (Banner) async -> Void
     public typealias Remove = @Sendable (String) async -> Void
 
     private var book = BannerBook()
     private let enabled: @Sendable () -> Bool
+    private let delay: Duration
     private var show: Show?
     private var remove: Remove?
+    /// Lines that were said, so a waiting banner for one of them is dropped.
+    private var said: Set<UUID> = []
+    /// When each session last went back to work or closed.
+    private var answeredAt: [String: ContinuousClock.Instant] = [:]
 
-    public init(enabled: @escaping @Sendable () -> Bool = { true }) { self.enabled = enabled }
+    public init(enabled: @escaping @Sendable () -> Bool = { true }, delay: Duration = .seconds(4)) {
+        self.enabled = enabled
+        self.delay = delay
+    }
+
+    /// Earshot started saying this line.
+    public func lineSaid(_ id: UUID) {
+        if said.count >= BannerBook.maxSeen { said.removeAll() }
+        said.insert(id)
+    }
 
     public func connect(show: @escaping Show, remove: @escaping Remove) {
         self.show = show
@@ -56,7 +72,23 @@ public actor Banners {
 
     /// A line Earshot can't say now: muted, or held for a call or a full screen app.
     public func unspoken(_ line: SpokenLine, name: String?) async {
-        guard enabled(), let show, let banner = book.banner(for: line, name: name) else { return }
+        guard enabled(), show != nil, line.asksYou else { return }
+        let arrived = ContinuousClock.now
+        if delay == .zero {
+            await post(line, name: name, arrived: arrived)
+        } else {
+            // In a task of its own, so the lines behind this one don't wait.
+            Task { [delay] in
+                try? await Task.sleep(for: delay)
+                await self.post(line, name: name, arrived: arrived)
+            }
+        }
+    }
+
+    private func post(_ line: SpokenLine, name: String?, arrived: ContinuousClock.Instant) async {
+        guard enabled(), let show, !said.contains(line.id) else { return }
+        if let back = answeredAt[line.session], back >= arrived { return }
+        guard let banner = book.banner(for: line, name: name) else { return }
         await show(banner)
     }
 
@@ -64,6 +96,7 @@ public actor Banners {
     public func sessionChanged(_ session: String, to state: SessionState) async {
         switch state {
         case .working, .open, .closed:
+            answeredAt[session] = ContinuousClock.now
             if book.clear(session: session) { await remove?(session) }
         default:
             break
