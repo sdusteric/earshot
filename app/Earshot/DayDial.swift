@@ -1,9 +1,9 @@
 import EarshotKit
 import SwiftUI
 
-/// Where everything sits on the 24-hour dial. Now is at the top and the past
-/// runs counterclockwise from it; the outer ring is what you said, then one
-/// ring per session, newest first, around the orb in the middle.
+/// The dial's geometry from EarshotKit, with each ring's name, color, and
+/// whether it is active. The outer ring is what you said, then one ring per
+/// session, newest first, around the orb in the middle.
 struct DialLayout {
     struct Lane: Identifiable {
         let id: String
@@ -14,63 +14,39 @@ struct DialLayout {
         var active = false
     }
 
-    static let youLane = "you"
-    static let day: TimeInterval = 24 * 3600
+    static let youLane = DialGeometry.youLane
+    static let day = DialGeometry.day
 
-    let size: CGFloat
-    let now: Date
+    let geometry: DialGeometry
     let lanes: [Lane]
-    let orbSize: CGFloat
-    let outer: CGFloat
 
-    var center: CGPoint { CGPoint(x: size / 2, y: size / 2) }
+    var size: CGFloat { geometry.size }
+    var now: Date { geometry.now }
+    var orbSize: CGFloat { geometry.orbSize }
+    var outer: CGFloat { geometry.outer }
+    var center: CGPoint { geometry.center }
 
     init(size: CGFloat, now: Date, sessions: [(id: String, name: String, color: Color, active: Bool)]) {
-        self.size = size
-        self.now = now
-        outer = size / 2 - 76   // room for the hour labels at the sides
-        orbSize = size * 0.3
-        let inner = orbSize / 2 + 30
-        let count = CGFloat(sessions.count + 1)
-        let gap = min(30, (outer - inner) / max(count, 1))
-        var lanes = [Lane(id: Self.youLane, name: "You", color: DialPalette.you, radius: outer)]
-        for (i, s) in sessions.enumerated() {
-            lanes.append(Lane(id: s.id, name: s.name, color: s.color, radius: outer - gap * CGFloat(i + 1), active: s.active))
+        geometry = DialGeometry(size: size, now: now, sessions: sessions.map(\.id))
+        var lanes = [Lane(id: Self.youLane, name: "You", color: DialPalette.you, radius: geometry.outer)]
+        for (s, ring) in zip(sessions, geometry.rings.dropFirst()) {
+            lanes.append(Lane(id: s.id, name: s.name, color: s.color, radius: ring.radius, active: s.active))
         }
         self.lanes = lanes
     }
 
-    /// The angle of a moment: -90 degrees is now, a day ago is a full turn back.
-    func angle(_ t: Date) -> Double {
-        let back = min(max(now.timeIntervalSince(t), 0), Self.day)
-        return -Double.pi / 2 - back / Self.day * 2 * Double.pi
-    }
+    func angle(_ t: Date) -> Double { geometry.angle(t) }
 
-    func point(_ t: Date, radius: CGFloat) -> CGPoint {
-        let a = angle(t)
-        return CGPoint(x: center.x + cos(a) * radius, y: center.y + sin(a) * radius)
-    }
+    func point(_ t: Date, radius: CGFloat) -> CGPoint { geometry.point(t, radius: radius) }
 
     func lane(for e: HistoryEntry) -> Lane? {
-        if e.kind == .heard { return lanes.first }
-        guard let s = e.session else { return nil }
-        return lanes.first { $0.id == s }
+        guard let ring = geometry.ring(for: e) else { return nil }
+        return lanes.first { $0.id == ring.id }
     }
 
-    func position(_ e: HistoryEntry) -> CGPoint? {
-        guard let l = lane(for: e) else { return nil }
-        return point(e.date, radius: l.radius)
-    }
+    func position(_ e: HistoryEntry) -> CGPoint? { geometry.position(e) }
 
-    /// The moment under a point on the dial, when it is on the dial's face.
-    func time(at p: CGPoint) -> Date? {
-        let dx = p.x - center.x, dy = p.y - center.y
-        let r = (dx * dx + dy * dy).squareRoot()
-        guard r > orbSize / 2 + 8, r < outer + 24 else { return nil }
-        var a = atan2(dy, dx) + Double.pi / 2   // 0 at the top, growing clockwise
-        if a > 0 { a -= 2 * Double.pi }
-        return now.addingTimeInterval(a / (2 * Double.pi) * Self.day)
-    }
+    func time(at p: CGPoint) -> Date? { geometry.time(at: p) }
 }
 
 enum DialPalette {
@@ -104,7 +80,7 @@ struct DayDial: View {
     let focusLane: String?
     let select: (Date?) -> Void
     @Environment(AppModel.self) private var model
-    @State private var hover: Dot?
+    @State private var hover: DialDot?
 
     var body: some View {
         ZStack {
@@ -147,34 +123,10 @@ struct DayDial: View {
         return "Today around the orb. \(entries.count) \(entries.count == 1 ? "line" : "lines"), the newest at \(t)\(about)."
     }
 
-    /// One drawn dot: the newest line there, and the older ones merged into it.
-    struct Dot {
-        let entry: HistoryEntry
-        let point: CGPoint
-        var count = 1
-        var oldest: Date
-    }
+    /// The dots as drawn, with lines that would sit on top of each other merged.
+    private var dots: [DialDot] { layout.geometry.dots(entries) }
 
-    /// The dots as drawn: lines that would sit on top of each other on a ring
-    /// become one dot, so hover and click reach every dot that shows.
-    private var dots: [Dot] {
-        var out: [Dot] = []
-        for e in entries.sorted(by: { $0.date > $1.date }) {
-            guard let p = layout.position(e) else { continue }
-            if let i = out.firstIndex(where: { hypot($0.point.x - p.x, $0.point.y - p.y) < 8 }) {
-                out[i].count += 1
-                out[i].oldest = min(out[i].oldest, e.date)
-            } else {
-                out.append(Dot(entry: e, point: p, oldest: e.date))
-            }
-        }
-        return out
-    }
-
-    private func nearest(to p: CGPoint) -> Dot? {
-        dots.filter { hypot($0.point.x - p.x, $0.point.y - p.y) < 12 }
-            .min { hypot($0.point.x - p.x, $0.point.y - p.y) < hypot($1.point.x - p.x, $1.point.y - p.y) }
-    }
+    private func nearest(to p: CGPoint) -> DialDot? { DialGeometry.nearest(dots, to: p) }
 
     private func draw(_ gc: inout GraphicsContext) {
         let c = layout.center
@@ -189,20 +141,15 @@ struct DayDial: View {
         }
 
         // Hour ticks, clock labels every 6 hours, a longer tick for now.
-        let cal = Calendar.current
-        let startHour = cal.dateInterval(of: .hour, for: layout.now)?.start ?? layout.now
-        for h in 0..<24 {
-            let t = startHour.addingTimeInterval(-Double(h) * 3600)
-            let hour = cal.component(.hour, from: t)
-            let major = hour % 6 == 0
+        for tick in DialGeometry.hourTicks(now: layout.now) {
+            let t = tick.date, major = tick.major
             let a = layout.angle(t)
             var p = Path()
             p.move(to: CGPoint(x: c.x + cos(a) * (layout.outer + 20), y: c.y + sin(a) * (layout.outer + 20)))
             p.addLine(to: CGPoint(x: c.x + cos(a) * (layout.outer + (major ? 30 : 25)), y: c.y + sin(a) * (layout.outer + (major ? 30 : 25))))
             gc.stroke(p, with: .color(DialPalette.tick), lineWidth: major ? 1.5 : 1)
-            let back = layout.now.timeIntervalSince(t)
             // An hour label within 75 minutes of now would crowd the "now" label.
-            if major, back > 4500, back < DialLayout.day - 4500 {
+            if tick.labeled {
                 let lp = CGPoint(x: c.x + cos(a) * (layout.outer + 33), y: c.y + sin(a) * (layout.outer + 33))
                 let label = Text(t, format: .dateTime.hour()).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 gc.draw(label, at: lp, anchor: anchor(for: a))
@@ -216,36 +163,21 @@ struct DayDial: View {
                 at: CGPoint(x: c.x, y: c.y - layout.outer - 36), anchor: .bottom)
 
         // Rings: a track for a lane with lines today, a hairline for one without,
-        // and each session's span from its first line to its last (on to now
-        // while it works or waits on you), in its state color.
-        // A gap of more than half an hour between lines ends a stretch, so the
-        // arc never claims work nobody heard about.
+        // and each session's stretches of lines (on to now while it works or
+        // waits on you), in its state color.
         var times: [String: [Date]] = [:]
         for e in entries {
             guard let lane = layout.lane(for: e) else { continue }
             times[lane.id, default: []].append(e.date)
         }
-        var spans: [String: [(Date, Date)]] = [:]
-        for (id, ts) in times {
-            var out: [(Date, Date)] = []
-            for t in ts.sorted() {
-                if let last = out.last, t.timeIntervalSince(last.1) <= 1800 { out[out.count - 1].1 = t } else { out.append((t, t)) }
-            }
-            spans[id] = out
-        }
         for lane in layout.lanes {
             let focused = focusLane == nil || focusLane == lane.id
             var ring = Path()
             ring.addEllipse(in: CGRect(x: c.x - lane.radius, y: c.y - lane.radius, width: lane.radius * 2, height: lane.radius * 2))
-            if let stretches = spans[lane.id] {
+            if let ts = times[lane.id] {
                 gc.stroke(ring, with: .color(focused ? DialPalette.track : DialPalette.track.opacity(0.45)), lineWidth: 14)
-                for (i, span) in stretches.enumerated() {
-                    // The latest stretch runs on to now while the session works or waits, if it spoke lately.
-                    let runsOn = i == stretches.count - 1 && lane.active && layout.now.timeIntervalSince(span.1) <= 1800
-                    let end = runsOn ? layout.now : span.1
-                    // A stretch shorter than a dot is just its dot.
-                    guard end.timeIntervalSince(span.0) >= 900 else { continue }
-                    arc(&gc, from: span.0, to: end, radius: lane.radius,
+                for stretch in DialGeometry.stretches(ts, active: lane.active, now: layout.now) {
+                    arc(&gc, from: stretch.lowerBound, to: stretch.upperBound, radius: lane.radius,
                         color: lane.color.opacity(focused ? 0.55 : 0.2), width: 6)
                 }
             } else {
@@ -313,7 +245,7 @@ struct DayDial: View {
         UnitPoint(x: 0.5 - cos(a) * 0.5, y: 0.5 - sin(a) * 0.5)
     }
 
-    private func callout(_ dot: Dot) -> some View {
+    private func callout(_ dot: DialDot) -> some View {
         let e = dot.entry, p = dot.point
         let right = p.x < layout.size / 2
         let f = Date.FormatStyle().hour().minute()
@@ -377,16 +309,5 @@ struct NowStrip: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Last line: \(entry.kind == .heard ? (entry.reply ?? entry.text) : entry.text)")
         }
-    }
-}
-
-extension HistoryEntry {
-    /// A line that waits on you: a "needs you" line, or one that ends by asking
-    /// something ("Want one more round, or ship it?"), which the plugin sends
-    /// as a finished turn.
-    var asksYou: Bool {
-        guard kind == .said else { return false }
-        if lineKind == .need || lineKind == .reply { return true }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
     }
 }

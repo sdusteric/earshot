@@ -331,7 +331,7 @@ private struct SessionRow: View {
 }
 
 enum SessionStyle {
-    static func title(_ name: String) -> String { name.prefix(1).uppercased() + name.dropFirst() }
+    static func title(_ name: String) -> String { ActivitySessions.title(name) }
 
     static func color(_ state: SessionState) -> Color {
         switch state {
