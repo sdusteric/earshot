@@ -417,4 +417,4 @@ you hear what you missed, with the lines that need you first.
 
 ## License
 
-MIT
+MIT. The software and models Earshot for Mac uses have their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which is also inside the app bundle.

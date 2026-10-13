@@ -26,8 +26,18 @@
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Earshot lowers other apps' audio while it talks. It never records or saves that audio.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on the Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Documents.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Downloads.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Earshot listens for "Hey Earshot" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on a network drive.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on an external drive.</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml</string>
 	<key>SUPublicEDKey</key>

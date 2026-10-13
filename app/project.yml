@@ -14,7 +14,11 @@ targets:
   Earshot:
     type: application
     platform: macOS
-    sources: [Earshot]
+    sources:
+      - Earshot
+      # Credit and license text for Sparkle, FluidAudio and the models. The repo copy is the source.
+      - path: ../THIRD_PARTY_NOTICES.md
+        buildPhase: resources
     dependencies:
       - package: EarshotKit
       - package: Sparkle
@@ -27,6 +31,13 @@ targets:
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.developer-tools
         NSAudioCaptureUsageDescription: "Earshot lowers other apps' audio while it talks. It never records or saves that audio."
+        # Earshot starts and talks to Claude Code sessions in your project folders. macOS asks
+        # for access when a folder is in one of these places.
+        NSDocumentsFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Documents."
+        NSDesktopFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on the Desktop."
+        NSDownloadsFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Downloads."
+        NSRemovableVolumesUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on an external drive."
+        NSNetworkVolumesUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on a network drive."
         NSMicrophoneUsageDescription: "Earshot listens for \"Hey Earshot\" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved."
         # The feed is packaging/appcast.xml on main. release-app.sh adds each release to it.
         SUFeedURL: "https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml"
