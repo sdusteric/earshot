@@ -83,6 +83,7 @@ enum DialPalette {
 
     static func color(_ e: HistoryEntry, sessions: [SessionInfo]) -> Color {
         if e.kind == .heard { return you }
+        if e.asksYou { return .orange }
         switch e.lineKind {
         case .need, .reply: return .orange
         case .alert: return .red
@@ -277,7 +278,7 @@ struct DayDial: View {
             let age = layout.now.timeIntervalSince(e.date) / DialLayout.day
             let dim = focusLane == nil || focusLane == lane.id ? 1.0 : 0.3
             let lit = highlighted.isEmpty || highlighted.contains(e.id)
-            let r: CGFloat = (e.lineKind == .need ? 6 : 4.5) * (lit && !highlighted.isEmpty ? 1.4 : 1)
+            let r: CGFloat = (e.lineKind == .need || e.asksYou ? 6 : 4.5) * (lit && !highlighted.isEmpty ? 1.4 : 1)
             let color = DialPalette.color(e, sessions: model.sessions)
             let rect = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
             gc.fill(Path(ellipseIn: rect.insetBy(dx: -2, dy: -2)), with: .color(DialPalette.ground))
@@ -376,5 +377,16 @@ struct NowStrip: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Last line: \(entry.kind == .heard ? (entry.reply ?? entry.text) : entry.text)")
         }
+    }
+}
+
+extension HistoryEntry {
+    /// A line that waits on you: a "needs you" line, or one that ends by asking
+    /// something ("Want one more round, or ship it?"), which the plugin sends
+    /// as a finished turn.
+    var asksYou: Bool {
+        guard kind == .said else { return false }
+        if lineKind == .need || lineKind == .reply { return true }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
     }
 }

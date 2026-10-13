@@ -332,7 +332,7 @@ struct HistoryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: entry.kind == .heard ? "person.wave.2" : "waveform")
-                .foregroundStyle(entry.kind == .heard ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(entry.kind == .heard ? AnyShapeStyle(.tint) : entry.asksYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .frame(width: 18)
                 .padding(.top, 1)
                 .accessibilityHidden(true)
