@@ -634,6 +634,7 @@ public actor Listener {
     /// command is kept only as text.
     private func takeClip(_ c: Capture, end: Int) -> [Float] {
         let clip = ring.samples(from: c.start, to: end)
+        Self.keepForDebugging(clip)
         ring.erase(upTo: end)
         return clip
     }
@@ -695,6 +696,25 @@ public actor Listener {
         }
         await closeMicIfIdle()
         settlePhase()
+    }
+
+    /// For debugging recognition only: with EARSHOT_KEEP_AUDIO set to a folder in
+    /// the environment the app was launched with, each command's audio is written
+    /// there as a 16 kHz WAV. Unset (always, in normal use), nothing is written,
+    /// and audio stays in memory as promised.
+    static func keepForDebugging(_ clip: [Float]) {
+        guard let dir = ProcessInfo.processInfo.environment["EARSHOT_KEEP_AUDIO"], !dir.isEmpty, !clip.isEmpty else { return }
+        var pcm = Data(capacity: clip.count * 2)
+        for x in clip {
+            var v = Int16(max(-1, min(1, x)) * 32767).littleEndian
+            withUnsafeBytes(of: &v) { pcm.append(contentsOf: $0) }
+        }
+        func le<T: FixedWidthInteger>(_ v: T) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        var wav = Data("RIFF".utf8) + le(UInt32(36 + pcm.count)) + Data("WAVEfmt ".utf8)
+        wav += le(UInt32(16)) + le(UInt16(1)) + le(UInt16(1)) + le(UInt32(16_000)) + le(UInt32(32_000)) + le(UInt16(2)) + le(UInt16(16))
+        wav += Data("data".utf8) + le(UInt32(pcm.count)) + pcm
+        let name = "command-\(Int(Date().timeIntervalSince1970)).wav"
+        try? wav.write(to: URL(fileURLWithPath: dir).appending(path: name))
     }
 
     /// The command ran past the cap while you were still talking. Sending it cut off
