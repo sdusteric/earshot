@@ -253,7 +253,10 @@ public actor MicInput: AudioInput {
             return false
         }
         let cont = self.cont
-        let heard = HeardFlag()
+        // A Bluetooth headset can send zeros for a moment while it switches to its
+        // call mode, so it gets longer before it counts as dead.
+        let device = uid.flatMap { u in AudioDevices.all().first { $0.uid == u } } ?? AudioDevices.systemDefault(input: true)
+        let heard = HeardFlag(zerosLimit: device?.isBluetooth == true ? HeardFlag.bluetoothZerosLimit : HeardFlag.zerosLimit)
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable [weak self, weak engine] buffer, _ in
             heard.set()
             let s = resampler.convert(buffer)
@@ -362,12 +365,16 @@ final class HeardFlag: @unchecked Sendable {
     /// About 0.6 s at 16 kHz. A live mic always has some noise, even in a quiet
     /// room; this many samples, every one exactly zero, mean it is off or muted.
     static let zerosLimit = 9_600
+    /// About 2 s, for a Bluetooth mic.
+    static let bluetoothZerosLimit = 32_000
+    private let zerosLimit: Int
     private let lock = NSLock()
     private var value = false
     private var buffers = 0
     private var samples = 0
     private var peak: Float = 0
     private var reported = false
+    init(zerosLimit: Int = HeardFlag.zerosLimit) { self.zerosLimit = zerosLimit }
     func set() { lock.withLock { value = true } }
     var isSet: Bool { lock.withLock { value } }
     /// For the log: how much came in and how loud, never the audio itself.
@@ -377,7 +384,7 @@ final class HeardFlag: @unchecked Sendable {
         for x in s { p = max(p, abs(x)) }
         return lock.withLock {
             buffers += 1; samples += s.count; peak = max(peak, p)
-            guard peak == 0, samples >= Self.zerosLimit, !reported else { return false }
+            guard peak == 0, samples >= zerosLimit, !reported else { return false }
             reported = true
             return true
         }

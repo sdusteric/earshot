@@ -114,6 +114,14 @@ import Testing
         #expect(!h.onlySilence)   // fewer than 8 buffers
     }
 
+    /// A headset switching to its call mode can send zeros for a moment.
+    @Test func aBluetoothMicGetsAboutTwoSeconds() {
+        let h = HeardFlag(zerosLimit: HeardFlag.bluetoothZerosLimit)
+        let zeros = [Float](repeating: 0, count: 2_048)
+        for _ in 0..<15 { #expect(!h.count(zeros)) }   // 1.9 s
+        #expect(h.count(zeros))
+    }
+
     /// A quiet room is never exactly zero: that is not a dead mic.
     @Test func quietAudioIsNotADeadMic() {
         let h = HeardFlag()
