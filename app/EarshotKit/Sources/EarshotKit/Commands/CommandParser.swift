@@ -51,14 +51,17 @@ public struct CommandParser: Sendable {
             return backed([target], by: said) ? c : .unknown
         case .stop(let target, _):
             // "Hold on a second" is not a stop: one of the stop words must have been said.
-            return backed([target], by: said) && said.contains(where: saysStop) ? c : .unknown
+            guard backed([target], by: said) && said.contains(where: saysStop) else { return .unknown }
+            // With no session named, only Earshot stops talking (see Grammar.quietWords).
+            guard let target else { return .quiet }
+            return Grammar.everyoneWords.contains(Grammar.Words(target).key) ? .stopAll : c
         case .answer(_, let target):
             guard backed([target], by: said) else { return .unknown }
             let targetWords = Set(Grammar.Words(target ?? "").keys)
             let rest = Grammar.Words(text).keys.filter { !targetWords.contains($0) }.joined(separator: " ")
             guard let approves = Grammar.plainAnswer(rest, named: target != nil) else { return .unknown }
             return .answer(allow: approves, target: target)
-        case .greet, .unknown:
+        case .greet, .stopAll, .quiet, .unknown:
             return c
         }
     }

@@ -148,8 +148,10 @@ actor SlowCommandModel: CommandModel {
     @Test func aModelStopNeedsAStopWord() async {
         let stop = FakeModel(answer: .stop(target: nil, now: false))
         #expect(await CommandParser(model: stop).parse("hold on a second", sessions: ["billing"]) == .unknown)
-        #expect(await CommandParser(model: stop).parse("could you pause for a moment", sessions: ["billing"])
-                == .stop(target: nil, now: false))
+        // With no session named, a stop only quiets Earshot: it never picks a session.
+        #expect(await CommandParser(model: stop).parse("could you pause for a moment", sessions: ["billing"]) == .quiet)
+        let all = FakeModel(answer: .stop(target: "everyone", now: false))
+        #expect(await CommandParser(model: all).parse("could everyone please stop", sessions: ["billing"]) == .stopAll)
         let named = FakeModel(answer: .stop(target: "billing", now: false))
         #expect(await CommandParser(model: named).parse("billing should hold off for now", sessions: ["billing"]) == .unknown)
         #expect(await CommandParser(model: named).parse("billing should wait for now", sessions: ["billing"])

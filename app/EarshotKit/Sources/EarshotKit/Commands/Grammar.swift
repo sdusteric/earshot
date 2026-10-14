@@ -166,6 +166,14 @@ public enum Grammar {
         ("", "status"),
     ]
 
+    /// Said to quiet Earshot. A bare stop never reaches a session: you often say it
+    /// over Earshot's own line, and the session it would pick is only a guess.
+    static let quietWords: Set<String> = ["stop", "stop it", "stop that", "halt", "pause", "stop talking", "quiet",
+                                          "be quiet", "quiet please", "shut up", "hush", "enough", "that's enough"]
+    static let everyoneWords: Set<String> = ["everyone", "everybody", "everything", "all", "all sessions",
+                                             "all the sessions", "all of them", "them all", "every session",
+                                             "all of you", "you all"]
+
     static let questionWords: Set<String> = ["what", "what's", "why", "how", "whether", "if", "when", "where",
                                              "which", "who", "is", "are", "does", "did"]
     static let pronouns: Set<String> = ["it", "them", "him", "her", "claude", "that session", "this session"]
@@ -212,7 +220,9 @@ public enum Grammar {
         if let allow = plainAnswer(transcript) { return .answer(allow: allow, target: nil) }
         // "Okay" or "yeah" alone outside a window answers nothing.
         if windowAnswer(transcript) == true { return .unknown }
-        let w = Words(transcript).trimmingFillers()
+        var w = Words(transcript).trimmingFillers()
+        // "Earshot, ..." speaks to Earshot itself, not to a session called earshot.
+        if w.keys.first == "earshot", w.said.first?.hasSuffix(",") == true { w = w.slice(1..<w.count).trimmingFillers() }
         guard !w.isEmpty else { return .unknown }
         if let c = answer(w, known: known) ?? status(w, known: known) ?? stop(w, known: known) ?? start(w) ?? send(w, known: known) { return c }
         return nil
@@ -247,10 +257,19 @@ public enum Grammar {
     }
 
     private static func stop(_ w: Words, known: [String]) -> Command? {
-        if ["stop", "stop it", "stop that", "halt"].contains(w.key) { return .stop(target: nil, now: false) }
+        if quietWords.contains(w.key) { return .quiet }
         let nowWords = ["right now", "now", "immediately", "at once"]
+        // "Billing, stop."
+        if let (t, p) = w.splitAtComma(), startsKnownName(t, known: known) {
+            switch p.key {
+            case "stop", "stop it", "halt", "pause": return .stop(target: Words(t.text).text, now: false)
+            case "stop now", "stop right now", "stop immediately": return .stop(target: Words(t.text).text, now: true)
+            default: break
+            }
+        }
         if let rest = w.after(["tell", "ask"]), let (t, p) = rest.split(at: ["to"]), !t.isEmpty {
             if blockersBeforeTo.contains(t.keys.last ?? "") { return nil }
+            if everyoneWords.contains(t.key), p.keys.first == "stop", p.count <= 3 { return .stopAll }
             if pronouns.contains(t.key) || looksKnown(t.text, known: known) {
                 let target = pronouns.contains(t.key) ? nil : t.text
                 switch p.key {
@@ -260,12 +279,27 @@ public enum Grammar {
                 }
             }
         }
-        guard var t = w.after(["stop", "halt"]), !t.isEmpty, t.count <= 6 else { return nil }
+        guard var t = w.after(["stop", "halt", "pause"]), !t.isEmpty, t.count <= 6 else { return nil }
         var now = false
         if let b = t.before(nowWords) { t = b; now = true }
-        if t.isEmpty || pronouns.contains(t.key) { return .stop(target: nil, now: now) }
+        if t.isEmpty || ["it", "that", "this", "talking"].contains(t.key) { return .quiet }
+        if everyoneWords.contains(t.key) { return .stopAll }
+        if pronouns.contains(t.key) { return .stop(target: nil, now: now) }
         guard looksKnown(t.text, known: known) else { return nil }
         return .stop(target: t.text, now: now)
+    }
+
+    /// True when the words are a known name, or the start of one ("billing" for
+    /// "billing service"). Stricter than looksKnown: for a name said first,
+    /// where an ordinary sentence could start the same way. A name that starts
+    /// like a question ("What's next") never counts here.
+    static func startsKnownName(_ w: Words, known: [String]) -> Bool {
+        let t = nameWords(w.text)
+        guard !t.isEmpty, t.count <= 4, !questionWords.contains(t[0]) else { return false }
+        return known.contains { k in
+            let n = nameWords(k)
+            return !n.isEmpty && n.starts(with: t)
+        }
     }
 
     private static func start(_ w: Words) -> Command? {

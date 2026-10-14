@@ -251,6 +251,42 @@ actor FakeTransport: SessionTransport {
         #expect(await transport.sent == [.init(pid: 10, session: "a", text: Dispatcher.stopText, priority: .now)])
     }
 
+    @Test func quietSaysNothingAndSendsNothing() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy")])
+        #expect(await d.run(.quiet) == Dispatcher.Outcome())
+        #expect(await transport.sent.isEmpty)
+    }
+
+    /// Stopping every session asks first, and only a clear yes stops them.
+    @Test func stopAllAsksThenStopsWhatIsRunning() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy"), agent("b", "blog", pid: 11, status: "busy"),
+                              agent("c", "docs", pid: 12)])
+        let o = await d.run(.stopAll)
+        #expect(o.line == "Stop billing service and blog?")
+        #expect(await transport.sent.isEmpty)
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("Yes.", to: p).line == "Billing service and blog will stop after their current step.")
+        #expect(await transport.sent.map(\.pid) == [10, 11])
+        #expect(await transport.sent.allSatisfy { $0.text == Dispatcher.stopText })
+    }
+
+    @Test func stopAllWithoutAYesStopsNothing() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy")])
+        let o = await d.run(.stopAll)
+        #expect(o.line == "Stop billing service?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("No.", to: p).line == "Okay, I didn't stop anything.")
+        #expect(await d.reply("What's the weather", to: p).line == "Okay, I didn't stop anything.")
+        #expect(await transport.sent.isEmpty)
+    }
+
+    @Test func stopAllWithNothingRunning() async {
+        let (d, _, _) = make([agent("c", "docs")])
+        #expect(await d.run(.stopAll).line == "Nothing is running.")
+        let (none, _, _) = make([])
+        #expect(await none.run(.stopAll).line == "No Claude sessions are open.")
+    }
+
     @Test func stopNowOnABackgroundSessionRunsClaudeStop() async {
         let (d, runner, _) = make([agent("g", "wedding", pid: 20, kind: "background", status: "busy")])
         #expect(await d.run(.stop(target: "wedding", now: true)).line == "Stopped wedding.")

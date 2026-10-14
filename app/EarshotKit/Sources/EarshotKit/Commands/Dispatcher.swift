@@ -10,6 +10,8 @@ public actor Dispatcher {
         case startPrompt(KnownProject)
         /// "Which one, billing or docs?"
         case chooseApproval(allow: Bool, [String])
+        /// "Stop billing and blog?": these sessions stop on a clear yes.
+        case confirmStop([String])
     }
 
     public struct Outcome: Sendable, Equatable {
@@ -64,6 +66,10 @@ public actor Dispatcher {
         switch c {
         case .unknown:
             return Outcome(line: Self.didntGetIt)
+        case .quiet:
+            return Outcome()
+        case .stopAll:
+            return await askStopAll()
         case .status(nil):
             await directory.refresh(ifOlderThan: 2)
             return Outcome(line: RollCall.line(await directory.sessions, now: Date()))
@@ -103,6 +109,9 @@ public actor Dispatcher {
             if hits.isEmpty, open.count < ids.count { return Outcome() }
             guard hits.count == 1 else { return Outcome(line: "I didn't catch which one.") }
             return await write(hits[0], allow: allow)
+        case .confirmStop(let ids):
+            guard Grammar.windowAnswer(text) == true else { return Outcome(line: "Okay, I didn't stop anything.") }
+            return await stopAll(ids)
         }
     }
 
@@ -217,14 +226,15 @@ public actor Dispatcher {
         return brokenVersions.contains(v)
     }
 
+    static func isActive(_ s: LiveSession) -> Bool { s.busy || s.waiting || [.working, .needs, .stuck].contains(s.state) }
+
     private func stop(_ s: LiveSession, now: Bool) async -> Outcome {
         let name = Self.upper(s.name)
         if now, s.isBackground {
             let r = await runner.run(["stop", s.id], cwd: nil, timeout: .seconds(10))
             return Outcome(line: r.status == 0 ? "Stopped \(s.name)." : "Couldn't stop \(s.name).", spokeAbout: s.id)
         }
-        let active = s.busy || s.waiting || [.working, .needs, .stuck].contains(s.state)
-        guard active else { return Outcome(line: "\(name) isn't doing anything.", spokeAbout: s.id) }
+        guard Self.isActive(s) else { return Outcome(line: "\(name) isn't doing anything.", spokeAbout: s.id) }
         guard let pid = s.pid, !(await sendingBroken()) else {
             if s.isBackground { return await stop(s, now: true) }
             if await sendingBroken() { return Outcome(line: "Sending to \(s.name) doesn't work with this Claude Code version yet.") }
@@ -233,7 +243,37 @@ public actor Dispatcher {
         guard await transport.send(pid: pid, sessionID: s.id, text: Self.stopText, priority: .now) else {
             return Outcome(line: "\(name) has closed.")
         }
-        return Outcome(line: "\(name) will stop after its current step.", spokeAbout: s.id)
+        return Outcome(line: Self.willStop(s.name), spokeAbout: s.id)
+    }
+
+    static func willStop(_ name: String) -> String { "\(upper(name)) will stop after its current step." }
+
+    /// One word can stop many sessions, so Earshot names them and asks first.
+    private func askStopAll() async -> Outcome {
+        await directory.refresh(ifOlderThan: 2)
+        let sessions = await directory.sessions
+        guard !sessions.isEmpty else { return Outcome(line: "No Claude sessions are open.") }
+        let active = sessions.filter(Self.isActive)
+        guard !active.isEmpty else { return Outcome(line: "Nothing is running.") }
+        let line = active.count <= 3 ? "Stop \(Self.join(active.map(\.name)))?" : "Stop all \(active.count) sessions that are running?"
+        return Outcome(line: line, pending: .confirmStop(active.map(\.id)))
+    }
+
+    private func stopAll(_ ids: [String]) async -> Outcome {
+        await directory.refresh(ifOlderThan: 2)
+        var stopping: [String] = [], other: [String] = []
+        for id in ids {
+            guard let s = await directory.session(id), Self.isActive(s) else { continue }
+            let o = await stop(s, now: false)
+            if o.line == Self.willStop(s.name) { stopping.append(s.name) }
+            else if let line = o.line { other.append(line) }
+        }
+        var parts: [String] = []
+        if !stopping.isEmpty {
+            parts.append("\(Self.upper(Self.join(stopping))) will stop after \(stopping.count == 1 ? "its" : "their") current step.")
+        }
+        parts += other
+        return Outcome(line: parts.isEmpty ? "Nothing is running now." : parts.joined(separator: " "))
     }
 
     // MARK: - Start

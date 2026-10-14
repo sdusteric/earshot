@@ -291,6 +291,8 @@ public actor VoiceLoop: ListenObserver {
         case .status: "status"
         case .greet: "greet"
         case .stop: "stop"
+        case .stopAll: "stop all"
+        case .quiet: "quiet"
         case .start: "start"
         case .answer: "answer"
         case .unknown: "unknown"

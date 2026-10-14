@@ -127,6 +127,20 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await ducker.ends == 1)   // its listening was paid
     }
 
+    /// You talk over Earshot to quiet it: the only session keeps working.
+    @Test func aBareStopOverALineReachesNoSession() async {
+        let r = await rig([agent("b", "blog", pid: 11, status: "busy")], blocking: true)
+        let player = r.player
+        await r.speech.enqueue(SpokenLine(text: "Blog is working, 5 minutes in.", kind: .roll, session: ""))
+        #expect(await eventually { await player.isPlaying })
+        await r.loop.captureBegan(.hotkey)
+        await r.loop.captureEnded(heard: true)
+        r.heard.yield(said("Stop."))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await transport.sent.isEmpty)
+        #expect(await player.played == ["Blog is working, 5 minutes in."])   // nothing said after it
+    }
+
     @Test func notUnderstoodSendsNothing() async {
         let r = await rig([agent("b", "blog")])
         let player = r.player
