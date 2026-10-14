@@ -41,7 +41,10 @@ final class AppModel {
     var mutedUntil: Date?
     var config = EarshotConfig.load()
     var startError: String?
-    var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// On, or waiting for your OK in System Settings, Login Items.
+    var launchAtLogin = [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+    var launchAtLoginNeedsApproval = SMAppService.mainApp.status == .requiresApproval
+    var launchAtLoginError: String?
 
     @ObservationIgnored let updater = Updater()
     @ObservationIgnored private var core: EarshotCore?
@@ -211,9 +214,25 @@ final class AppModel {
     func setLaunchAtLogin(_ on: Bool) {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {}
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+            launchAtLoginError = nil
+        } catch {
+            // register() can throw yet leave the item waiting for approval; the status below says which.
+            launchAtLoginError = "Couldn't change it: \(error.localizedDescription)"
+        }
+        readLaunchAtLogin()
     }
+
+    /// Re-reads the login item, which you can approve or remove in System Settings.
+    private func readLaunchAtLogin() {
+        let status = SMAppService.mainApp.status
+        let on = status == .enabled || status == .requiresApproval
+        if on != launchAtLogin { launchAtLogin = on }
+        let waiting = status == .requiresApproval
+        if waiting != launchAtLoginNeedsApproval { launchAtLoginNeedsApproval = waiting }
+        if waiting, launchAtLoginError != nil { launchAtLoginError = nil }
+    }
+
+    func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
 
     func playTestLine(_ text: String = "This is how Earshot sounds.") {
         guard let core else { return }
@@ -513,6 +532,7 @@ final class AppModel {
     /// Re-reads the mic and Input Monitoring permissions, which change in System
     /// Settings, and whether another app has secure keyboard entry on.
     func refreshPermissions() {
+        readLaunchAtLogin()
         let secure = IsSecureEventInputEnabled()
         if secure != secureInput { secureInput = secure }
         var changed = false

@@ -94,8 +94,7 @@ struct OnboardingView: View {
                 Toggle("Lower other apps while Earshot talks",
                        isOn: Binding(get: { model.config.duckEnabled },
                                      set: { on in model.save { $0.set("EARSHOT_DUCK", on ? nil : "off") } }))
-                Toggle("Open Earshot when you log in",
-                       isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                LaunchAtLoginToggle()
             case .tryIt:
                 Text("Try it").font(.title2.bold())
                 if model.config.wakeWord {

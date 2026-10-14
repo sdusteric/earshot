@@ -463,8 +463,7 @@ private struct GeneralTab: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Open Earshot when you log in",
-                       isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                LaunchAtLoginToggle()
             }
 
             Section {
@@ -542,6 +541,29 @@ private struct GeneralTab: View {
         let v = info?["CFBundleShortVersionString"] as? String ?? "?"
         let b = info?["CFBundleVersion"] as? String ?? "?"
         return "\(v) (\(b))"
+    }
+}
+
+/// Open at login, with what macOS still needs when it holds the login item for your OK.
+/// Used in Settings and the welcome steps.
+struct LaunchAtLoginToggle: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Toggle("Open Earshot when you log in",
+               isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+        if model.launchAtLoginNeedsApproval {
+            HStack(alignment: .firstTextBaseline) {
+                Text("macOS needs your OK: allow Earshot in System Settings, General, Login Items.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Open System Settings") { model.openLoginItems() }
+            }
+        } else if let error = model.launchAtLoginError {
+            Text(error).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
