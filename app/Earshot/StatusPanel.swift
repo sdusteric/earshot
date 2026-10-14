@@ -107,8 +107,8 @@ struct StatusPanel: View {
         if needsPlugin || needsMic || needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
             VStack(alignment: .leading, spacing: 8) {
                 if needsPlugin {
-                    Notice(text: model.pluginWorking ? "Connecting to Claude Code\u{2026}" : model.pluginStatus.line,
-                           action: model.pluginWorking ? nil : model.pluginStatus.action) { model.connectPlugin() }
+                    Notice(text: model.pluginWorking ? model.pluginWorkLine : model.pluginStatus.line,
+                           action: model.pluginWorking ? nil : model.pluginStatus.action) { model.fixPlugin() }
                 }
                 if needsModels {
                     if ListenModelFiles.partial {

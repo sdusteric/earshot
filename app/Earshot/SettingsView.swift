@@ -556,11 +556,11 @@ struct PluginStatusRow: View {
             } else if model.pluginStatus.isConnected {
                 Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
             } else if let action = model.pluginStatus.action {
-                Button(action) { model.connectPlugin() }
+                Button(action) { model.fixPlugin() }
             }
         } label: {
             Text("Earshot plugin")
-            Text(model.pluginWorking ? "Installing through Claude Code\u{2026}" : model.pluginStatus.line)
+            Text(model.pluginWorking ? model.pluginWorkLine : model.pluginStatus.line)
         }
     }
 }

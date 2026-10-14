@@ -18,6 +18,8 @@ final class AppModel {
     /// Whether Claude Code has the Earshot plugin, and an install under way.
     var pluginStatus: PluginStatus = .checking
     var pluginWorking = false
+    /// What the plugin row says while `pluginWorking`.
+    var pluginWorkLine = "Installing through Claude Code\u{2026}"
     /// What the Activity window shows; set before opening it from the panel.
     var activityFilter: ActivityFilter = .all
     /// Goes up when a click on a banner asks for the Activity window (see EarshotApp).
@@ -142,7 +144,9 @@ final class AppModel {
         Task {
             let stack = await ListenStack.live(core: live.core, history: history) { box.value }
             self.stack = stack
-            pluginLink = PluginLink(runner: stack.claudePath.map { ClaudeCLI(path: $0) })
+            // Claude Code may be installed after launch: each check looks for it until it is found.
+            let claude = stack.claude
+            pluginLink = PluginLink(find: { await claude.locate() == nil ? nil : claude })
             await checkPlugin(force: true)
             Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
@@ -425,18 +429,40 @@ final class AppModel {
 
     // MARK: Claude Code plugin
 
-    /// Asks Claude Code again, at most once a minute unless forced.
+    /// Asks Claude Code again, at most once a minute unless forced. While
+    /// `claude` is not found, each check looks for it again.
     func checkPlugin(force: Bool = false) async {
         guard let pluginLink, !pluginWorking else { return }
         if !force, let last = lastPluginCheck, Date().timeIntervalSince(last) < 60 { return }
         lastPluginCheck = Date()
+        let hadClaude = stack?.claudePath != nil
         pluginStatus = await pluginLink.check()
+        if !hadClaude, stack?.claudePath != nil { await listeningChanged() }   // sessions can be listed now
     }
 
-    /// Installs, turns on, or updates the plugin, whichever it needs.
-    func connectPlugin() {
+    /// The plugin row's button: look again for Claude Code or its plugin list,
+    /// or install, turn on, or update the plugin, whichever it needs.
+    func fixPlugin() {
+        if pluginStatus.actionRechecks { recheckPlugin() } else { connectPlugin() }
+    }
+
+    private func recheckPlugin() {
         guard let pluginLink, !pluginWorking else { return }
         pluginWorking = true
+        pluginWorkLine = "Checking Claude Code\u{2026}"
+        Task {
+            let hadClaude = stack?.claudePath != nil
+            pluginStatus = await pluginLink.check()
+            lastPluginCheck = Date()
+            pluginWorking = false
+            if !hadClaude, stack?.claudePath != nil { await listeningChanged() }
+        }
+    }
+
+    private func connectPlugin() {
+        guard let pluginLink, !pluginWorking else { return }
+        pluginWorking = true
+        pluginWorkLine = "Installing through Claude Code\u{2026}"
         Task {
             pluginStatus = await pluginLink.connect()
             lastPluginCheck = Date()
