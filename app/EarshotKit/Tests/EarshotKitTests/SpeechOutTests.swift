@@ -38,16 +38,19 @@ final class FreesDuringCheckMic: MicSource, @unchecked Sendable {
 }
 
 /// Plays instantly, or holds each line until released, so a test can act mid-line.
+/// Like AudioFilePlayer it remembers every stopped id: a later play of that id
+/// returns false at once and plays nothing.
 actor FakePlayer: LinePlayer {
     private(set) var played: [String] = []
     private var blocking: Bool
     private let hangs: Bool
     private var waiter: CheckedContinuation<Bool, Never>?
-    private var stoppedEarly: Set<UUID> = []
+    private var stopped: Set<UUID> = []
     /// hangs: play never returns and stop does nothing, like a playback
     /// start that blocks inside Core Audio.
     init(blocking: Bool = false, hangs: Bool = false) { self.blocking = blocking; self.hangs = hangs }
     func play(_ url: URL, id: UUID, started: @escaping @Sendable () async -> Void) async -> Bool {
+        if stopped.contains(id) { return false }
         played.append(url.lastPathComponent)
         if !hangs { await started() }
         if hangs {
@@ -55,12 +58,13 @@ actor FakePlayer: LinePlayer {
             return true
         }
         // A stop that came while `started` ran, before the wait below.
-        if stoppedEarly.remove(id) != nil { return false }
+        if stopped.contains(id) { return false }
         guard blocking else { return true }
         return await withCheckedContinuation { waiter = $0 }
     }
     func stop(_ id: UUID) async {
-        if let w = waiter { w.resume(returning: false); waiter = nil } else { stoppedEarly.insert(id) }
+        stopped.insert(id)
+        if let w = waiter { w.resume(returning: false); waiter = nil }
     }
     func finish() { waiter?.resume(returning: true); waiter = nil }
     func unblock() { blocking = false; finish() }
@@ -91,6 +95,23 @@ actor GatedSynth: Synthesizer {
     func audio(for line: SpokenLine) async -> URL? {
         asked += 1
         if !open { await withCheckedContinuation { waiters.append($0) } }
+        return URL(fileURLWithPath: "/fake/\(line.text)")
+    }
+    func release() { open = true; waiters.forEach { $0.resume() }; waiters = [] }
+}
+
+/// Makes a line's first piece at once and the others only after the test releases them.
+actor LaterPiecesGatedSynth: Synthesizer {
+    let first: String
+    private var open = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var waiting = 0
+    init(first: String) { self.first = first }
+    func audio(for line: SpokenLine) async -> URL? {
+        if line.text != first, !open {
+            waiting += 1
+            await withCheckedContinuation { waiters.append($0) }
+        }
         return URL(fileURLWithPath: "/fake/\(line.text)")
     }
     func release() { open = true; waiters.forEach { $0.resume() }; waiters = [] }
@@ -195,11 +216,11 @@ actor SlowEndDucker: Ducking {
         await s.beginListening()   // barges in: one is dropped
         await s.endListening()
         await s.waitUntilIdle()
+        #expect(await s.markedHolds == 0)
         await player.unblock()
-        await s.enqueue(one)   // the same id again, now played to the end
-        await s.enqueue(line("two"))
+        await s.enqueue(line("two")); await s.enqueue(line("three"))
         await s.waitUntilIdle()
-        #expect(await player.played == ["one", "one", "two"])   // no hold between them
+        #expect(await player.played == ["one", "two", "three"])   // no hold between them
     }
 
     /// A confirm line dropped by a call leaves no hold behind.
@@ -317,6 +338,82 @@ actor SlowEndDucker: Ducking {
         mic.set(false)
         await eventually { await player.played.count == 3 }
         #expect(await player.played == ["first", "first", "second"])
+    }
+
+    /// A long line that waits on you, in three pieces.
+    let migration = "Blog needs your OK to run the migration. The migration adds two columns to the posts table "
+        + "and backfills them. It also drops the old drafts index that nothing reads anymore. Say yes to run it."
+
+    /// Review finding 1: the player refuses an id it stopped, so a line cut off
+    /// by a call is said again under a new id, every piece from the start.
+    @Test func aLineCutOffMidPieceIsSaidWholeAfterTheCall() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        let events = Collected<SpeechOut.LineEvent>()
+        let stream = await s.lineEvents()
+        Task { for await e in stream { await events.add(e) } }
+        let a = line(migration, .need, "blog")
+        let p = SpeechOut.pieces(of: a).map(\.text)
+        #expect(p.count == 3)
+        await s.enqueue(a)
+        await eventually { await player.isPlaying }
+        await player.finish()
+        await eventually { let n = await player.played.count, playing = await player.isPlaying; return n == 2 && playing }
+        mic.set(true)
+        await eventually { await s.state == .holding }
+        #expect(await player.played == [p[0], p[1]])
+        await player.unblock()
+        mic.set(false)
+        await eventually { await player.played.count == 5 }
+        #expect(await player.played == [p[0], p[1], p[0], p[1], p[2]])
+        await eventually { await events.items.count == 5 }
+        let items = await events.items
+        #expect(Array(items.prefix(2)) == [.started(a), .ended(a)])
+        guard items.count == 5, case .started(let b) = items[2] else { Issue.record("no second start"); return }
+        #expect(b.id != a.id)
+        #expect(b.text == a.text && b.kind == a.kind && b.session == a.session)
+        #expect(Array(items.suffix(2)) == [.finished(b), .ended(b)])
+    }
+
+    /// A call that starts while the next piece is made stops the line there:
+    /// the player refuses that piece, and the whole line is said after the call.
+    @Test func aCallBetweenPiecesStopsTheRest() async {
+        let a = line(migration, .need, "blog")
+        let p = SpeechOut.pieces(of: a).map(\.text)
+        let synth = LaterPiecesGatedSynth(first: p[0])
+        let player = FakePlayer()
+        let s = SpeechOut(synth: synth, player: player, mic: mic, ducker: ducker, settle: .milliseconds(30))
+        await s.start()
+        await s.enqueue(a)
+        await eventually { let n = await player.played.count, w = await synth.waiting; return n == 1 && w == 1 }
+        mic.set(true)
+        try? await Task.sleep(for: .milliseconds(50))
+        await synth.release()
+        await eventually { await s.state == .holding }
+        #expect(await player.played == [p[0]])
+        mic.set(false)
+        await eventually { await player.played.count == 4 }
+        #expect(await player.played == [p[0], p[0], p[1], p[2]])
+    }
+
+    /// Talking over a long line drops the rest of its pieces; the queue goes on after.
+    @Test func listeningMidPieceDropsTheRestOfTheLine() async {
+        let player = FakePlayer(blocking: true)
+        let s = await make(player)
+        let a = line(migration, .need, "blog")
+        let p = SpeechOut.pieces(of: a).map(\.text)
+        await s.enqueue(a); await s.enqueue(line("next"))
+        await eventually { await player.isPlaying }
+        await player.finish()
+        await eventually { let n = await player.played.count, playing = await player.isPlaying; return n == 2 && playing }
+        await s.beginListening()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await s.state != .holding)
+        await player.unblock()
+        await s.endListening()
+        await eventually { await player.played.count == 3 }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await player.played == [p[0], p[1], "next"])
     }
 
     @Test func linesThatWaitedTooLongAreDropped() async {

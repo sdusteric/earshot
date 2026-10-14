@@ -158,6 +158,34 @@ final class Box<T>: @unchecked Sendable {
         #expect(shown.value.map(\.body) == ["Want one more round, or ship it?"])
     }
 
+    /// Review finding 1: a line cut off by a call was reported started, and its
+    /// held copy had the same id, so its banner was dropped and it was never said.
+    @Test func aLineCutOffByACallMakesABannerAndIsSaidAfterIt() async throws {
+        let mic = FakeMic(), player = FakePlayer(blocking: true)
+        let speech = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: FakeDucker(), settle: .milliseconds(30))
+        let p = path()
+        let banners = Banners(delay: .zero)
+        let shown = Box<[Banner]>([])
+        await banners.connect(show: { shown.value.append($0) }, remove: { _ in })
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: SessionStore(), events: EventLog(), banners: banners)
+        try await core.start()
+        defer { core.stop() }
+        let text = "Blog needs your OK to run the migration."
+        _ = try send(p, #"{"v":1,"type":"say","text":"Blog needs your OK to run the migration.","kind":"need","session":"a","name":"blog"}"#)
+        var tries = 0
+        while await !player.isPlaying, tries < 100 { tries += 1; try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(50))   // the started event reaches the banners
+        mic.set(true)
+        tries = 0
+        while shown.value.isEmpty, tries < 100 { tries += 1; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(shown.value.map(\.body) == [text])
+        await player.unblock()
+        mic.set(false)
+        tries = 0
+        while await player.played.count < 2, tries < 100 { tries += 1; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await player.played == [text, text])
+    }
+
     @Test func noBannerWhenTheSettingIsOff() async throws {
         let speech = SpeechOut(synth: FakeSynth(), player: FakePlayer(), mic: FakeMic(), ducker: FakeDucker())
         let p = path()
