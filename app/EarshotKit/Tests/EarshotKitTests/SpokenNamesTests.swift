@@ -60,6 +60,28 @@ import Testing
         #expect(n["b"] == "the Fix RSS session")
     }
 
+    /// Untitled sessions in one folder would all be the folder's name: they are told apart by age.
+    @Test func untitledTwinsAreToldApartByAge() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        let two = SpokenNames.names([.init(id: "a", project: "blog", title: "", label: "", started: t0.addingTimeInterval(60)),
+                                     .init(id: "b", project: "blog", title: "", label: "", started: t0),
+                                     .init(id: "c", project: "docs", title: "", label: "", started: t0)])
+        #expect(two["a"] == "the newer blog session")
+        #expect(two["b"] == "the older blog session")
+        #expect(two["c"] == "docs")
+        let three = SpokenNames.names((0..<3).map {
+            .init(id: "\($0)", project: "blog", title: "", label: "", started: t0.addingTimeInterval(Double(-$0)))
+        })
+        #expect(three["2"] == "the first blog session")   // the oldest
+        #expect(three["1"] == "the second blog session")
+        #expect(three["0"] == "the third blog session")
+        // Without start times: in the order Claude Code lists them.
+        let unknown = SpokenNames.names([.init(id: "a", project: "blog", title: "", label: ""),
+                                         .init(id: "b", project: "blog", title: "", label: "")])
+        #expect(unknown["a"] == "the first blog session")
+        #expect(unknown["b"] == "the second blog session")
+    }
+
     @Test func defaultNamesAreNotTitles() {
         #expect(SpokenNames.isDefaultName("blog-83", cwd: "/Users/me/blog"))
         #expect(SpokenNames.isDefaultName("projects-2c", cwd: "/Users/me/Projects"))

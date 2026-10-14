@@ -37,8 +37,9 @@ public struct CommandParser: Sendable {
 
     /// Keeps a model answer only when the user's words back it up: every content word of
     /// the target and prompt must have been said (M1), and an approval needs a clear
-    /// approval word in what was said, with the target's words taken out (M2). Outside
-    /// the window "stop" and "cancel" are the Stop command, so they never deny.
+    /// approval word in what was said, with the target's words taken out (M2): yes, allow
+    /// or approve, or any yes word with a session named. Outside the window "stop" and
+    /// "cancel" are the Stop command, so they never deny.
     static func accept(_ c: Command, heard text: String) -> Command {
         let said = words(text)
         switch c {
@@ -50,16 +51,17 @@ public struct CommandParser: Sendable {
             return backed([target], by: said) ? c : .unknown
         case .stop(let target, _):
             // "Hold on a second" is not a stop: one of the stop words must have been said.
-            return backed([target], by: said) && said.contains(where: saysStop) ? c : .unknown
+            guard backed([target], by: said) && said.contains(where: saysStop) else { return .unknown }
+            // With no session named, only Earshot stops talking (see Grammar.quietWords).
+            guard let target else { return .quiet }
+            return Grammar.everyoneWords.contains(Grammar.Words(target).key) ? .stopAll : c
         case .answer(_, let target):
             guard backed([target], by: said) else { return .unknown }
             let targetWords = Set(Grammar.Words(target ?? "").keys)
             let rest = Grammar.Words(text).keys.filter { !targetWords.contains($0) }.joined(separator: " ")
-            guard let approves = Grammar.approvalWord(rest), approves || Grammar.plainDenyWords.contains(rest) else {
-                return .unknown
-            }
+            guard let approves = Grammar.plainAnswer(rest, named: target != nil) else { return .unknown }
             return .answer(allow: approves, target: target)
-        case .greet, .unknown:
+        case .greet, .stopAll, .quiet, .repeatLast, .unknown:
             return c
         }
     }

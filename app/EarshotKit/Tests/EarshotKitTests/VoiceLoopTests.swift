@@ -128,6 +128,59 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await ducker.ends == 1)   // its listening was paid
     }
 
+    /// You talk over Earshot to quiet it: the only session keeps working.
+    @Test func aBareStopOverALineReachesNoSession() async {
+        let r = await rig([agent("b", "blog", pid: 11, status: "busy")], blocking: true)
+        let player = r.player
+        await r.speech.enqueue(SpokenLine(text: "Blog is working, 5 minutes in.", kind: .roll, session: ""))
+        #expect(await eventually { await player.isPlaying })
+        await r.loop.captureBegan(.hotkey)
+        await r.loop.captureEnded(heard: true)
+        r.heard.yield(said("Stop."))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await transport.sent.isEmpty)
+        #expect(await player.played == ["Blog is working, 5 minutes in."])   // nothing said after it
+    }
+
+    @Test func sayThatAgainRepeatsTheLastLine() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        await r.speech.enqueue(SpokenLine(text: "Blog finished: fixed the feed.", kind: .roll, session: "b"))
+        #expect(await eventually { await player.played.count == 1 })
+        r.heard.yield(said("Say that again."))
+        #expect(await eventually { await player.played == ["Blog finished: fixed the feed.", "Blog finished: fixed the feed."] })
+    }
+
+    @Test func repeatWithNothingSaidYet() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        r.heard.yield(said("Repeat that."))
+        #expect(await eventually { await player.played == ["I haven't said anything yet."] })
+    }
+
+    /// A question said again can be answered again.
+    @Test func aRepeatedQuestionOpensItsWindowAgain() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        let player = r.player
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await followUps.calls == [.reply] })
+        r.heard.yield(said("Repeat that."))
+        #expect(await eventually { await followUps.calls == [.reply, .reply] })
+        #expect(await player.played.count == 2)
+        #expect(await player.played.first == player.played.last)
+        r.heard.yield(said("Invoice export.", .followUp(.reply)))
+        #expect(await eventually { await transport.sent.map(\.pid) == [11] })
+    }
+
+    @Test func thanksSaysNothing() async {
+        let r = await rig([agent("b", "blog", status: "busy")])
+        r.heard.yield(said("Thanks."))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await r.player.played.isEmpty)
+        #expect(await transport.sent.isEmpty)
+    }
+
     @Test func notUnderstoodSendsNothing() async {
         let r = await rig([agent("b", "blog")])
         let player = r.player
@@ -330,12 +383,46 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await chimes.played == [.confirm])
     }
 
-    @Test func otherWordsInTheWindowDoNothing() async {
+    /// An answer that is not a clear yes or no is asked about once, and the window opens once more.
+    @Test func anUnclearAnswerInTheWindowAsksOnce() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())
+        let player = r.player
         r.heard.yield(said("Yes but use the other file.", .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == ["Say yes or no."] })
+        #expect(await eventually { await followUps.calls == [.approval(id: "1-1-1")] })
+        #expect(await r.book.current.count == 1)
+        // A second unclear answer gets nothing more.
+        r.heard.yield(said("Hmm, let me think.", .followUp(.approval(id: "1-1-1"))))
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(await r.player.played.isEmpty)
+        #expect(await player.played == ["Say yes or no."])
+        #expect(await followUps.calls == [.approval(id: "1-1-1")])
+        r.heard.yield(said("Okay, go ahead.", .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == ["Say yes or no.", "Approved."] })
+        #expect(await r.book.current.isEmpty)
+    }
+
+    @Test(arguments: [("Okay, go ahead.", true), ("Yes, do it.", true), ("Sure thing.", true), ("Allow once.", true),
+                      ("No, don't.", false), ("No way.", false), ("Nope, don't.", false)])
+    func aYesOrNoWithAShortTailAnswers(_ text: String, _ allow: Bool) async throws {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said(text, .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == [allow ? "Approved." : "Told it no."] })
+        #expect(try String(contentsOfFile: "\(approvalsDir)/answer-s1-1-1-1", encoding: .utf8)
+                == "\(allow ? "allow" : "deny") \(secret)\n")
+    }
+
+    /// Outside the window a lone "okay" is often a noise or a false start: it approves nothing.
+    @Test func aHotkeyOkayDoesNotApprove() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("Okay.", .hotkey))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await player.played.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
         #expect(await r.book.current.count == 1)
     }
 

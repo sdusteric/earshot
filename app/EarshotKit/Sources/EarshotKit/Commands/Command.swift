@@ -10,6 +10,13 @@ public enum Command: Sendable, Equatable {
     case greet
     /// now: stop at once (background sessions), else after the current step.
     case stop(target: String?, now: Bool)
+    /// "Stop everything": asks first, then stops every session that is doing something.
+    case stopAll
+    /// "Stop", "quiet", "never mind": Earshot already stopped talking when you
+    /// began, so nothing is said and nothing is sent.
+    case quiet
+    /// "Say that again": Earshot's last line once more.
+    case repeatLast
     case start(project: String, prompt: String?)
     /// Yes or no to a permission prompt.
     case answer(allow: Bool, target: String?)

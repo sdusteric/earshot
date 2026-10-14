@@ -17,6 +17,8 @@ public struct LiveSession: Sendable, Equatable, Identifiable {
     public var state: SessionState?
     public var detail: String?
     public var since: Date?
+    /// When Claude Code started the session.
+    public var started: Date? = nil
 
     public var isBackground: Bool { kind == "background" }
 }
@@ -142,7 +144,7 @@ public actor SessionDirectory {
             let label = title.isEmpty ? "" : await labeler.label(session: a.sessionId, title: title)
             merged.append(LiveSession(id: a.sessionId, pid: a.pid, kind: a.kind, cwd: a.cwd, project: project, title: title,
                                       label: label, name: project, busy: a.isBusy, waiting: a.isWaiting,
-                                      state: info?.state, detail: info?.detail, since: info?.since))
+                                      state: info?.state, detail: info?.detail, since: info?.since, started: a.started))
         }
         // Sessions only the plugin knows, when agents failed: a session that
         // died without a closed message must not linger as a ghost.
@@ -153,9 +155,11 @@ public actor SessionDirectory {
             merged.append(LiveSession(id: id, pid: old?.pid, kind: old?.kind ?? "unknown", cwd: old?.cwd ?? "", project: info.project ?? info.name,
                                       title: title, label: label, name: info.name, busy: info.state == .working,
                                       waiting: info.state == .needs, state: info.state,
-                                      detail: info.detail, since: info.since))
+                                      detail: info.detail, since: info.since, started: old?.started))
         }
-        let names = SpokenNames.names(merged.map { .init(id: $0.id, project: $0.project, title: $0.title, label: $0.label) })
+        let names = SpokenNames.names(merged.map {
+            .init(id: $0.id, project: $0.project, title: $0.title, label: $0.label, started: $0.started)
+        })
         for i in merged.indices { merged[i].name = names[merged[i].id] ?? merged[i].project }
         list = merged
         lastRefreshSucceeded = succeeded
@@ -181,9 +185,9 @@ public actor SessionDirectory {
         return match(target, in: list)
     }
 
-    /// After "Which one?": only the sessions that were offered.
+    /// After "Which one?": only the sessions that were offered, in the order they were said.
     public func resolve(_ target: String, among ids: [String]) -> Match {
-        let offered = list.filter { ids.contains($0.id) }
+        let offered = ids.compactMap { id in list.first { $0.id == id } }
         if case .one(let s) = match(target, in: offered) { return .one(s) }
         // "the second one invoices": any word that picks out one label.
         let words = Set(NameMatch.normalize(target).split(separator: " ").map(String.init))
@@ -194,7 +198,28 @@ public actor SessionDirectory {
                 }
             }
         }
-        return hits.count == 1 ? .one(hits[0]) : (hits.isEmpty ? .none : .several(hits))
+        if hits.count == 1 { return .one(hits[0]) }
+        if let s = Self.pick(NameMatch.normalize(target).split(separator: " ").map(String.init), from: offered) { return .one(s) }
+        return hits.isEmpty ? .none : .several(hits)
+    }
+
+    /// "The first one", "the newer one": by place in the question, or by age.
+    static func pick(_ words: [String], from offered: [LiveSession]) -> LiveSession? {
+        let places = ["first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4]
+        let byAge = oldestFirst(offered)
+        for w in words {
+            if let i = places[w] { return i < offered.count ? offered[i] : nil }
+            if w == "last" { return offered.last }
+            if ["older", "oldest", "old", "earlier"].contains(w) { return byAge.first }
+            if ["newer", "newest", "new", "latest", "later", "recent"].contains(w) { return byAge.last }
+        }
+        return nil
+    }
+
+    /// Oldest first when every session has a start time, else as they are.
+    static func oldestFirst(_ sessions: [LiveSession]) -> [LiveSession] {
+        guard sessions.allSatisfy({ $0.started != nil }) else { return sessions }
+        return sessions.enumerated().sorted { ($0.element.started!, $0.offset) < ($1.element.started!, $1.offset) }.map(\.element)
     }
 
     private func match(_ target: String, in sessions: [LiveSession]) -> Match {
