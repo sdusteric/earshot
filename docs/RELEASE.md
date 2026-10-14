@@ -10,7 +10,10 @@ finished release.
 ## What you need
 
 - A paid Apple Developer Program membership for team `8N9KUZLT8N`, signed in to Xcode.
-- Xcode and XcodeGen (`brew install xcodegen`).
+- A released Xcode (not a beta or release candidate) and XcodeGen (`brew install xcodegen`).
+  Build releases only with a released Xcode: run `xcode-select -p` and check that it points
+  at a normal `Xcode.app`. The script refuses a path that says beta or release candidate. To
+  switch: `sudo xcode-select -s /Applications/Xcode.app`.
 - The GitHub CLI, signed in to an account that can push to `sdusteric/earshot` (`gh auth status`).
 
 ## Once per Mac
@@ -91,8 +94,10 @@ Commit the change. The script refuses to run on a tree with uncommitted changes.
 bash scripts/release-app.sh --dry-run
 ```
 
-It checks, without building: XcodeGen and Xcode's tools, the version and build
-number against `packaging/appcast.xml` and the git tags, a clean tree, the
+It checks, without building: XcodeGen and Xcode's tools, that Xcode is not a beta or
+release candidate, the version and build number against `packaging/appcast.xml`, the
+local git tags and the tags on `origin` (it only notes a problem if `origin` is
+unreachable), a clean tree, the
 Developer ID certificate, the notarytool profile, Sparkle's tools and both keys (and
 that they match), the feed URL, and the plugin version. Each missing item comes with
 the command that fixes it. It exits with status 0 only when everything is ready.
@@ -106,6 +111,11 @@ bash scripts/release-app.sh
 To show release notes in the update window, write them as HTML and run
 `RELEASE_NOTES=notes.html bash scripts/release-app.sh`. The same file becomes the
 GitHub release notes.
+
+Without `RELEASE_NOTES`, the script writes `app/build/release/release-notes.md` from the
+commits that touched `app/` since the previous `app-v` tag, and uses that for the GitHub
+release. It does not use GitHub's generated notes, because those include plugin commits.
+The update window shows no notes in that case. Read the file and edit it before you publish.
 
 The script then:
 
@@ -134,7 +144,7 @@ so the feed only goes live once the files it points to exist:
 git push origin main
 gh release create app-v<version> app/build/release/Earshot-<version>.dmg \
   app/build/release/Earshot-<version>.zip --repo sdusteric/earshot --target <commit> \
-  --title "Earshot for Mac <version>" --latest=false --generate-notes
+  --title "Earshot for Mac <version>" --latest=false --notes-file app/build/release/release-notes.md
 git add packaging/appcast.xml packaging/earshot.rb
 git commit -m "Earshot for Mac <version>: appcast and cask"
 git push origin main
@@ -163,13 +173,36 @@ The tap is a separate repo, `sdusteric/homebrew-earshot`, with the cask at
 
 1. Copy `packaging/earshot.rb` (now with the new version and sha256) to
    `Casks/earshot.rb` in the tap, commit, and push.
-2. Check it: `brew audit --cask --online sdusteric/earshot/earshot`, then
-   `brew install --cask sdusteric/earshot/earshot`.
+2. Check it: `brew tap sdusteric/earshot`, then
+   `brew audit --cask --new --online sdusteric/earshot/earshot` for the first version
+   (`--online` alone for later ones), then `brew install --cask sdusteric/earshot/earshot`.
+
+The cask quits the app on uninstall (`uninstall quit`). `brew uninstall --zap` also removes the
+app's own files and the listening models in `~/Library/Application Support/FluidAudio`. It
+leaves `~/.cache/fluidaudio` (the Kokoro voice) and `~/.config/earshot` (settings and the
+ElevenLabs key) because the plugin uses them too.
 
 People install it with `brew install --cask sdusteric/earshot/earshot`. The cask
 says `auto_updates true`, so Sparkle updates it and `brew upgrade` leaves it alone.
 
 To fill in a cask by hand: `bash scripts/release-app.sh --update-cask <dmg> <version>`.
+
+## Files that ship with the app
+
+- `THIRD_PARTY_NOTICES.md` at the repo root is copied into the app's Resources by
+  `app/project.yml`. When you change the Sparkle or FluidAudio version, or the models the
+  app downloads, update that file and check each license again.
+- `app/project.yml` holds the usage strings macOS shows when Earshot first opens a project
+  in Documents, Desktop, Downloads, or on an external or network volume.
+- `app/EarshotKit/Package.resolved` lists Sparkle as well as FluidAudio. Xcode writes the
+  app's Sparkle pin into this file, so `Package.swift` declares the same Sparkle version to
+  make `swift package resolve` write the same result. When you change the Sparkle version in
+  `app/project.yml`, change it in `app/EarshotKit/Package.swift` too and commit the updated
+  `Package.resolved`. If the file shows as modified before a release, a version differs.
+- `project.yml` does not set `ARCHS`, so Release builds are universal (Apple Silicon and Intel).
+  The plugin's Kokoro build refuses Intel, and nobody has tested the app's Kokoro voice or the
+  listening models on an Intel Mac. FluidAudio does not say they need Apple Silicon. Decide
+  before the first release whether to set `ARCHS: arm64` (and `depends_on arch: :arm64` in the cask).
 
 ## The plugin and the app
 
