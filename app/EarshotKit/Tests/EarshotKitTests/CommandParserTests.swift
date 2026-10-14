@@ -53,6 +53,19 @@ actor SlowCommandModel: CommandModel {
         #expect(await p.parse("Are you wedding?", plain: "Are you doing?", sessions: ["wedding"]) == .greet)
     }
 
+    /// A second recognizer's words are tried before the model, and only when the first make nothing.
+    @Test func aSecondHearingIsTriedBeforeTheModel() async {
+        let model = FakeModel(answer: .unknown)
+        let p = CommandParser(model: model)
+        #expect(await p.parse("Pyro mists.", second: "What's everyone doing?", sessions: ["blog"]) == .status(target: nil))
+        #expect(await p.parse("How's blog doing?", second: "What's everyone doing?", sessions: ["blog"])
+                == .status(target: "blog"))
+        #expect(await model.asked.isEmpty)
+        // An explicit "didn't get it" from the grammar still stands when the second makes nothing either.
+        #expect(await p.parse("Go ahead.", second: "Go ahead.", sessions: ["blog"]) == .unknown)
+        #expect(await model.asked.isEmpty)
+    }
+
     /// "Everyone" is the roll call, never a session.
     @Test func theModelsEveryoneIsTheRollCall() async {
         let p = CommandParser(model: FakeModel(answer: .status(target: "everyone")))

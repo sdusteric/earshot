@@ -8,6 +8,10 @@
 //   hear WAV...              a recorded command as the app takes it: Parakeet with the
 //                            live session names, the parser, then the answer for a
 //                            status or greeting (read-only: nothing is sent)
+//   parse SESSIONS TEXT...   the grammar and the tolerant reading of each text (no model)
+//   hear-bench MANIFEST SESSIONS
+//                            commands through the transcriber and parser, scored
+//                            (tests/hearing: make-audio.sh makes the audio)
 //   send TARGET PROMPT       one prompt through the real directory and dispatcher
 //   send-id ID PROMPT        the same, to the session with this id
 import AVFoundation
@@ -31,11 +35,13 @@ let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
         case "listen": try await listen(minutes: Double(a.count > 1 ? a[1] : "5") ?? 5)
         case "parse-eval" where a.count == 2: try await parseEval(URL(fileURLWithPath: a[1]))
         case "wake-eval" where a.count == 2: try await wakeEval(URL(fileURLWithPath: a[1]))
+        case "parse" where a.count >= 3: await parseText(sessionsFile: URL(fileURLWithPath: a[1]), Array(a.dropFirst(2)))
+        case "hear-bench" where a.count == 3: try await hearBench(URL(fileURLWithPath: a[1]), sessionsFile: URL(fileURLWithPath: a[2]))
         case "hear" where a.count >= 2: try await hear(a.dropFirst().map { URL(fileURLWithPath: $0) })
         case "send" where a.count == 3: await send(target: a[1], prompt: a[2])
         case "send-id" where a.count == 3: await send(id: a[1], prompt: a[2])
         default:
-            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | send TARGET PROMPT | send-id ID PROMPT")
+            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | hear WAV... | hear-bench MANIFEST SESSIONS | send TARGET PROMPT | send-id ID PROMPT")
             exit(2)
         }
     }

@@ -1,0 +1,53 @@
+# Spoken commands for the hearing bench (make-audio.sh turns each into clean and degraded audio).
+# id	what is said	expected
+# expected: send|<target>  status|<target or empty>  stop|<target>  start|<project>  answer|allow|<target>
+#           answer|deny|<target>  greet  quiet  repeat  unknown
+# The session names the bench uses are in sessions.txt.
+rc1	How are all the other sessions going?	status|
+rc2	How are the other sessions going?	status|
+rc3	What's everyone doing?	status|
+rc4	What's everyone up to?	status|
+rc5	How's everything going?	status|
+rc6	Give me a status update.	status|
+rc7	Who needs me?	status|
+rc8	What's going on?	status|
+rc9	Is anyone waiting on me?	status|
+rc10	How are my sessions doing?	status|
+gr1	How are you doing?	greet
+gr2	Hey, how's it going?	greet
+gr3	Good morning.	greet
+gr4	How are you doing today?	greet
+st1	How's earshot doing?	status|earshot
+st2	How's the blog going?	status|blog
+st3	What's billing service working on?	status|billing service
+st4	Is finebrief done yet?	status|finebrief
+st5	What's the wedding session up to?	status|wedding
+st6	Check on kairos.	status|kairos
+st7	How is the diet journal going?	status|diet journal
+st8	Status of reflow.	status|reflow
+st9	What is earshot working on?	status|earshot
+sd1	Tell earshot to run the tests.	send|earshot
+sd2	Ask blog to fix the broken links.	send|blog
+sd3	Blog, what else should we do?	send|blog
+sd4	What else do you think we should do for Earshot?	send|earshot
+sd5	Tell finebrief to commit its work.	send|finebrief
+sd6	Billing service, push the branch.	send|billing service
+sd7	Tell kairos to update the readme.	send|kairos
+sd8	Ask the wedding session to draft the seating chart.	send|wedding
+sd9	Tell reflow to keep going.	send|reflow
+sd10	In plugin, bump the version number.	send|plugin
+sd11	Tell the diet journal session to add a chart.	send|diet journal
+so1	Stop earshot.	stop|earshot
+so2	Tell blog to stop.	stop|blog
+so3	Stop.	quiet
+an1	Yes.	answer|allow|
+an2	No.	answer|deny|
+an3	Approve.	answer|allow|
+an4	Yes to earshot.	answer|allow|earshot
+an5	No to blog.	answer|deny|blog
+mi1	Say that again.	repeat
+mi2	Thank you.	quiet
+sa1	Start a new session in blog to write a post.	start|blog
+un1	I wonder what's for lunch today.	unknown
+un2	The weather is nice outside.	unknown
+un3	Can you hear me now?	unknown

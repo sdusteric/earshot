@@ -25,10 +25,18 @@ public struct CommandParser: Sendable {
     /// What the grammar misses goes to the tolerant reading (Tolerant), on the
     /// plain words, before the model: it is quick, and what it finds is read-only
     /// or asked about first. `gated`: the mic's noise gate likely cut the start.
-    public func parse(_ text: String, plain: String? = nil, sessions: [String], gated: Bool = false) async -> Command {
+    /// `second`: the same clip as a second recognizer heard it, tried by the
+    /// grammar and the tolerant reading when the first words make nothing.
+    public func parse(_ text: String, plain: String? = nil, second: String? = nil, sessions: [String],
+                      gated: Bool = false) async -> Command {
         if let plain, let c = Grammar.parse(plain, known: sessions), c != .unknown { return c }
-        if let c = Grammar.parse(text, known: sessions) { return c }
+        if let c = Grammar.parse(text, known: sessions), c != .unknown || second == nil { return c }
         if let c = Tolerant.parse(plain ?? text, known: sessions, gated: gated) { return c }
+        if let second, !second.isEmpty {
+            if let c = Grammar.parse(second, known: sessions), c != .unknown { return c }
+            if let c = Tolerant.parse(second, known: sessions, gated: gated) { return c }
+            if Grammar.parse(text, known: sessions) == .unknown { return .unknown }
+        }
         guard let model else { return .unknown }
         let heard = plain ?? text
         let answer = await bounded(timeout, Command?.none) {
