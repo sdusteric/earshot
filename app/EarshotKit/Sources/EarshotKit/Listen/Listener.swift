@@ -26,11 +26,13 @@ public actor Listener {
         public let plain: String?
         /// The mic's noise gate likely cut the start of what was said (see ClipLevel.gated).
         public let gated: Bool
+        /// The same clip as the second hearing heard it, when it was in time.
+        public let second: String?
 
         public init(text: String, trigger: Trigger, endedAt: ContinuousClock.Instant, tooLong: Bool = false,
-                    plain: String? = nil, gated: Bool = false) {
+                    plain: String? = nil, gated: Bool = false, second: String? = nil) {
             self.text = text; self.trigger = trigger; self.endedAt = endedAt; self.tooLong = tooLong; self.plain = plain
-            self.gated = gated
+            self.gated = gated; self.second = second
         }
     }
 
@@ -61,6 +63,9 @@ public actor Listener {
         /// before then tells you to talk into a mic that isn't recording yet.
         /// Exact zeros count as audio: a webcam's noise gate sends them until you talk.
         public var soundWait: Duration
+        /// After the transcript, how much longer the second hearing may take.
+        /// It runs alongside and is usually done first; a late one is left out.
+        public var secondGrace: Duration
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
@@ -68,14 +73,14 @@ public actor Listener {
                     minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500),
                     ownWakeGrace: Duration = .seconds(1), ownLineMemory: Duration = .seconds(10),
                     followUpSettle: Duration = .milliseconds(250), releaseTail: Duration = .milliseconds(200),
-                    soundWait: Duration = .seconds(1)) {
+                    soundWait: Duration = .seconds(1), secondGrace: Duration = .milliseconds(300)) {
             self.wakeSilence = wakeSilence; self.followUp = followUp; self.minHold = minHold
             self.maxCommandSamples = maxCommandSamples; self.preRollSamples = preRollSamples
             self.spotAtSamples = spotAtSamples; self.spotWindowSamples = spotWindowSamples
             self.minClipSamples = minClipSamples; self.reopenDelay = reopenDelay
             self.ownWakeGrace = ownWakeGrace; self.ownLineMemory = ownLineMemory
             self.followUpSettle = followUpSettle; self.releaseTail = releaseTail
-            self.soundWait = soundWait
+            self.soundWait = soundWait; self.secondGrace = secondGrace
         }
     }
 
@@ -98,6 +103,7 @@ public actor Listener {
     private let gate: any SpeechGate
     private let spotter: any WakeSpotter
     private let transcriber: any Transcriber
+    private let second: (any SecondHearing)?
     private let chimes: any Chimes
     private let timing: Timing
     private var observer: (any ListenObserver)?
@@ -159,8 +165,9 @@ public actor Listener {
     public private(set) var falseWakes = 0
 
     public init(input: any AudioInput, gate: any SpeechGate, spotter: any WakeSpotter, transcriber: any Transcriber,
-                chimes: any Chimes, timing: Timing = Timing()) {
+                second: (any SecondHearing)? = nil, chimes: any Chimes, timing: Timing = Timing()) {
         self.input = input; self.gate = gate; self.spotter = spotter; self.transcriber = transcriber
+        self.second = second
         self.chimes = chimes; self.timing = timing
         ring = Self.ring(timing)
         let (stream, cont) = AsyncStream<Utterance>.makeStream()
@@ -514,6 +521,7 @@ public actor Listener {
 
     private func startPrewarm() {
         Task { [transcriber] in await transcriber.prewarm() }
+        if let second { Task { await second.prepare() } }
     }
 
     /// A command can't be longer than what the ring still holds, less the pre-roll.
@@ -655,12 +663,22 @@ public actor Listener {
         let clip = taken ?? takeClip(c, end: end)
         var text = ""
         var plain: String?
+        var other: String?
         if clip.count >= timing.minClipSamples {
+            // The second hearing starts with the first and gets a short grace after it.
+            let heardToo: Task<String?, Never>? = second.map { s in
+                Task { [vocabulary] in await s.hear(clip, names: vocabulary) }
+            }
+            defer { heardToo?.cancel() }
             do {
                 (text, plain) = try await transcriber.transcribeBoth(clip, vocabulary: vocabulary)
                 plain = plain?.trimmingCharacters(in: .whitespacesAndNewlines)
             } catch {
                 log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
+            }
+            if let heardToo, !text.isEmpty {
+                other = await bounded(timing.secondGrace, nil) { await heardToo.value }
+                other = other?.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -675,6 +693,7 @@ public actor Listener {
                 text = rest
                 // The unboosted words lose the wake phrase too; without it they can't be compared.
                 plain = plain.flatMap(Self.stripWake)
+                other = other.map { Self.stripWake($0) ?? $0 }
                 if text.isEmpty, !dropped, capture == nil, micOpen {
                     // "Hey Earshot" alone: keep listening for the command.
                     let next = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
@@ -693,7 +712,8 @@ public actor Listener {
         await observer?.captureEnded(heard: heard)
         if heard {
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now,
-                                          plain: plain?.isEmpty == false ? plain : nil, gated: ClipLevel.gated(clip)))
+                                          plain: plain?.isEmpty == false ? plain : nil, gated: ClipLevel.gated(clip),
+                                          second: other?.isEmpty == false ? other : nil))
         } else if !refused, capture == nil {
             await chimes.play(.closed)
         }

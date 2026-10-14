@@ -38,6 +38,8 @@
 	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on a network drive.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
 	<string>Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on an external drive.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Earshot hears your voice commands a second way with Apple's on-device speech recognition. Nothing leaves your Mac.</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml</string>
 	<key>SUPublicEDKey</key>

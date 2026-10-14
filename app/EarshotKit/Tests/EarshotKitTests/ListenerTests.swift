@@ -60,6 +60,21 @@ actor FakeTranscriber: Transcriber {
     func prewarm() async { prewarms += 1 }
 }
 
+/// A second recognizer that hears fixed words, after `delay`.
+actor FakeSecondHearing: SecondHearing {
+    let words: String
+    let delay: Duration
+    private(set) var names: [[String]] = []
+    private(set) var prepares = 0
+    init(words: String, delay: Duration = .zero) { self.words = words; self.delay = delay }
+    func hear(_ samples: [Float], names: [String]) async -> String? {
+        self.names.append(names)
+        if delay > .zero { try? await Task.sleep(for: delay) }
+        return words
+    }
+    func prepare() async { prepares += 1 }
+}
+
 /// Like a name boost that turns "doing" into a session called "wedding".
 actor BoostTranscriber: Transcriber {
     func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String {
@@ -188,9 +203,10 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     let heard = Collected<Listener.Utterance>()
 
     func make(_ t: Listener.Timing = .forTests, input custom: (any AudioInput)? = nil,
-              transcriber customT: (any Transcriber)? = nil, chimes customC: (any Chimes)? = nil) async -> Listener {
+              transcriber customT: (any Transcriber)? = nil, second: (any SecondHearing)? = nil,
+              chimes customC: (any Chimes)? = nil) async -> Listener {
         let l = Listener(input: custom ?? input, gate: gate, spotter: spotter, transcriber: customT ?? transcriber,
-                         chimes: customC ?? chimes, timing: t)
+                         second: second, chimes: customC ?? chimes, timing: t)
         await l.setObserver(observer)
         let heard = self.heard
         Task { for await u in l.utterances { await heard.add(u) } }
@@ -376,6 +392,49 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         let u = await heard.items.first
         #expect(u?.text == "how are you wedding")
         #expect(u?.plain == "how are you doing")
+    }
+
+    /// The second hearing's words ride along with the first's.
+    @Test func aCommandCarriesTheSecondHearing() async {
+        let other = FakeSecondHearing(words: "how are the other sessions going")
+        let l = await make(second: other)
+        await l.setVocabulary(["earshot"])
+        await l.tapToTalk()
+        #expect(await eventually { await input.isOpen })
+        #expect(await eventually { await other.prepares == 1 })   // readied when the mic opens
+        try? await Task.sleep(for: .milliseconds(80))
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        let u = await heard.items.first
+        #expect(u?.text == "run the tests")
+        #expect(u?.second == "how are the other sessions going")
+        #expect(await other.names == [["earshot"]])
+    }
+
+    /// A second hearing that runs long is left out: it never holds up the command.
+    @Test func aSlowSecondHearingIsLeftOut() async {
+        var t = Listener.Timing.forTests
+        t.secondGrace = .milliseconds(50)
+        let l = await make(t, second: FakeSecondHearing(words: "late", delay: .seconds(5)))
+        let start = ContinuousClock.now
+        await l.tapToTalk()
+        #expect(await eventually { await input.isOpen })
+        try? await Task.sleep(for: .milliseconds(80))
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await heard.items.first?.second == nil)
+        #expect(ContinuousClock.now - start < .seconds(3))
+    }
+
+    /// After "Hey Earshot" the second hearing loses the wake phrase too.
+    @Test func aWakeCommandsSecondHearingLosesTheWakePhrase() async {
+        let l = await make(second: FakeSecondHearing(words: "Hey Earshot, what's everyone doing?"))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.second == "what's everyone doing?")
     }
 
     /// The ring holds the 15 s cap, not 10 s: a long prompt is heard whole.

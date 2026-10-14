@@ -37,6 +37,15 @@ extension Transcriber {
     }
 }
 
+/// A second recognizer that hears the same clip while the first one runs.
+/// Its words are tried only when the first words make no command.
+public protocol SecondHearing: Sendable {
+    /// The clip as text, or nil when it isn't ready, fails, or heard nothing.
+    func hear(_ samples: [Float], names: [String]) async -> String?
+    /// Gets the recognizer ready (its model may need installing), off the command path.
+    func prepare() async
+}
+
 public enum Chime: Sendable, Equatable { case listening, closed, confirm }
 
 public protocol Chimes: Sendable {

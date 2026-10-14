@@ -31,6 +31,7 @@ targets:
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.developer-tools
         NSAudioCaptureUsageDescription: "Earshot lowers other apps' audio while it talks. It never records or saves that audio."
+        NSSpeechRecognitionUsageDescription: "Earshot hears your voice commands a second way with Apple's on-device speech recognition. Nothing leaves your Mac."
         # Earshot starts and talks to Claude Code sessions in your project folders. macOS asks
         # for access when a folder is in one of these places.
         NSDocumentsFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Documents."

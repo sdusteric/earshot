@@ -17,11 +17,12 @@ public struct ListenStack: Sendable {
 
     public static func live(core: EarshotCore, history: HistoryStore? = nil,
                             config: @escaping @Sendable () -> EarshotConfig) async -> ListenStack {
-        let gate = SileroGate(), spotter = CtcWakeSpotter(), transcriber = ParakeetTranscriber(), chimes = SystemChimes(output: {
+        let gate = SileroGate(), spotter = CtcWakeSpotter(), transcriber = ParakeetTranscriber(), second = AppleTranscriber(),
+            chimes = SystemChimes(output: {
             AudioDevices.chooseOutput(setting: config().outputDevice, devices: AudioDevices.all())
         })
         let listener = Listener(input: MicInput(deviceUID: { config().inputDevice }), gate: gate, spotter: spotter,
-                                transcriber: transcriber, chimes: chimes)
+                                transcriber: transcriber, second: second, chimes: chimes)
         let runner = LocatedClaude()
         let directory = SessionDirectory(runner: runner, store: core.sessions, labeler: Labeler(model: FoundationLabelModel()))
         let speech = core.speech
@@ -36,6 +37,8 @@ public struct ListenStack: Sendable {
                              directory: directory, approvals: core.approvals, speech: speech, chimes: chimes, events: core.events,
                              history: history, canListen: { [availability = core.availability] in availability.canListen })
         await listener.setObserver(loop)
+        // Apple's speech model may need installing; start now, so the first command has it.
+        Task { await second.prepare() }
         await loop.start(utterances: listener.utterances)
         return ListenStack(listener: listener, loop: loop, directory: directory, models: ListenModels(),
                            claude: runner, gate: gate, spotter: spotter, chimes: chimes)

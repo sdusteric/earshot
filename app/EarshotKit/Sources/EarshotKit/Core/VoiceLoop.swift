@@ -184,7 +184,8 @@ public actor VoiceLoop: ListenObserver {
             let asked = pending
             pending = nil
             afterLine.removeAll()
-            let c = await parser.parse(u.text, plain: u.plain, sessions: await directory.vocabulary(), gated: u.gated)
+            let c = await parser.parse(u.text, plain: u.plain, second: u.second, sessions: await directory.vocabulary(),
+                                       gated: u.gated)
             signposter.emitEvent("command")
             await events.add("command \(Self.kind(c))")
             if case .confirmSend = asked, case .answer(_, nil) = c, let asked {

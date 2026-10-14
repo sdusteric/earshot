@@ -217,6 +217,16 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await transport.sent.isEmpty)
     }
 
+    /// When the first hearing makes no command, the second hearing's words can.
+    @Test func theSecondHearingCanMakeTheCommand() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        r.heard.yield(.init(text: "Pyro mists.", trigger: .hotkey, endedAt: .now, second: "What's everyone doing?"))
+        #expect(await eventually { await player.played.count == 1 })
+        #expect(await player.played.first?.hasPrefix("Sorry") == false)
+        #expect(await transport.sent.isEmpty)
+    }
+
     /// The words heard before names were boosted are the ones read back.
     @Test func whatIsReadBackIsThePlainWords() async {
         let r = await rig([agent("b", "blog")])

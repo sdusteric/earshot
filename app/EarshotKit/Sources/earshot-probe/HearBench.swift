@@ -24,9 +24,10 @@ func hearBench(_ manifest: URL, sessionsFile: URL) async throws {
     let names = try String(contentsOf: sessionsFile, encoding: .utf8).split(separator: "\n")
         .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("#") }
     let parakeet = ParakeetTranscriber()
-    let apple = AppleSpeech()
+    let apple = AppleTranscriber()
     let parser = CommandParser(model: useModel ? FoundationCommandModel() : nil)
     await parakeet.prewarm()
+    if asrMode != "parakeet" { await apple.prepare() }
     print("asr \(asrMode), model \(useModel ? "on" : "off"), \(names.count) sessions")
 
     struct Tally { var n = 0, right = 0, asks = 0, missed = 0, wrong = 0, unsafe = 0 }
