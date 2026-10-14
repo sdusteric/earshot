@@ -62,6 +62,8 @@ actor FakePlayer: LinePlayer {
         guard blocking else { return true }
         return await withCheckedContinuation { waiter = $0 }
     }
+    /// How many stops it was told, for tests that wait on one.
+    var stopCount: Int { stopped.count }
     func stop(_ id: UUID) async {
         stopped.insert(id)
         if let w = waiter { w.resume(returning: false); waiter = nil }
@@ -387,12 +389,16 @@ actor SlowEndDucker: Ducking {
         await s.enqueue(a)
         await eventually { let n = await player.played.count, w = await synth.waiting; return n == 1 && w == 1 }
         mic.set(true)
-        try? await Task.sleep(for: .milliseconds(50))
+        // The next piece is let go only once the call has stopped the line, not after a
+        // fixed sleep: under load the call could be noticed after the piece was made.
+        await eventually { await player.stopCount == 1 }
+        #expect(await player.stopCount == 1)
         await synth.release()
         await eventually { await s.state == .holding }
         #expect(await player.played == [p[0]])
         mic.set(false)
-        await eventually { await player.played.count == 4 }
+        // The catch-up after the call waits out its settle time; give a busy machine room.
+        for _ in 0..<500 where await player.played.count < 4 { try? await Task.sleep(for: .milliseconds(10)) }
         #expect(await player.played == [p[0], p[0], p[1], p[2]])
     }
 

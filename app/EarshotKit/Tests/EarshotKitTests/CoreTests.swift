@@ -83,11 +83,17 @@ final class Box<T>: @unchecked Sendable {
         try await core.start()
         defer { core.stop() }
         mic.set(true)
+        // The socket loop notes each line for the recap before the speaker holds it,
+        // so once both lines are held, the recap knows both. Waiting only for the
+        // first hold let the recap run before the blog line arrived, under load.
+        let held = Collected<SpokenLine>()
+        let heldStream = await speech.heldLines()
+        Task { for await line in heldStream { await held.add(line) } }
         await core.wentAway(at: Date().addingTimeInterval(-3600))
         _ = try send(p, #"{"v":1,"type":"status","session":"a","state":"done","name":"billing service"}"#)
         _ = try send(p, #"{"v":1,"type":"say","text":"Fixed the rounding bug.","kind":"done","session":"a","name":"billing service"}"#)
         _ = try send(p, #"{"v":1,"type":"say","text":"Hey, blog needs your OK.","kind":"need","session":"b","name":"blog"}"#)
-        for _ in 0..<100 where await speech.state != .holding { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await eventually { await held.items.count == 2 })
         let recap = await core.cameBack(speak: true)
         #expect(recap?.text == "While you were away: Blog needs you. Billing service finished.")
         mic.set(false)

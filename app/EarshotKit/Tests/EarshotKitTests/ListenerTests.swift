@@ -172,9 +172,10 @@ actor Collected<T: Sendable> {
     func add(_ x: T) { items.append(x) }
 }
 
-/// Waits up to a second for a condition that other tasks make true.
-func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
-    for _ in 0..<100 {
+/// Waits up to a second (or `within`) for a condition that other tasks make true.
+func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendable () async -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + limit
+    while ContinuousClock.now < deadline {
         if await check() { return true }
         try? await Task.sleep(for: .milliseconds(10))
     }
