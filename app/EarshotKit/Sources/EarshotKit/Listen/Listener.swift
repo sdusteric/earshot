@@ -608,6 +608,8 @@ public actor Listener {
                 text = ""
             } else if let rest = Self.stripWake(text) {
                 text = rest
+                // The unboosted words lose the wake phrase too; without it they can't be compared.
+                plain = plain.flatMap(Self.stripWake)
                 if text.isEmpty, !dropped, capture == nil, micOpen {
                     // "Hey Earshot" alone: keep listening for the command.
                     let next = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
@@ -625,9 +627,8 @@ public actor Listener {
         let heard = !text.isEmpty
         await observer?.captureEnded(heard: heard)
         if heard {
-            // Only a hotkey command uses the unboosted words; a wake capture's text was cut above.
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now,
-                                          plain: c.trigger == .hotkey ? plain : nil))
+                                          plain: plain?.isEmpty == false ? plain : nil))
         } else if !refused, capture == nil {
             await chimes.play(.closed)
         }
