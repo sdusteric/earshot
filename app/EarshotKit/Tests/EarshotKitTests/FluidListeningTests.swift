@@ -138,6 +138,18 @@ import Testing
         #expect(await eventually { !(await t.isLoaded) })
     }
 
+    /// Parakeet returns nothing for a clip much under 2 s ("Yes." alone), so short clips are padded.
+    @Test func aShortClipIsPaddedOut() async throws {
+        let lengths = Collected<Int>()
+        let t = ParakeetTranscriber(idle: .seconds(60), load: { AsrManager(config: .default) }, run: { _, s in
+            await lengths.add(s.count)
+            return ASRResult(text: "yes", confidence: 1, duration: 1, processingTime: 0.1)
+        })
+        _ = try await t.transcribe([Float](repeating: 0.1, count: 16_000), vocabulary: [])
+        _ = try await t.transcribe([Float](repeating: 0.1, count: 64_000), vocabulary: [])
+        #expect(await lengths.items == [40_000, 64_000])
+    }
+
     @Test func anUnloadDuringATranscriptionWaitsForIt() async throws {
         let t = ParakeetTranscriber(idle: .milliseconds(30), load: { AsrManager(config: .default) }, run: { _, _ in
             try await Task.sleep(for: .milliseconds(150))

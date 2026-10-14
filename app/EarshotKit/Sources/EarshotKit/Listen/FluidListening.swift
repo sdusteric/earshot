@@ -320,7 +320,9 @@ public actor ParakeetTranscriber: Transcriber {
         try await transcribeBoth(samples, vocabulary: vocabulary).text
     }
 
-    public func transcribeBoth(_ samples: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
+    public func transcribeBoth(_ clip: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
+        // A short clip ("Yes.") comes back empty unless it is padded out.
+        let samples = ClipLevel.padded(clip)
         idleTask?.cancel()
         busy += 1
         defer { busy -= 1; scheduleUnload() }
