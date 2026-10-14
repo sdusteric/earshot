@@ -158,6 +158,8 @@ private final class OrbHostingView: NSHostingView<AnyView> {
 }
 
 /// What the orb shows. Capturing wins over working, which wins over speaking.
+/// Working covers transcribing and the thinking after it, until the answer
+/// starts, so the orb never drops out between your words and Earshot's.
 enum OrbMode: Equatable {
     case listening, working, speaking
 
@@ -166,8 +168,9 @@ enum OrbMode: Equatable {
         case .capturing: self = .listening
         case .transcribing: self = .working
         default:
-            guard model.speechState == .speaking else { return nil }
-            self = .speaking
+            if model.speechState == .speaking { self = .speaking; return }
+            guard model.thinking else { return nil }
+            self = .working
         }
     }
 

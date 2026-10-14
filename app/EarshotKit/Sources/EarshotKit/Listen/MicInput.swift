@@ -362,9 +362,10 @@ public actor MicInput: AudioInput {
 
 /// Set by the tap's thread on the first buffer, read by the mic's actor.
 final class HeardFlag: @unchecked Sendable {
-    /// About 0.6 s at 16 kHz. A live mic always has some noise, even in a quiet
+    /// About 1.5 s at 16 kHz. A live mic always has some noise, even in a quiet
     /// room; this many samples, every one exactly zero, mean it is off or muted.
-    static let zerosLimit = 9_600
+    /// A USB camera's mic sends zeros for most of a second as it wakes.
+    static let zerosLimit = 24_000
     /// About 2 s, for a Bluetooth mic.
     static let bluetoothZerosLimit = 32_000
     private let zerosLimit: Int

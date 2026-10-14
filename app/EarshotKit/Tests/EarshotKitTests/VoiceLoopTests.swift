@@ -102,6 +102,33 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await transport.sent.map(\.text) == ["deploy"])
     }
 
+    /// The orb stays up, working, from the end of a command until the answer starts.
+    @Test func itThinksUntilTheAnswerStarts() async {
+        let r = await rig([agent("b", "blog", pid: 11)])
+        let loop = r.loop, player = r.player
+        #expect(await loop.thinking == false)
+        await loop.captureEnded(heard: true)
+        #expect(await loop.thinking)
+        r.heard.yield(said("Tell blog to deploy."))
+        #expect(await eventually { await player.played == ["Sent to blog."] })
+        #expect(await eventually { await loop.thinking == false })
+    }
+
+    @Test func aCommandWithNoAnswerStopsThinkingWhenDone() async {
+        let r = await rig([agent("b", "blog", pid: 11)])
+        let loop = r.loop
+        await loop.captureEnded(heard: true)
+        r.heard.yield(said("Thanks."))
+        #expect(await eventually { await loop.thinking == false })
+        #expect(await r.player.played.isEmpty)
+    }
+
+    @Test func aHeardCaptureWithNoUtteranceDoesNotThinkForever() async {
+        let r = await rig([agent("b", "blog", pid: 11)])
+        await r.loop.captureEnded(heard: false)
+        #expect(await r.loop.thinking == false)
+    }
+
     @Test func aCommandAndItsReplyGoIntoTheHistory() async {
         let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
         let r = await rig([agent("b", "blog", pid: 11)], history: history)

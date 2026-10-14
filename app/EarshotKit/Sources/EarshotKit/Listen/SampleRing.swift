@@ -89,6 +89,9 @@ public struct Chunker: Sendable {
         return out
     }
 
+    /// Samples waiting for a full chunk.
+    public var pendingCount: Int { pending.count }
+
     /// What is left over, for example when the hotkey is released.
     public mutating func drain() -> [Float] {
         defer { pending.removeAll() }

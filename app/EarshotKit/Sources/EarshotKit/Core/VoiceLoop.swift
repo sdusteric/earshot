@@ -62,6 +62,14 @@ public actor VoiceLoop: ListenObserver {
     /// Heard captures whose utterance is being handled: one endListening each.
     private var endsOwed = 0
     private let owedLimit: Duration = .seconds(15)
+    /// From the end of a command you said until Earshot's answer starts (or the
+    /// command is done and has none): the orb stays up, working, so a pause while
+    /// Earshot thinks never looks like it stopped listening.
+    public private(set) var thinking = false
+    private var thinkingConts: [UUID: AsyncStream<Bool>.Continuation] = [:]
+    private var thinkingToken = UUID()
+    /// A command whose answer never comes still lets the orb go.
+    static let thinkingLimit: Duration = .seconds(20)
 
     public init(followUps: any FollowUpListening, parser: CommandParser, dispatcher: Dispatcher, directory: SessionDirectory,
                 approvals: ApprovalBook, speech: any LineSpeaker, chimes: any Chimes, events: EventLog,
@@ -90,6 +98,7 @@ public actor VoiceLoop: ListenObserver {
 
     public func captureEnded(heard: Bool) async {
         guard heard else { await speech.endListening(); return }
+        setThinking(true)
         let id = UUID()
         awaiting.append(id)
         Task {
@@ -102,6 +111,7 @@ public actor VoiceLoop: ListenObserver {
     private func giveUp(_ id: UUID) async {
         guard let i = awaiting.firstIndex(of: id) else { return }
         awaiting.remove(at: i)
+        setThinking(false)
         await speech.endListening()
     }
 
@@ -123,6 +133,8 @@ public actor VoiceLoop: ListenObserver {
             await respond(to: u)
         }
         heardEntry = nil
+        // Nothing to say back ("thanks", a clear yes in a window): done thinking now.
+        if commandEnded.isEmpty { setThinking(false) }
         if endsOwed > 0 {
             endsOwed -= 1
             await speech.endListening()
@@ -284,6 +296,7 @@ public actor VoiceLoop: ListenObserver {
             }
             await followUps.setSpeaking(line.text)
             if let ended = commandEnded.removeValue(forKey: line.id) {
+                setThinking(false)
                 let d = ContinuousClock.now - ended
                 let ms = Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)
                 signposter.emitEvent("speech")
@@ -305,9 +318,39 @@ public actor VoiceLoop: ListenObserver {
             // A line that did not finish keeps no window or prompt.
             afterLine[line.id] = nil
             needPrompt[line.id] = nil
-            commandEnded[line.id] = nil
+            if commandEnded.removeValue(forKey: line.id) != nil { setThinking(false) }
             await followUps.setSpeaking(nil)
         }
+    }
+
+    /// Every change of `thinking`, starting with the current value.
+    public func thinkingChanges() -> AsyncStream<Bool> {
+        let (stream, cont) = AsyncStream<Bool>.makeStream()
+        let id = UUID()
+        thinkingConts[id] = cont
+        cont.yield(thinking)
+        cont.onTermination = { [weak self] _ in Task { await self?.dropThinking(id) } }
+        return stream
+    }
+
+    private func dropThinking(_ id: UUID) { thinkingConts[id] = nil }
+
+    private func setThinking(_ on: Bool) {
+        if on {
+            let token = UUID()
+            thinkingToken = token
+            Task {
+                try? await Task.sleep(for: Self.thinkingLimit)
+                await self.thinkingTimedOut(token)
+            }
+        }
+        guard on != thinking else { return }
+        thinking = on
+        thinkingConts.values.forEach { $0.yield(on) }
+    }
+
+    private func thinkingTimedOut(_ token: UUID) {
+        if thinkingToken == token { setThinking(false) }
     }
 
     /// Lines with a window or prompt waiting (tests).

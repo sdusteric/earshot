@@ -53,19 +53,25 @@ public actor Listener {
         public var followUpSettle: Duration
         /// After the hotkey is let go, how long the capture goes on, for the last word.
         public var releaseTail: Duration
+        /// How long a hold waits for the mic's first real sound before the chime. A
+        /// USB camera's mic sends exact zeros for most of a second as it wakes, and
+        /// a chime before then tells you to talk into a mic that can't hear yet.
+        public var soundWait: Duration
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
                     preRollSamples: Int = 4_800, spotAtSamples: Int = 24_000, spotWindowSamples: Int = 32_000,
                     minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500),
                     ownWakeGrace: Duration = .seconds(1), ownLineMemory: Duration = .seconds(10),
-                    followUpSettle: Duration = .milliseconds(250), releaseTail: Duration = .milliseconds(200)) {
+                    followUpSettle: Duration = .milliseconds(250), releaseTail: Duration = .milliseconds(200),
+                    soundWait: Duration = .milliseconds(1500)) {
             self.wakeSilence = wakeSilence; self.followUp = followUp; self.minHold = minHold
             self.maxCommandSamples = maxCommandSamples; self.preRollSamples = preRollSamples
             self.spotAtSamples = spotAtSamples; self.spotWindowSamples = spotWindowSamples
             self.minClipSamples = minClipSamples; self.reopenDelay = reopenDelay
             self.ownWakeGrace = ownWakeGrace; self.ownLineMemory = ownLineMemory
             self.followUpSettle = followUpSettle; self.releaseTail = releaseTail
+            self.soundWait = soundWait
         }
     }
 
@@ -108,6 +114,10 @@ public actor Listener {
     private var streamTask: Task<Void, Never>?
     private var streamID = 0
     private var micOpen = false
+    /// The mic has sent something other than exact zeros since it opened, and
+    /// where in the ring that first sound is.
+    private var heardSound = false
+    private var soundAt = 0
     private var armed = false
     private var micBusy = false
     /// The Mac is locked or asleep, or listening can't work now (see ListenPolicy.commandBlock).
@@ -283,7 +293,18 @@ public actor Listener {
                 return
             }
         }
-        let start = wasOpen ? max(ring.oldest, ring.total - timing.preRollSamples, lastCaptureEnd) : ring.total
+        if !wasOpen {
+            // The chime means "talk now": it waits until the mic really hears, and the
+            // command starts there, so a waking mic's zeros never eat your first word.
+            await waitForSound(upTo: timing.soundWait)
+            guard micOpen, hotkeyHeld, pressID == press, !refused, capture == nil else {
+                await closeMicIfIdle()
+                settlePhase()
+                return
+            }
+        }
+        let start = wasOpen ? max(ring.oldest, ring.total - timing.preRollSamples, lastCaptureEnd)
+            : heardSound ? max(ring.oldest, soundAt) : ring.total
         capture = Capture(trigger: .hotkey, start: start, waitingForSpeech: false)
         phase = .capturing(.hotkey)
         startPrewarm()
@@ -444,6 +465,7 @@ public actor Listener {
                 return true
             }
             micOpen = true
+            heardSound = false
             openedWith = inputDevice
             streamID += 1
             let id = streamID
@@ -527,7 +549,19 @@ public actor Listener {
         if !armed { await closeMic() } else { await applyInputDevice() }
     }
 
+    /// Returns once the mic has sent real sound, or after `limit`, or when it closes.
+    private func waitForSound(upTo limit: Duration) async {
+        let deadline = ContinuousClock.now + limit
+        while !heardSound, micOpen, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(15))
+        }
+    }
+
     private func receive(_ samples: [Float]) async {
+        if !heardSound, samples.contains(where: { $0 != 0 }) {
+            heardSound = true
+            soundAt = ring.total + chunker.pendingCount
+        }
         // Per mic buffer (about 85 ms), not per 256 ms chunk, so the orb keeps up.
         level.set(capture == nil ? 0 : AudioLevel.fromSamples(samples))
         for c in chunker.push(samples) { await process(c) }

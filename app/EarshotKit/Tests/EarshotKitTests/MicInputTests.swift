@@ -106,12 +106,13 @@ import Testing
 
 @Suite struct DeadMicTests {
     /// Exact zeros from the moment it opened: the mic is off or muted, so it is reported once.
-    @Test func aMicOfOnlyZerosIsReportedOnceAfterAboutHalfASecond() {
+    @Test func aMicOfOnlyZerosIsReportedOnceAfterOneAndAHalfSeconds() {
         let h = HeardFlag()
         var reports: [Bool] = []
-        for _ in 0..<6 { reports.append(h.count([Float](repeating: 0, count: 2_048))) }   // 0.77 s
-        #expect(reports == [false, false, false, false, true, false])
-        #expect(!h.onlySilence)   // fewer than 8 buffers
+        for _ in 0..<14 { reports.append(h.count([Float](repeating: 0, count: 2_048))) }   // 1.8 s
+        // Reported at 1.5 s, once: a waking USB mic's zeros for most of a second don't count.
+        #expect(reports == Array(repeating: false, count: 11) + [true, false, false])
+        #expect(h.onlySilence)
     }
 
     /// A headset switching to its call mode can send zeros for a moment.

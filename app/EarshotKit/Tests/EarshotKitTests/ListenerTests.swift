@@ -213,7 +213,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
 
     @Test func theGateIsResetAfterACaptureThatHitTheLengthCap() async {
         let t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
-                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30))
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30), soundWait: .zero)
         let l = await make(t)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -521,6 +521,39 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await observer.events == ["began", "ended"])
     }
 
+    /// A waking USB mic sends zeros first: the chime waits for real sound, and the
+    /// command starts there.
+    @Test func aHoldWaitsForRealSoundBeforeTheChime() async {
+        var t = Listener.Timing.forTests
+        t.soundWait = .seconds(2)
+        let l = await make(t)
+        await l.hotkeyDown()
+        await eventually { await input.isOpen }
+        await input.push([0, 0, 0])
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(await observer.events.isEmpty)
+        #expect(await chimes.played.isEmpty)
+        await input.push([1, 1])
+        #expect(await eventually { await observer.events == ["began"] })
+        #expect(await chimes.played == [.listening])
+        await l.hotkeyUp()
+        await eventually { await heard.items.count == 1 }
+        #expect(await heard.items.first?.text == "run the tests")
+    }
+
+    /// A mic that never wakes still gets its chime after the wait, so a hold is never silent.
+    @Test func aMicThatStaysSilentStillChimesAfterTheWait() async {
+        var t = Listener.Timing.forTests
+        t.soundWait = .milliseconds(300)
+        let l = await make(t)
+        await l.hotkeyDown()
+        await eventually { await input.isOpen }
+        await input.push([0])
+        await eventually { await observer.events == ["began"] }
+        #expect(await chimes.played == [.listening])
+        await l.hotkeyCancel()
+    }
+
     @Test func theHotkeyTakingOverAFollowUpEndsIt() async {
         let l = await make()
         await l.listenFollowUp(.reply)
@@ -619,7 +652,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
 
     @Test func aLongWakeCommandIsTooLong() async {
         let t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
-                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30))
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30), soundWait: .zero)
         let l = await make(t)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -633,7 +666,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
     @Test func aFalseWakeAtTheCapSaysNothing() async {
         let st = ScriptTranscriber(fixed: "and then the tests ran")
         let t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
-                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30))
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30), soundWait: .zero)
         let l = await make(t, transcriber: st)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -680,7 +713,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
     @Test func aSecondPressDoesNotConfirmTheFirstOnesHold() async {
         let slow = SlowInput()
         let timing = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150),
-                                     minHold: .milliseconds(100))
+                                     minHold: .milliseconds(100), soundWait: .zero)
         let l = await make(timing, input: slow)
         await l.hotkeyDown()
         #expect(await eventually { await slow.waiting == 1 })   // the first press is confirmed and waiting on the mic
@@ -1001,7 +1034,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
 extension Listener.Timing {
     static let forTests = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150),
                                           minHold: .milliseconds(30), reopenDelay: .milliseconds(30),
-                                          followUpSettle: .zero)
+                                          followUpSettle: .zero, soundWait: .zero)
 }
 
 extension Listener {

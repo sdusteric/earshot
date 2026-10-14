@@ -28,6 +28,8 @@ final class AppModel {
     var notificationsDenied = false
     var speechState: SpeechOut.State = .idle
     var listenPhase: Listener.Phase = .off
+    /// Earshot is working out its answer to what you said (see VoiceLoop.thinking).
+    var thinking = false
     var listenBlock: ListenBlock?
     /// Why a command can't be heard now (the hotkey, Talk, the orb), or nil.
     var commandBlock: ListenBlock?
@@ -94,6 +96,7 @@ final class AppModel {
         case .capturing, .transcribing: return .active
         default: break
         }
+        if thinking { return .active }
         switch speechState {
         case .speaking: return .active
         case .holding: return .holding
@@ -175,6 +178,7 @@ final class AppModel {
                 }
             }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
+            Task { for await t in await stack.loop.thinkingChanges() { thinking = t; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
             // A session opened while the plugin is silent arms the wake word within a minute.
             Task {
@@ -607,7 +611,7 @@ final class AppModel {
     /// No App Nap while the mic is open or Earshot speaks: a napping process
     /// delays the audio work.
     private func updateActivity() {
-        let busy = listenPhase != .off || speechState == .speaking
+        let busy = listenPhase != .off || speechState == .speaking || thinking
         if busy, activity == nil {
             activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep],
                                                              reason: "Listening or speaking")
