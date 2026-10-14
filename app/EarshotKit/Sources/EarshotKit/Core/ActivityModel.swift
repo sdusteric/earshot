@@ -286,9 +286,10 @@ extension SessionInfo {
                   project: s.project, title: s.title)
     }
 
-    /// The panel's sessions: the plugin's, in its order, then the ones only
-    /// `claude agents` lists (without the plugin, that is all of them), those
-    /// waiting on you first, then the working ones.
+    /// The panel's sessions: the plugin's, then the ones only `claude agents`
+    /// lists (without the plugin, that is all of them), all ranked so those
+    /// waiting on you come first, then stuck or failed, then working. The panel
+    /// shows only the first few, so what needs you is never below the cut.
     public static func panelList(known: [SessionInfo], live: [LiveSession], now: Date = Date()) -> [SessionInfo] {
         let ids = Set(known.map(\.id))
         let rank: (SessionInfo) -> Int = { s in
@@ -300,8 +301,8 @@ extension SessionInfo {
             }
         }
         let extra = live.filter { !ids.contains($0.id) }.map { SessionInfo(live: $0, now: now) }
-            .enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
-        return known + extra
+        return (known + extra).enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
     }
 }
 

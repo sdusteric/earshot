@@ -33,11 +33,11 @@ import Testing
         #expect(list.allSatisfy { $0.updated == now })
     }
 
-    @Test func thePluginsSessionsComeFirstAndAreNotListedTwice() {
+    @Test func whatNeedsYouComesFirstAndNoSessionIsListedTwice() {
         let known = SessionInfo(id: "blog", name: "blog", state: .done, detail: nil, updated: now, project: "blog", title: nil)
         let list = SessionInfo.panelList(known: [known], live: [live("blog", busy: true), live("wedding", waiting: true)], now: now)
-        #expect(list.map(\.id) == ["blog", "wedding"])
-        #expect(list.first?.state == .done)
+        #expect(list.map(\.id) == ["wedding", "blog"])
+        #expect(list.last?.state == .done)
     }
 
     // MARK: Geometry

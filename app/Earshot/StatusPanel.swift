@@ -146,6 +146,9 @@ struct StatusPanel: View {
 
     // MARK: Sessions
 
+    /// More than this and the panel runs off the screen.
+    static let shownSessions = 5
+
     private var sessionsSection: some View {
         // The plugin's sessions, plus the ones only `claude agents` lists (all of them without the plugin).
         let sessions = SessionInfo.panelList(known: model.sessions, live: model.liveSessions)
@@ -161,14 +164,22 @@ struct StatusPanel: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
             } else {
-                ForEach(sessions) { s in
+                // The list is ranked, so the first few are what needs you and what's working.
+                ForEach(sessions.prefix(Self.shownSessions)) { s in
                     SessionRow(session: s, last: model.lastLine(for: s.id)) {
                         show(.session(s.id))
                     } replay: { entry in
                         model.replay(entry)
                     }
                 }
-                .padding(.bottom, 6)
+                if sessions.count > Self.shownSessions {
+                    Button("\(sessions.count - Self.shownSessions) more in Activity") { show(.all) }
+                        .buttonStyle(.link)
+                        .font(.callout)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 2)
+                }
+                Spacer().frame(height: 6)
             }
         }
     }

@@ -8,6 +8,7 @@ struct EarshotApp: App {
     @AppStorage("onboarded") private var onboarded = false
     @AppStorage("onboardingVersion") private var onboardingVersion = 0
     @State private var orb: OrbPanel?
+    @State private var dock = DockPresence()
     @Environment(\.openWindow) private var openWindow
 
     init() {
@@ -31,6 +32,7 @@ struct EarshotApp: App {
                 .task {
                     model.start()
                     if orb == nil { orb = OrbPanel(model: model) }
+                    dock.start()
                     #if DEBUG
                     // For checking the window during development: open with -openActivity YES.
                     if UserDefaults.standard.bool(forKey: "openActivity") {
