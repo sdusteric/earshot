@@ -53,6 +53,8 @@ targets:
         DEVELOPMENT_TEAM: 8N9KUZLT8N
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
+        # Apple Silicon only: the voice and listening models are untested on Intel.
+        ARCHS: arm64
         SWIFT_VERSION: "6.0"
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"

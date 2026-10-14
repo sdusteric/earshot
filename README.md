@@ -94,9 +94,9 @@ The blind votes are from the [Artificial Analysis Speech Arena](https://artifici
 
 ## Earshot for Mac (optional)
 
-Earshot for Mac is a menu bar app that works with the plugin. It needs macOS 26
-or later. While it runs, it plays every line instead of the plugin. When it is
-not running, the plugin speaks for itself.
+Earshot for Mac is a menu bar app that works with the plugin. It needs a Mac
+with Apple Silicon and macOS 26 or later. While it runs, it plays every line
+instead of the plugin. When it is not running, the plugin speaks for itself.
 
 **Menu bar panel.** It shows the status, your open sessions (the ones that need
 you first), recent lines you can replay, and these items:

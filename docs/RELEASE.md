@@ -199,10 +199,9 @@ To fill in a cask by hand: `bash scripts/release-app.sh --update-cask <dmg> <ver
   make `swift package resolve` write the same result. When you change the Sparkle version in
   `app/project.yml`, change it in `app/EarshotKit/Package.swift` too and commit the updated
   `Package.resolved`. If the file shows as modified before a release, a version differs.
-- `project.yml` does not set `ARCHS`, so Release builds are universal (Apple Silicon and Intel).
-  The plugin's Kokoro build refuses Intel, and nobody has tested the app's Kokoro voice or the
-  listening models on an Intel Mac. FluidAudio does not say they need Apple Silicon. Decide
-  before the first release whether to set `ARCHS: arm64` (and `depends_on arch: :arm64` in the cask).
+- The app is Apple Silicon only (decided 2026-10-13): `project.yml` sets `ARCHS: arm64` and the
+  cask says `depends_on arch: :arm64`. The plugin's Kokoro build refuses Intel, and nobody has
+  tested the app's voice or listening models on an Intel Mac.
 
 ## The plugin and the app
 
