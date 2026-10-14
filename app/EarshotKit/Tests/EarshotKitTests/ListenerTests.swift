@@ -347,7 +347,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         try? await Task.sleep(for: .milliseconds(80))   // past the chime
         await input.push([1, 1, 0, 0])
         #expect(await eventually { await heard.items.count == 1 })
-        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await heard.items.first?.trigger == .tap)
         #expect(await chimes.played.first == .listening)
         #expect(await spotter.calls == 0)
     }

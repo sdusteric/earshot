@@ -12,7 +12,8 @@ public actor Listener {
         case reply
     }
 
-    public enum Trigger: Sendable, Equatable { case wake, hotkey, followUp(FollowUp) }
+    /// `tap`: the orb or the Activity window's Talk button was clicked, as deliberate as the hotkey.
+    public enum Trigger: Sendable, Equatable { case wake, hotkey, tap, followUp(FollowUp) }
 
     public struct Utterance: Sendable, Equatable {
         public let text: String
@@ -343,13 +344,13 @@ public actor Listener {
             settlePhase()
             return
         }
-        var c = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
+        var c = Capture(trigger: .tap, start: ring.total, waitingForSpeech: true, commandPhase: true)
         // The listening chime is not part of the command.
         c.acceptFrom = .now + timing.followUpSettle
         capture = c
-        phase = .capturing(.wake)
+        phase = .capturing(.tap)
         startPrewarm()
-        await observer?.captureBegan(.wake)
+        await observer?.captureBegan(.tap)
         scheduleTimeout(c.id, after: timing.wakeSilence)
         if capture?.id == c.id { capture?.acceptFrom = .now + timing.followUpSettle }
         await chimes.play(.listening)

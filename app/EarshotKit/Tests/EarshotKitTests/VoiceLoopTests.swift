@@ -215,6 +215,16 @@ actor CountingSpeaker: LineSpeaker {
         #expect(FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
     }
 
+    /// Clicking the orb or Talk is as deliberate as the hotkey.
+    @Test func aClickedYesApproves() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("Yes.", .tap))
+        #expect(await eventually { await player.played == ["Approved."] })
+        #expect(FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+    }
+
     @Test func yesAfterTheDialogClosedSaysNothing() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())
