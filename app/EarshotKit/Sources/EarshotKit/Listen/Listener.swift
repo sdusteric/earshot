@@ -53,9 +53,10 @@ public actor Listener {
         public var followUpSettle: Duration
         /// After the hotkey is let go, how long the capture goes on, for the last word.
         public var releaseTail: Duration
-        /// How long a hold waits for the mic's first real sound before the chime. A
-        /// USB camera's mic sends exact zeros for most of a second as it wakes, and
-        /// a chime before then tells you to talk into a mic that can't hear yet.
+        /// How long a hold waits for the mic's first audio before the chime. A mic
+        /// can take most of a second after it opens to send anything, and a chime
+        /// before then tells you to talk into a mic that isn't recording yet.
+        /// Exact zeros count as audio: a webcam's noise gate sends them until you talk.
         public var soundWait: Duration
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
@@ -64,7 +65,7 @@ public actor Listener {
                     minClipSamples: Int = 4_800, reopenDelay: Duration = .milliseconds(500),
                     ownWakeGrace: Duration = .seconds(1), ownLineMemory: Duration = .seconds(10),
                     followUpSettle: Duration = .milliseconds(250), releaseTail: Duration = .milliseconds(200),
-                    soundWait: Duration = .milliseconds(1500)) {
+                    soundWait: Duration = .seconds(1)) {
             self.wakeSilence = wakeSilence; self.followUp = followUp; self.minHold = minHold
             self.maxCommandSamples = maxCommandSamples; self.preRollSamples = preRollSamples
             self.spotAtSamples = spotAtSamples; self.spotWindowSamples = spotWindowSamples
@@ -114,8 +115,7 @@ public actor Listener {
     private var streamTask: Task<Void, Never>?
     private var streamID = 0
     private var micOpen = false
-    /// The mic has sent something other than exact zeros since it opened, and
-    /// where in the ring that first sound is.
+    /// The mic has sent audio since it opened, and where in the ring it starts.
     private var heardSound = false
     private var soundAt = 0
     private var armed = false
@@ -294,8 +294,8 @@ public actor Listener {
             }
         }
         if !wasOpen {
-            // The chime means "talk now": it waits until the mic really hears, and the
-            // command starts there, so a waking mic's zeros never eat your first word.
+            // The chime means "talk now": it waits until the mic is recording, and the
+            // command starts there.
             await waitForSound(upTo: timing.soundWait)
             guard micOpen, hotkeyHeld, pressID == press, !refused, capture == nil else {
                 await closeMicIfIdle()
@@ -549,7 +549,7 @@ public actor Listener {
         if !armed { await closeMic() } else { await applyInputDevice() }
     }
 
-    /// Returns once the mic has sent real sound, or after `limit`, or when it closes.
+    /// Returns once the mic has sent audio, or after `limit`, or when it closes.
     private func waitForSound(upTo limit: Duration) async {
         let deadline = ContinuousClock.now + limit
         while !heardSound, micOpen, ContinuousClock.now < deadline {
@@ -558,7 +558,7 @@ public actor Listener {
     }
 
     private func receive(_ samples: [Float]) async {
-        if !heardSound, samples.contains(where: { $0 != 0 }) {
+        if !heardSound, !samples.isEmpty {
             heardSound = true
             soundAt = ring.total + chunker.pendingCount
         }

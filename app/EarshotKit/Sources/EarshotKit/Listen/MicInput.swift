@@ -253,17 +253,11 @@ public actor MicInput: AudioInput {
             return false
         }
         let cont = self.cont
-        // A Bluetooth headset can send zeros for a moment while it switches to its
-        // call mode, so it gets longer before it counts as dead.
-        let device = uid.flatMap { u in AudioDevices.all().first { $0.uid == u } } ?? AudioDevices.systemDefault(input: true)
-        let heard = HeardFlag(zerosLimit: device?.isBluetooth == true ? HeardFlag.bluetoothZerosLimit : HeardFlag.zerosLimit)
+        let heard = HeardFlag()
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable [weak self, weak engine] buffer, _ in
             heard.set()
             let s = resampler.convert(buffer)
-            if heard.count(s), let engine {
-                // Only exact zeros since it opened: switch now, so this hold is not lost too.
-                Task { await self?.moveOn(from: uid, engine: engine, "the mic gives only silence") }
-            }
+            heard.count(s)
             if !s.isEmpty { cont?.yield(s) }
         }
         do {
@@ -362,35 +356,24 @@ public actor MicInput: AudioInput {
 
 /// Set by the tap's thread on the first buffer, read by the mic's actor.
 final class HeardFlag: @unchecked Sendable {
-    /// About 1.5 s at 16 kHz. A live mic always has some noise, even in a quiet
-    /// room; this many samples, every one exactly zero, mean it is off or muted.
-    /// A USB camera's mic sends zeros for most of a second as it wakes.
-    static let zerosLimit = 24_000
-    /// About 2 s, for a Bluetooth mic.
-    static let bluetoothZerosLimit = 32_000
-    private let zerosLimit: Int
+    /// About 3 s at 16 kHz. Exact zeros alone do not mean a dead mic: a mic with
+    /// a noise gate (a webcam's "AI noise reduction") sends exact zeros whenever
+    /// nobody talks. Only a long hold with nothing else marks the mic as failed.
+    static let silentHold = 48_000
     private let lock = NSLock()
     private var value = false
     private var buffers = 0
     private var samples = 0
     private var peak: Float = 0
-    private var reported = false
-    init(zerosLimit: Int = HeardFlag.zerosLimit) { self.zerosLimit = zerosLimit }
     func set() { lock.withLock { value = true } }
     var isSet: Bool { lock.withLock { value } }
     /// For the log: how much came in and how loud, never the audio itself.
-    /// True once, when the mic has given `zerosLimit` samples since it opened and all were exactly zero.
-    func count(_ s: [Float]) -> Bool {
+    func count(_ s: [Float]) {
         var p: Float = 0
         for x in s { p = max(p, abs(x)) }
-        return lock.withLock {
-            buffers += 1; samples += s.count; peak = max(peak, p)
-            guard peak == 0, samples >= zerosLimit, !reported else { return false }
-            reported = true
-            return true
-        }
+        lock.withLock { buffers += 1; samples += s.count; peak = max(peak, p) }
     }
-    /// Most of a second of audio, every sample exactly zero.
-    var onlySilence: Bool { lock.withLock { buffers >= 8 && peak == 0 } }
+    /// A long hold, every sample exactly zero.
+    var onlySilence: Bool { lock.withLock { samples >= Self.silentHold && peak == 0 } }
     var summary: String { lock.withLock { "\(buffers) buffers, peak \(String(format: "%.3f", peak))" } }
 }

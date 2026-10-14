@@ -521,35 +521,33 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await observer.events == ["began", "ended"])
     }
 
-    /// A waking USB mic sends zeros first: the chime waits for real sound, and the
-    /// command starts there.
-    @Test func aHoldWaitsForRealSoundBeforeTheChime() async {
+    /// The chime waits for the mic's first audio. Zeros count: a webcam's noise
+    /// gate sends them until you talk, and the chime must not wait for your voice.
+    @Test func aHoldChimesOnceTheMicSendsAudio() async {
         var t = Listener.Timing.forTests
         t.soundWait = .seconds(2)
         let l = await make(t)
         await l.hotkeyDown()
-        await eventually { await input.isOpen }
-        await input.push([0, 0, 0])
-        try? await Task.sleep(for: .milliseconds(200))
+        #expect(await eventually { await input.isOpen })
+        try? await Task.sleep(for: .milliseconds(150))
         #expect(await observer.events.isEmpty)
         #expect(await chimes.played.isEmpty)
-        await input.push([1, 1])
+        await input.push([0])
         #expect(await eventually { await observer.events == ["began"] })
         #expect(await chimes.played == [.listening])
+        await input.push([1, 1])
         await l.hotkeyUp()
-        await eventually { await heard.items.count == 1 }
+        #expect(await eventually { await heard.items.count == 1 })
         #expect(await heard.items.first?.text == "run the tests")
     }
 
-    /// A mic that never wakes still gets its chime after the wait, so a hold is never silent.
-    @Test func aMicThatStaysSilentStillChimesAfterTheWait() async {
+    /// A mic that sends nothing still gets its chime after the wait, so a hold is never silent.
+    @Test func aMicThatSendsNothingStillChimesAfterTheWait() async {
         var t = Listener.Timing.forTests
         t.soundWait = .milliseconds(300)
         let l = await make(t)
         await l.hotkeyDown()
-        await eventually { await input.isOpen }
-        await input.push([0])
-        await eventually { await observer.events == ["began"] }
+        #expect(await eventually { await observer.events == ["began"] })
         #expect(await chimes.played == [.listening])
         await l.hotkeyCancel()
     }

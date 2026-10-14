@@ -105,36 +105,31 @@ import Testing
 }
 
 @Suite struct DeadMicTests {
-    /// Exact zeros from the moment it opened: the mic is off or muted, so it is reported once.
-    @Test func aMicOfOnlyZerosIsReportedOnceAfterOneAndAHalfSeconds() {
+    /// A webcam mic's noise gate sends exact zeros while nobody talks, so a short
+    /// stretch of zeros is not a dead mic; a long hold of nothing else is.
+    @Test func onlyALongHoldOfZerosCountsAsSilent() {
         let h = HeardFlag()
-        var reports: [Bool] = []
-        for _ in 0..<14 { reports.append(h.count([Float](repeating: 0, count: 2_048))) }   // 1.8 s
-        // Reported at 1.5 s, once: a waking USB mic's zeros for most of a second don't count.
-        #expect(reports == Array(repeating: false, count: 11) + [true, false, false])
-        #expect(h.onlySilence)
-    }
-
-    /// A headset switching to its call mode can send zeros for a moment.
-    @Test func aBluetoothMicGetsAboutTwoSeconds() {
-        let h = HeardFlag(zerosLimit: HeardFlag.bluetoothZerosLimit)
         let zeros = [Float](repeating: 0, count: 2_048)
-        for _ in 0..<15 { #expect(!h.count(zeros)) }   // 1.9 s
-        #expect(h.count(zeros))
+        for _ in 0..<20 { h.count(zeros) }   // 2.6 s
+        #expect(!h.onlySilence)
+        for _ in 0..<4 { h.count(zeros) }    // 3.1 s
+        #expect(h.onlySilence)
     }
 
     /// A quiet room is never exactly zero: that is not a dead mic.
     @Test func quietAudioIsNotADeadMic() {
         let h = HeardFlag()
         let quiet = (0..<2_048).map { i in Float(i % 3 - 1) * 0.000_01 }
-        for _ in 0..<20 { #expect(!h.count(quiet)) }
+        for _ in 0..<30 { h.count(quiet) }
         #expect(!h.onlySilence)
     }
 
-    @Test func aMicThatHadSoundIsNotReportedForSilenceLater() {
+    /// A gated mic: zeros, then your voice opens the gate.
+    @Test func zerosThenSpeechIsNotSilent() {
         let h = HeardFlag()
-        _ = h.count([0.2, 0.1])
-        for _ in 0..<20 { #expect(!h.count([Float](repeating: 0, count: 2_048))) }
+        for _ in 0..<30 { h.count([Float](repeating: 0, count: 2_048)) }
+        h.count([0.2, 0.1])
+        #expect(!h.onlySilence)
     }
 
     @Test func anotherMicIsTriedOnlyWhenOneHasNotFailedLately() {
