@@ -2,7 +2,7 @@
 # Makes the hearing bench's audio: each line of cases.tsv said by a synthetic
 # voice (Kokoro, or macOS say), clean and degraded like a webcam mic across
 # the desk with its AI noise reduction on:
-#   clean    as synthesized
+#   clean    as synthesized, over a faint noise floor (a mic with no gate)
 #   quiet    reverb, room noise, spectral noise reduction, a hard noise gate
 #            (exact zeros between words), about -40 dB, 0.9 s of zeros first
 #   gate0.2, gate0.4, gate0.6
@@ -48,7 +48,10 @@ while IFS=$'\t' read -r id text expected; do
     n=$((n + 1))
     synth "$v" "$text" "$out/raw/$id-a.wav"
     synth "$w" "$text" "$out/raw/$id-b.wav"
-    ffmpeg -hide_banner -loglevel error -y -i "$out/raw/$id-a.wav" -ar 16000 -ac 1 -c:a pcm_s16le "$out/$id-clean.wav"
+    # A real mic without a gate never sends exact zeros: a faint noise floor under the clean speech.
+    ffmpeg -hide_banner -loglevel error -y -i "$out/raw/$id-a.wav" -f lavfi -i "anoisesrc=color=pink:amplitude=0.0005:seed=3" \
+        -filter_complex "[0:a]aresample=16000[s];[1:a]aresample=16000[n];[s][n]amix=inputs=2:duration=first:normalize=0[o]" \
+        -map "[o]" -ac 1 -c:a pcm_s16le "$out/$id-clean.wav"
     degrade "$out/raw/$id-b.wav" "$out/$id-quiet.wav" 0
     degrade "$out/raw/$id-a.wav" "$out/$id-gate0.2.wav" 0.2
     degrade "$out/raw/$id-b.wav" "$out/$id-gate0.4.wav" 0.4

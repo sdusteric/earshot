@@ -92,6 +92,13 @@ import Testing
         #expect(ClipLevel.gated([Float](repeating: 0, count: 8_000) + speech))
     }
 
+    /// A real gate fades in over a few milliseconds, with zeros still among the first samples.
+    @Test func aGateThatFadesInIsAGate() {
+        let fade = (0..<320).map { i in i % 3 == 0 ? 0 : Float(i) / 320 * 0.002 }
+        let speech = (0..<8_000).map { Float(sin(Double($0) / 5)) * 0.05 }
+        #expect(ClipLevel.gated([Float](repeating: 0, count: 8_000) + fade + speech))
+    }
+
     @Test func roomNoiseIsNoGate() {
         let noise = (0..<16_000).map { _ in Float.random(in: -0.001...0.001) }
         let speech = (0..<8_000).map { Float(sin(Double($0) / 5)) * 0.05 }
