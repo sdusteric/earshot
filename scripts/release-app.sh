@@ -13,7 +13,9 @@
 # Settings, all optional:
 #   NOTARY_PROFILE   notarytool keychain profile name (default: earshot)
 #   SPARKLE_ACCOUNT  keychain account of the Sparkle private key (default: ed25519)
-#   RELEASE_NOTES    an HTML file shown in the update window and used for the GitHub release
+#   RELEASE_NOTES    an HTML file shown in the update window and used for the GitHub release.
+#                    Without it, the GitHub release notes list the commits under app/ since the
+#                    previous app-v tag (written to app/build/release/release-notes.md).
 #
 # Versions, the team, the feed URL and the Sparkle public key are read from app/project.yml.
 # The full release checks everything first and stops before building if anything is missing.
@@ -77,7 +79,7 @@ case "${1:-}" in
   --local) mode=local ;;
   --dry-run|-n) mode=dry ;;
   "") ;;
-  -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
   *) fail "Unknown option: $1 (try --help)" ;;
 esac
 
@@ -124,6 +126,14 @@ if command -v xcodegen >/dev/null; then ok "XcodeGen"; else missing "XcodeGen" "
 if xcrun --find notarytool >/dev/null 2>&1 && xcrun --find stapler >/dev/null 2>&1; then ok "notarytool and stapler"
 else missing "notarytool or stapler" "Install Xcode, then run: sudo xcode-select -s /Applications/Xcode.app"; fi
 
+# A release must come from a released Xcode. Builds from a beta or release candidate can be
+# rejected by notarization or run differently from what people get.
+xcode_path=$(xcode-select -p 2>/dev/null || true)
+if echo "$xcode_path" | grep -Eiq 'beta|release[. ]candidate|[-. ]rc[0-9. -]|\.rc\.'; then
+  missing "xcode-select points at a prerelease Xcode: $xcode_path" \
+    "Release with a released Xcode: sudo xcode-select -s /Applications/Xcode.app"
+else ok "Xcode: ${xcode_path%/Contents/Developer}"; fi
+
 # Versions come from project.yml. Sparkle compares the build number, so it must grow.
 if [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then ok "MARKETING_VERSION $ver"
 else missing "MARKETING_VERSION in app/project.yml is '$ver'." "Use x.y.z, for example 0.1.0."; fi
@@ -141,9 +151,18 @@ else ok "build $build is newer than the appcast's latest ($last_build)"; fi
 if grep -q "<sparkle:shortVersionString>$ver</sparkle:shortVersionString>" "$APPCAST" 2>/dev/null; then
   missing "Version $ver is already in packaging/appcast.xml." "Raise MARKETING_VERSION in app/project.yml."
 fi
+# The tag is created on GitHub by gh release create, so a clone that has not fetched
+# tags can look free here. Check the remote as well.
 if git -C "$ROOT" rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   missing "Tag $tag already exists." "Raise MARKETING_VERSION in app/project.yml."
-else ok "tag $tag is free"; fi
+elif remote_tag=$(git -C "$ROOT" ls-remote --tags origin "refs/tags/$tag" 2>/dev/null); then
+  if [ -n "$remote_tag" ]; then
+    missing "Tag $tag already exists on origin." "Raise MARKETING_VERSION in app/project.yml, or run git fetch --tags."
+  else ok "tag $tag is free (locally and on origin)"; fi
+else
+  note "could not reach origin to check for tag $tag. Check it by hand before publishing."
+  ok "tag $tag is free locally"
+fi
 
 # The release is built from a clean, committed tree so the tag matches what shipped.
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
@@ -351,8 +370,21 @@ update_cask "$dmg" "$ver"
 (cd "$OUT" && shasum -a 256 "Earshot-$ver.dmg" "Earshot-$ver.zip" >SHA256SUMS)
 printf 'version %s\nbuild %s\ncommit %s\nidentity %s\n' "$ver" "$build" "$commit" "$identity_name" >"$OUT/release-info.txt"
 
-notes_flag="--generate-notes"
-[ -n "${RELEASE_NOTES:-}" ] && notes_flag="--notes-file $RELEASE_NOTES"
+# GitHub's --generate-notes lists every commit since the last release, and the last release
+# is usually a plugin one. Without RELEASE_NOTES, list the commits that touched app/ since
+# the previous app release tag instead.
+notes_file=${RELEASE_NOTES:-}
+if [ -z "$notes_file" ]; then
+  notes_file=$OUT/release-notes.md
+  prev_tag=$(git -C "$ROOT" tag --list "${TAG_PREFIX}*" --sort=-v:refname | head -1)
+  range=HEAD; [ -n "$prev_tag" ] && range="$prev_tag..HEAD"
+  {
+    echo "Changes to Earshot for Mac${prev_tag:+ since ${prev_tag#"$TAG_PREFIX"}}:"
+    echo
+    git -C "$ROOT" log --no-merges --format='- %s' "$range" -- app | grep -v 'Package.resolved' || true
+  } >"$notes_file"
+  note "release notes written from git history to $notes_file. Edit them before publishing."
+fi
 cat <<EOF
 
 Built and notarized Earshot $ver ($build) from $commit:
@@ -364,7 +396,7 @@ packaging/appcast.xml and packaging/earshot.rb are updated but not committed.
 Publish, in this order (the feed goes live last, once the files exist):
   git push origin $branch
   gh release create $tag "$dmg" "$zip" --repo $REPO --target $commit \\
-    --title "Earshot for Mac $ver" --latest=false $notes_flag
+    --title "Earshot for Mac $ver" --latest=false --notes-file "$notes_file"
   git add packaging/appcast.xml packaging/earshot.rb
   git commit -m "Earshot for Mac $ver: appcast and cask"
   git push origin $branch
