@@ -3,7 +3,7 @@ import os
 
 /// Hears one command at a time: after "Hey Earshot", while the hotkey is
 /// held, or in a short window after Earshot asked something. Audio lives
-/// only in the ring buffer.
+/// only in the ring buffer, and a command's audio is erased once it is heard.
 public actor Listener {
     public enum FollowUp: Sendable, Equatable {
         /// The answer to a permission prompt Earshot just announced.
@@ -12,7 +12,8 @@ public actor Listener {
         case reply
     }
 
-    public enum Trigger: Sendable, Equatable { case wake, hotkey, followUp(FollowUp) }
+    /// `tap`: the orb or the Activity window's Talk button was clicked, as deliberate as the hotkey.
+    public enum Trigger: Sendable, Equatable { case wake, hotkey, tap, followUp(FollowUp) }
 
     public struct Utterance: Sendable, Equatable {
         public let text: String
@@ -101,7 +102,7 @@ public actor Listener {
         didSet { if phase != oldValue { phaseConts.values.forEach { $0.yield(phase) } } }
     }
 
-    private var ring = SampleRing()
+    private var ring: SampleRing
     private var chunker = Chunker()
     private var energy = EnergyGate()
     private var streamTask: Task<Void, Never>?
@@ -115,6 +116,10 @@ public actor Listener {
     private var refused: Bool { micBusy || blocked }
     private var sensitivity = 5
     private var vocabulary: [String] = []
+    /// The mic chosen in Settings (nil inside: Automatic), and the choice when the
+    /// mic last opened. Outer nil: not told yet.
+    private var inputDevice: String??
+    private var openedWith: String??
     private var segmentStart: Int?
     /// The segment began while Earshot said the wake phrase (or just after): its own voice.
     private var segmentOwn = false
@@ -144,6 +149,7 @@ public actor Listener {
                 chimes: any Chimes, timing: Timing = Timing()) {
         self.input = input; self.gate = gate; self.spotter = spotter; self.transcriber = transcriber
         self.chimes = chimes; self.timing = timing
+        ring = Self.ring(timing)
         let (stream, cont) = AsyncStream<Utterance>.makeStream()
         utterances = stream
         utteranceCont = cont
@@ -151,10 +157,34 @@ public actor Listener {
 
     /// Samples received since the mic opened (tests wait on it).
     var capturedSamples: Int { ring.total }
+    /// The audio the ring still holds (tests check it was erased).
+    var heldAudio: [Float] { ring.samples(from: ring.oldest) }
+
+    /// Room for the longest command and the pre-roll before it, about 15 s
+    /// (1 MB). Empty until the mic delivers audio.
+    private static func ring(_ t: Timing) -> SampleRing { SampleRing(capacity: t.maxCommandSamples + t.preRollSamples) }
 
     public func setObserver(_ o: any ListenObserver) { observer = o }
     public func setSensitivity(_ s: Int) { sensitivity = s }
     public func setVocabulary(_ v: [String]) { vocabulary = v }
+
+    /// The mic chosen in Settings. The input reads the choice only when it
+    /// opens, so a change reopens a mic the wake word holds open, at once or
+    /// when the command being heard ends.
+    public func setInputDevice(_ uid: String?) async {
+        inputDevice = .some(uid)
+        if micOpen, openedWith == nil { openedWith = .some(uid) }   // the first call: what is open is current
+        await applyInputDevice()
+    }
+
+    private func applyInputDevice() async {
+        guard micOpen, let wanted = inputDevice, let opened = openedWith, wanted != opened,
+              capture == nil, !hotkeyHeld, pendingOpens == 0, !refused else { return }
+        log.info("the mic choice changed; reopening the mic")
+        await closeMic()
+        await openMic()
+        settlePhase()
+    }
 
     /// What Earshot is saying now (nil when it went quiet), so it never wakes
     /// itself: a session named "earshot" makes it say the wake phrase.
@@ -215,9 +245,10 @@ public actor Listener {
             capture = nil
             let end = ring.total
             lastCaptureEnd = end
+            let clip = takeClip(c, end: end)
             Task {
                 await self.dropSegment()
-                await self.finish(c, end: end, claimed: true)
+                await self.finish(c, end: end, claimed: true, clip: clip)
             }
         }
         hotkeyHeld = true
@@ -335,13 +366,13 @@ public actor Listener {
             settlePhase()
             return
         }
-        var c = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
+        var c = Capture(trigger: .tap, start: ring.total, waitingForSpeech: true, commandPhase: true)
         // The listening chime is not part of the command.
         c.acceptFrom = .now + timing.followUpSettle
         capture = c
-        phase = .capturing(.wake)
+        phase = .capturing(.tap)
         startPrewarm()
-        await observer?.captureBegan(.wake)
+        await observer?.captureBegan(.tap)
         scheduleTimeout(c.id, after: timing.wakeSilence)
         if capture?.id == c.id { capture?.acceptFrom = .now + timing.followUpSettle }
         await chimes.play(.listening)
@@ -397,7 +428,7 @@ public actor Listener {
             let stream = try await input.start()
             _ = chunker.drain()
             // Nothing from before the mic closed: no pre-roll reaches it, and the last command's audio is gone.
-            ring = SampleRing()
+            ring = Self.ring(timing)
             lastCaptureEnd = 0
             segmentStart = nil
             spotted = false
@@ -413,6 +444,7 @@ public actor Listener {
                 return true
             }
             micOpen = true
+            openedWith = inputDevice
             streamID += 1
             let id = streamID
             streamTask = Task { [weak self] in
@@ -460,6 +492,7 @@ public actor Listener {
     }
 
     /// A command can't be longer than what the ring still holds, less the pre-roll.
+    /// The ring is sized for Timing.maxCommandSamples, so this is that cap.
     private var maxCommand: Int { min(timing.maxCommandSamples, ring.capacity - timing.preRollSamples) }
 
     /// A capture ended without an end edge from the VAD (the length cap, or a
@@ -479,13 +512,19 @@ public actor Listener {
         streamTask = nil
         await input.stop()
         _ = chunker.drain()
+        // No audio is kept while the mic is closed.
+        ring = Self.ring(timing)
+        lastCaptureEnd = 0
         segmentStart = nil
         spotted = false
         await gate.reset()
     }
 
+    /// Closes the mic when nothing needs it. When the wake word keeps it open,
+    /// a mic choice made meanwhile applies now.
     private func closeMicIfIdle() async {
-        if !armed, capture == nil, !hotkeyHeld, pendingOpens == 0 { await closeMic() }
+        guard capture == nil, !hotkeyHeld, pendingOpens == 0 else { return }
+        if !armed { await closeMic() } else { await applyInputDevice() }
     }
 
     private func receive(_ samples: [Float]) async {
@@ -557,16 +596,25 @@ public actor Listener {
 
     // MARK: - Ending a capture
 
+    /// The capture's audio, which is then erased from the ring: once heard, a
+    /// command is kept only as text.
+    private func takeClip(_ c: Capture, end: Int) -> [Float] {
+        let clip = ring.samples(from: c.start, to: end)
+        ring.erase(upTo: end)
+        return clip
+    }
+
     /// Stage 4: transcribes the clip and hands it on.
-    /// `claimed`: the capture was already taken off `capture` (a new press during the tail).
-    private func finish(_ c: Capture, end: Int, claimed: Bool = false) async {
+    /// `claimed`: the capture was already taken off `capture` (a new press during the tail),
+    /// and `clip` is its audio, taken then.
+    private func finish(_ c: Capture, end: Int, claimed: Bool = false, clip taken: [Float]? = nil) async {
         guard claimed || capture?.id == c.id else { return }
         if !claimed {
             capture = nil
             phase = .transcribing
         }
         lastCaptureEnd = max(lastCaptureEnd, end)
-        let clip = ring.samples(from: c.start, to: end)
+        let clip = taken ?? takeClip(c, end: end)
         var text = ""
         var plain: String?
         if clip.count >= timing.minClipSamples {
@@ -587,6 +635,8 @@ public actor Listener {
                 text = ""
             } else if let rest = Self.stripWake(text) {
                 text = rest
+                // The unboosted words lose the wake phrase too; without it they can't be compared.
+                plain = plain.flatMap(Self.stripWake)
                 if text.isEmpty, !dropped, capture == nil, micOpen {
                     // "Hey Earshot" alone: keep listening for the command.
                     let next = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
@@ -604,9 +654,8 @@ public actor Listener {
         let heard = !text.isEmpty
         await observer?.captureEnded(heard: heard)
         if heard {
-            // Only a hotkey command uses the unboosted words; a wake capture's text was cut above.
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now,
-                                          plain: c.trigger == .hotkey ? plain : nil))
+                                          plain: plain?.isEmpty == false ? plain : nil))
         } else if !refused, capture == nil {
             await chimes.play(.closed)
         }
@@ -621,11 +670,12 @@ public actor Listener {
         guard capture?.id == c.id else { return }
         capture = nil
         lastCaptureEnd = ring.total
+        let head = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
+        ring.erase(upTo: ring.total)
         await dropSegment()
         var heard = true
         if c.trigger == .wake, !c.commandPhase {
             phase = .transcribing
-            let head = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
             var text = ""
             do { text = try await transcriber.transcribe(head, vocabulary: []) } catch {
                 log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
@@ -647,6 +697,7 @@ public actor Listener {
     private func drop(_ c: Capture) async {
         guard capture?.id == c.id else { return }
         capture = nil
+        ring.erase(upTo: ring.total)
         await observer?.captureEnded(heard: false)
     }
 

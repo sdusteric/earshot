@@ -279,6 +279,7 @@ public actor ParakeetTranscriber: Transcriber {
     private var pressure: DispatchSourceMemoryPressure?
     private let idle: Duration
     private let run: @Sendable (AsrManager, [Float]) async throws -> ASRResult
+    private let makeBoost: @Sendable ([String]) async throws -> VocabularyBoostingSession
     /// Transcriptions in progress: the model is not unloaded under them.
     private var busy = 0
     private let log = Logger(subsystem: "com.earshot.app", category: "transcriber")
@@ -286,9 +287,11 @@ public actor ParakeetTranscriber: Transcriber {
     public init() { self.init(idle: .seconds(600), load: ParakeetTranscriber.loadModels, run: ParakeetTranscriber.recognize) }
 
     init(idle: Duration, load: @escaping @Sendable () async throws -> AsrManager,
-         run: @escaping @Sendable (AsrManager, [Float]) async throws -> ASRResult = ParakeetTranscriber.recognize) {
+         run: @escaping @Sendable (AsrManager, [Float]) async throws -> ASRResult = ParakeetTranscriber.recognize,
+         boost: @escaping @Sendable ([String]) async throws -> VocabularyBoostingSession = ParakeetTranscriber.loadBoost) {
         self.idle = idle
         self.run = run
+        makeBoost = boost
         flight = SingleFlight(load)
     }
 
@@ -324,7 +327,11 @@ public actor ParakeetTranscriber: Transcriber {
         let asr = try await loaded()
         let result = try await run(asr, samples)
         guard !vocabulary.isEmpty, !result.text.isEmpty, let timings = result.tokenTimings else { return (result.text, nil) }
-        let session = try await boostingSession(vocabulary)
+        // Without the boost (its model is missing or memory is short) the plain words still make the command.
+        guard let session = try? await boostingSession(vocabulary) else {
+            log.error("the name boost didn't load; using the words as heard")
+            return (result.text, nil)
+        }
         guard let boosted = await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text,
               boosted != result.text,
               Self.keepsBoost(plain: result.text, boosted: boosted, vocabulary: vocabulary) else { return (result.text, nil) }
@@ -379,11 +386,15 @@ public actor ParakeetTranscriber: Transcriber {
 
     private func boostingSession(_ names: [String]) async throws -> VocabularyBoostingSession {
         if let b = boosting, b.names == names { return b.session }
-        let terms = names.map { CustomVocabularyTerm(text: $0) }
-        let s = try await VocabularyBoostingSession(vocabulary: CustomVocabularyContext(terms: terms),
-                                                    ctcModels: try await CtcShared.shared.models(for: .boosting))
+        let s = try await makeBoost(names)
         boosting = (names, s)
         return s
+    }
+
+    @Sendable static func loadBoost(_ names: [String]) async throws -> VocabularyBoostingSession {
+        let terms = names.map { CustomVocabularyTerm(text: $0) }
+        return try await VocabularyBoostingSession(vocabulary: CustomVocabularyContext(terms: terms),
+                                                   ctcModels: try await CtcShared.shared.models(for: .boosting))
     }
 
     private func scheduleUnload() {

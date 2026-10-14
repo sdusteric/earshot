@@ -185,6 +185,21 @@ actor LoadCounter {
     func next() -> Int { value += 1; return value }
 }
 
+@Suite struct BoostFailureTests {
+    struct NoBoost: Error {}
+
+    /// The plain transcript was fine: a boost that can't load must not lose the command.
+    @Test func aBoostThatFailsToLoadGivesThePlainWords() async throws {
+        let timing = TokenTiming(token: "run", tokenId: 1, startTime: 0, endTime: 0.2, confidence: 1)
+        let t = ParakeetTranscriber(idle: .seconds(60), load: { AsrManager(config: .default) }, run: { _, _ in
+            ASRResult(text: "run the tests", confidence: 1, duration: 1, processingTime: 0.1, tokenTimings: [timing])
+        }, boost: { _ in throw NoBoost() })
+        let r = try await t.transcribeBoth([0, 0, 0], vocabulary: ["billing service"])
+        #expect(r.text == "run the tests")
+        #expect(r.plain == nil)
+    }
+}
+
 @Suite struct NameBoostTests {
     let names = ["earshot", "your home folder", "finebrief", "reflow", "release 1012"]
 

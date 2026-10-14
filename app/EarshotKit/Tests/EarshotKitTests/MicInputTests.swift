@@ -103,3 +103,36 @@ import Testing
         #expect(o == [nil, "BuiltIn"])
     }
 }
+
+@Suite struct DeadMicTests {
+    /// Exact zeros from the moment it opened: the mic is off or muted, so it is reported once.
+    @Test func aMicOfOnlyZerosIsReportedOnceAfterAboutHalfASecond() {
+        let h = HeardFlag()
+        var reports: [Bool] = []
+        for _ in 0..<6 { reports.append(h.count([Float](repeating: 0, count: 2_048))) }   // 0.77 s
+        #expect(reports == [false, false, false, false, true, false])
+        #expect(!h.onlySilence)   // fewer than 8 buffers
+    }
+
+    /// A quiet room is never exactly zero: that is not a dead mic.
+    @Test func quietAudioIsNotADeadMic() {
+        let h = HeardFlag()
+        let quiet = (0..<2_048).map { i in Float(i % 3 - 1) * 0.000_01 }
+        for _ in 0..<20 { #expect(!h.count(quiet)) }
+        #expect(!h.onlySilence)
+    }
+
+    @Test func aMicThatHadSoundIsNotReportedForSilenceLater() {
+        let h = HeardFlag()
+        _ = h.count([0.2, 0.1])
+        for _ in 0..<20 { #expect(!h.count([Float](repeating: 0, count: 2_048))) }
+    }
+
+    @Test func anotherMicIsTriedOnlyWhenOneHasNotFailedLately() {
+        let now = ContinuousClock.now
+        #expect(MicInput.hasAnother([nil, "USB"], than: nil, failedAt: [nil: now], now: now))
+        #expect(!MicInput.hasAnother([nil, "USB"], than: nil, failedAt: [nil: now, "USB": now], now: now))
+        #expect(!MicInput.hasAnother([nil], than: nil, failedAt: [nil: now], now: now))
+        #expect(MicInput.hasAnother([nil, "USB"], than: nil, failedAt: [nil: now, "USB": now - .seconds(700)], now: now))
+    }
+}

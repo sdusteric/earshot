@@ -170,11 +170,13 @@ public actor MicInput: AudioInput {
     private var cont: AsyncStream<[Float]>.Continuation?
     private var observer: (any NSObjectProtocol)?
     private let log = Logger(subsystem: "com.earshot.app", category: "mic")
-    /// The mic that opened last time, tried first, and mics that gave no
-    /// audio lately, skipped: each failed try costs about half a second
-    /// before the listening chime.
-    private var lastGood: String??
+    /// The mic that opened last time, tried first while the setting is the
+    /// one it opened under, and mics that gave no audio lately, skipped: each
+    /// failed try costs about half a second before the listening chime.
+    private var lastGood: (setting: String?, uid: String?)?
     private var failedAt: [String?: ContinuousClock.Instant] = [:]
+    /// The setting the mic last opened under. A new choice is tried first even if it failed lately.
+    private var lastSetting: String??
     static let retryFailedAfter: Duration = .seconds(600)
     private var heard: HeardFlag?
     /// The mic now open (nil inside: the system default).
@@ -196,18 +198,25 @@ public actor MicInput: AudioInput {
         cont = nil
     }
 
+    private func candidates(setting: String?) -> [String?] {
+        AudioDevices.inputCandidates(setting: setting, inputs: AudioDevices.all().filter(\.hasInput),
+                                     defaultUID: AudioDevices.systemDefault(input: true)?.uid,
+                                     lidClosed: AudioDevices.lidClosed())
+    }
+
     private func build() throws {
-        let all = AudioDevices.inputCandidates(setting: deviceUID(), inputs: AudioDevices.all().filter(\.hasInput),
-                                               defaultUID: AudioDevices.systemDefault(input: true)?.uid,
-                                               lidClosed: AudioDevices.lidClosed())
-        let candidates = MicInput.order(all, lastGood: lastGood, failedAt: failedAt, now: .now)
+        let setting = deviceUID()
+        if let last = lastSetting, last != setting { failedAt[setting] = nil }
+        lastSetting = .some(setting)
+        let good: String?? = lastGood.flatMap { $0.setting == setting ? .some($0.uid) : nil }
+        let candidates = MicInput.order(candidates(setting: setting), lastGood: good, failedAt: failedAt, now: .now)
         let began = ContinuousClock.now
         for uid in candidates {
             if open(uid) {
                 let ms = (ContinuousClock.now - began).components.attoseconds / 1_000_000_000_000_000
                     + (ContinuousClock.now - began).components.seconds * 1000
                 log.info("mic open in \(ms, privacy: .public) ms")
-                lastGood = .some(uid)
+                lastGood = (setting, uid)
                 current = .some(uid)
                 failedAt[uid] = nil
                 return
@@ -245,10 +254,13 @@ public actor MicInput: AudioInput {
         }
         let cont = self.cont
         let heard = HeardFlag()
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable [weak self, weak engine] buffer, _ in
             heard.set()
             let s = resampler.convert(buffer)
-            heard.count(s)
+            if heard.count(s), let engine {
+                // Only exact zeros since it opened: switch now, so this hold is not lost too.
+                Task { await self?.moveOn(from: uid, engine: engine, "the mic gives only silence") }
+            }
             if !s.isEmpty { cont?.yield(s) }
         }
         do {
@@ -261,16 +273,15 @@ public actor MicInput: AudioInput {
         self.engine = engine
         self.heard = heard
         log.info("mic format \(Int(hardware.sampleRate), privacy: .public) Hz, \(hardware.channelCount, privacy: .public) ch")
-        if let uid {
-            // A mic you chose can open and still deliver nothing: then the default takes over.
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1))
-                if !heard.isSet { await self?.deliveredNothing(uid, engine: engine) }
-            }
+        // A mic, chosen or the system default, can open and still deliver nothing: then the next one takes over.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            if !heard.isSet { await self?.moveOn(from: uid, engine: engine, "the mic delivered no audio") }
         }
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
-                                                          queue: nil) { [weak self] _ in
-            Task { await self?.formatChanged() }
+                                                          queue: nil) { [weak self, weak engine] _ in
+            guard let engine else { return }
+            Task { await self?.formatChanged(engine) }
         }
         return true
     }
@@ -290,16 +301,29 @@ public actor MicInput: AudioInput {
         return out.filter { !recentlyFailed($0) } + out.filter { recentlyFailed($0) }
     }
 
-    private func deliveredNothing(_ uid: String, engine: AVAudioEngine) {
+    /// Another mic is worth a try: one that is not `current` and has not failed in the last ten minutes.
+    static func hasAnother(_ candidates: [String?], than current: String?, failedAt: [String?: ContinuousClock.Instant],
+                           now: ContinuousClock.Instant) -> Bool {
+        candidates.contains { c in c != current && failedAt[c].map { now - $0 >= retryFailedAfter } ?? true }
+    }
+
+    /// The open mic gives nothing usable: the next one is opened in its place,
+    /// on the same stream. When every mic failed lately, this one stays open.
+    private func moveOn(from uid: String?, engine: AVAudioEngine, _ why: String) {
         guard self.engine === engine, cont != nil else { return }
-        log.error("the chosen mic delivered no audio; trying the next")
         failedAt[uid] = .now
-        if lastGood == .some(uid) { lastGood = nil }
+        if let g = lastGood, g.uid == uid { lastGood = nil }
+        guard MicInput.hasAnother(candidates(setting: deviceUID()), than: uid, failedAt: failedAt, now: .now) else {
+            log.error("\(why, privacy: .public); no other mic to try")
+            return
+        }
+        log.error("\(why, privacy: .public); trying the next")
         rebuild()
     }
 
-    private func formatChanged() {
-        guard cont != nil else { return }
+    /// A notice from an engine already torn down is ignored: it would rebuild the new one for nothing.
+    private func formatChanged(_ from: AVAudioEngine) {
+        guard self.engine === from, cont != nil else { return }
         log.info("the mic's format changed (a headset switching mode); reopening")
         rebuild()
     }
@@ -325,7 +349,7 @@ public actor MicInput: AudioInput {
             // not allowed, so the next hold starts with another mic.
             log.error("the mic gave only silence; the next hold tries another")
             failedAt[current] = .now
-            if lastGood == .some(current) { lastGood = nil }
+            if let g = lastGood, g.uid == current { lastGood = nil }
         }
         engine = nil
         heard = nil
@@ -335,17 +359,28 @@ public actor MicInput: AudioInput {
 
 /// Set by the tap's thread on the first buffer, read by the mic's actor.
 final class HeardFlag: @unchecked Sendable {
+    /// About 0.6 s at 16 kHz. A live mic always has some noise, even in a quiet
+    /// room; this many samples, every one exactly zero, mean it is off or muted.
+    static let zerosLimit = 9_600
     private let lock = NSLock()
     private var value = false
     private var buffers = 0
+    private var samples = 0
     private var peak: Float = 0
+    private var reported = false
     func set() { lock.withLock { value = true } }
     var isSet: Bool { lock.withLock { value } }
     /// For the log: how much came in and how loud, never the audio itself.
-    func count(_ samples: [Float]) {
+    /// True once, when the mic has given `zerosLimit` samples since it opened and all were exactly zero.
+    func count(_ s: [Float]) -> Bool {
         var p: Float = 0
-        for x in samples { p = max(p, abs(x)) }
-        lock.withLock { buffers += 1; peak = max(peak, p) }
+        for x in s { p = max(p, abs(x)) }
+        return lock.withLock {
+            buffers += 1; samples += s.count; peak = max(peak, p)
+            guard peak == 0, samples >= Self.zerosLimit, !reported else { return false }
+            reported = true
+            return true
+        }
     }
     /// Most of a second of audio, every sample exactly zero.
     var onlySilence: Bool { lock.withLock { buffers >= 8 && peak == 0 } }

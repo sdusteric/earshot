@@ -75,7 +75,7 @@ public actor VoiceLoop: ListenObserver {
         signposter.emitEvent("wake")
         await speech.beginListening()
         switch trigger {
-        case .wake, .hotkey: Task { await self.prepare() }
+        case .wake, .hotkey, .tap: Task { await self.prepare() }
         case .followUp: break
         }
     }
@@ -156,14 +156,14 @@ public actor VoiceLoop: ListenObserver {
                 pending = nil
                 await apply(await dispatcher.reply(answer, to: p), after: u)
             }
-        case .wake, .hotkey:
+        case .wake, .hotkey, .tap:
             pending = nil
             afterLine.removeAll()
             let c = await parser.parse(u.text, plain: u.plain, sessions: await directory.vocabulary())
             signposter.emitEvent("command")
             await events.add("command \(Self.kind(c))")
             if u.trigger == .wake, case .answer = c {
-                // The wake word alone never answers a prompt; the hotkey and the approval window do.
+                // The wake word alone never answers a prompt; the hotkey, a click and the approval window do.
                 await say("Hold the hotkey to answer it.", after: u)
             } else {
                 await apply(await dispatcher.run(c), after: u)
@@ -177,7 +177,7 @@ public actor VoiceLoop: ListenObserver {
         switch u.trigger {
         case .followUp(.approval): return
         case .followUp(.reply): pending = nil
-        case .wake, .hotkey: pending = nil; afterLine.removeAll()
+        case .wake, .hotkey, .tap: pending = nil; afterLine.removeAll()
         }
         await events.add("command too long")
         await say("That was too long for me. Try a shorter command.", after: u)

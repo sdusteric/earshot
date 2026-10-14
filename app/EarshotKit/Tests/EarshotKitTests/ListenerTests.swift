@@ -60,6 +60,18 @@ actor FakeTranscriber: Transcriber {
     func prewarm() async { prewarms += 1 }
 }
 
+/// Like a name boost that turns "doing" into a session called "wedding".
+actor BoostTranscriber: Transcriber {
+    func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String {
+        try await transcribeBoth(s, vocabulary: vocabulary).text
+    }
+    func transcribeBoth(_ s: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
+        let wake = s.contains(2) ? "Hey Earshot, " : ""
+        return (wake + "how are you wedding", wake + "how are you doing")
+    }
+    func prewarm() async {}
+}
+
 /// A mic whose start() waits until the test releases it.
 actor SlowInput: AudioInput {
     private var cont: AsyncStream<[Float]>.Continuation?
@@ -335,9 +347,105 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         try? await Task.sleep(for: .milliseconds(80))   // past the chime
         await input.push([1, 1, 0, 0])
         #expect(await eventually { await heard.items.count == 1 })
-        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await heard.items.first?.trigger == .tap)
         #expect(await chimes.played.first == .listening)
         #expect(await spotter.calls == 0)
+    }
+
+    /// A click hears the words without the name boost too, so "doing" is not taken as a session's name.
+    @Test func aClickedCommandKeepsTheUnboostedWords() async {
+        let l = await make(transcriber: BoostTranscriber())
+        await l.tapToTalk()
+        #expect(await eventually { await input.isOpen })
+        try? await Task.sleep(for: .milliseconds(80))
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        let u = await heard.items.first
+        #expect(u?.text == "how are you wedding")
+        #expect(u?.plain == "how are you doing")
+    }
+
+    /// After "Hey Earshot" the unboosted words lose the wake phrase, as the boosted ones do.
+    @Test func aWakeCommandKeepsTheUnboostedWordsWithoutTheWakePhrase() async {
+        let l = await make(transcriber: BoostTranscriber())
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        let u = await heard.items.first
+        #expect(u?.text == "how are you wedding")
+        #expect(u?.plain == "how are you doing")
+    }
+
+    /// The ring holds the 15 s cap, not 10 s: a long prompt is heard whole.
+    @Test func aHotkeyCommandCanRunPastTenSeconds() async {
+        let st = ScriptTranscriber(fixed: "words")
+        let l = await make(transcriber: st)
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([Float](repeating: 1, count: 50))   // 12.8 s
+        #expect(await eventually { await l.capturedSamples == 50 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.tooLong == false)
+        #expect(await st.clips.first?.count == 50 * 4096)
+    }
+
+    /// The wake word keeps the mic open, but a command's audio does not stay in the ring once heard.
+    @Test func aCommandsAudioIsErasedOnceHeard() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([1, 1, 1])
+        #expect(await eventually { await l.capturedSamples == 3 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await input.isOpen)
+        #expect(await l.heldAudio.count == 3 * 4096)
+        #expect(await l.heldAudio.allSatisfy { $0 == 0 })
+    }
+
+    @Test func noAudioIsKeptOnceTheMicCloses() async {
+        let l = await make()
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([1, 1, 1])
+        #expect(await eventually { await l.capturedSamples == 3 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await !input.isOpen })
+        #expect(await l.heldAudio.isEmpty)
+    }
+
+    /// A new mic choice reopens the mic the wake word holds open.
+    @Test func aNewMicChoiceReopensAnOpenMic() async {
+        let l = await make()
+        await l.setInputDevice(nil)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setInputDevice(nil)   // no change: nothing happens
+        #expect(await input.starts == 1)
+        await l.setInputDevice("USB-1")
+        #expect(await eventually { let n = await input.starts; let o = await input.isOpen; return n == 2 && o })
+        #expect(await l.currentPhase == .waiting)
+    }
+
+    /// While a command is being heard the choice waits, then applies when the command ends.
+    @Test func aNewMicChoiceWaitsForTheCommandBeingHeard() async {
+        let l = await make()
+        await l.setInputDevice(nil)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await l.setInputDevice("USB-1")
+        #expect(await input.starts == 1)
+        await input.push([1, 1])
+        #expect(await eventually { await l.capturedSamples == 2 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await eventually { let n = await input.starts; let o = await input.isOpen; return n == 2 && o })
     }
 
     @Test func followUpTimesOutQuietly() async {
@@ -494,7 +602,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         let l = await make(transcriber: t)
         await l.hotkeyDown()
         try? await Task.sleep(for: .milliseconds(60))
-        await input.push([Float](repeating: 1, count: 45))   // 11.5 s, the ring holds 10 s
+        await input.push([Float](repeating: 1, count: 60))   // 15.4 s, past the 15 s cap
         #expect(await eventually { await heard.items.count == 1 })
         let u = await heard.items.first
         #expect(u?.tooLong == true)
