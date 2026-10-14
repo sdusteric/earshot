@@ -147,17 +147,21 @@ struct StatusPanel: View {
     // MARK: Sessions
 
     private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SectionTitle(title: "Sessions", trailing: model.sessions.isEmpty ? nil : "\(model.sessions.count)")
-            if model.sessions.isEmpty {
-                Text("No Claude Code sessions. Start one and Earshot tells you when it needs you or finishes.")
+        // The plugin's sessions, plus the ones only `claude agents` lists (all of them without the plugin).
+        let sessions = SessionInfo.panelList(known: model.sessions, live: model.liveSessions)
+        return VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "Sessions", trailing: sessions.isEmpty ? nil : "\(sessions.count)")
+            if sessions.isEmpty {
+                Text(model.pluginStatus.isConnected || model.pluginStatus == .checking
+                     ? "No Claude Code sessions. Start one and Earshot tells you when it needs you or finishes."
+                     : "No Claude Code sessions found. Connect the Earshot plugin so Earshot can tell you when a session needs you or finishes.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
             } else {
-                ForEach(model.sessions) { s in
+                ForEach(sessions) { s in
                     SessionRow(session: s, last: model.lastLine(for: s.id)) {
                         show(.session(s.id))
                     } replay: { entry in

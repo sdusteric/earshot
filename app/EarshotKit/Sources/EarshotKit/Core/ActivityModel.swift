@@ -277,6 +277,34 @@ public struct ActivitySessions: Sendable {
     }
 }
 
+extension SessionInfo {
+    /// A session Claude Code lists that the plugin has not reported, in the
+    /// plugin's terms: waiting on you, working, or open.
+    public init(live s: LiveSession, now: Date = Date()) {
+        let state = s.state ?? (s.waiting ? .needs : s.busy ? .working : .open)
+        self.init(id: s.id, name: s.name, state: state, detail: s.detail, updated: s.since ?? now,
+                  project: s.project, title: s.title)
+    }
+
+    /// The panel's sessions: the plugin's, in its order, then the ones only
+    /// `claude agents` lists (without the plugin, that is all of them), those
+    /// waiting on you first, then the working ones.
+    public static func panelList(known: [SessionInfo], live: [LiveSession], now: Date = Date()) -> [SessionInfo] {
+        let ids = Set(known.map(\.id))
+        let rank: (SessionInfo) -> Int = { s in
+            switch s.state {
+            case .needs, .reply: 0
+            case .stuck, .failed: 1
+            case .working: 2
+            default: 3
+            }
+        }
+        let extra = live.filter { !ids.contains($0.id) }.map { SessionInfo(live: $0, now: now) }
+            .enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
+        return known + extra
+    }
+}
+
 extension HistoryEntry {
     /// A line that waits on you: a "needs you" line, or one that ends by asking
     /// something ("Want one more round, or ship it?"), which the plugin sends
