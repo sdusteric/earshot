@@ -159,7 +159,14 @@ final class AppModel {
             let claude = stack.claude
             pluginLink = PluginLink(find: { await claude.locate() == nil ? nil : claude })
             await checkPlugin(force: true)
-            Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
+            Task {
+                for await s in await stack.models.changes() {
+                    let shown = modelState.showing(s)
+                    guard shown != modelState else { continue }
+                    modelState = shown
+                    await listeningChanged()
+                }
+            }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
             // A session opened while the plugin is silent arms the wake word within a minute.

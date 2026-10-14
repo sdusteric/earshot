@@ -510,7 +510,11 @@ private struct GeneralTab: View {
                 LabeledContent("Speech models") {
                     switch model.modelState {
                     case .ready: Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
-                    case .downloading(let p): ProgressView(value: p).frame(width: 140)
+                    case .downloading(let p):
+                        HStack(spacing: 8) {
+                            ProgressView(value: p).frame(width: 120)
+                            Text(model.modelState.percent ?? "").monospacedDigit().foregroundStyle(.secondary)
+                        }
                     case .missing:
                         Button(ListenModelFiles.partial ? "Finish Download" : "Download (about 1 GB)") { model.downloadModels() }
                     case .failed: Button("Try Again") { model.downloadModels() }

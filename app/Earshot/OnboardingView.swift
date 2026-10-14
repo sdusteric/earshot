@@ -84,8 +84,9 @@ struct OnboardingView: View {
                 Text("Listening needs about 1 GB of speech models, downloaded once. Earshot keeps speaking while they download.")
                 switch model.modelState {
                 case .ready: Label("The models are ready.", systemImage: "checkmark.circle")
-                case .downloading(let p): ProgressView(value: p) { Text("Downloading") }
-                case .missing: Button("Download") { model.downloadModels() }
+                case .downloading(let p):
+                    ProgressView(value: p) { Text("Downloading") } currentValueLabel: { Text(model.modelState.percent ?? "") }
+                case .missing: Button(ListenModelFiles.partial ? "Finish Download" : "Download") { model.downloadModels() }
                 case .failed: Button("Try Again") { model.downloadModels() }
                 }
             case .ducking:
