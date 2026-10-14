@@ -291,6 +291,15 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         #expect(RollCall.line(waiting, now: now, hour: 15) == "One session. Reflow is waiting on you.")
     }
 
+    /// A session that finished a while ago is idle now: the roll call only counts it.
+    @Test func anOldFinishCountsAsIdle() {
+        let list = [s("blog", .done, mins: 45, detail: "fixed the feed"), s("docs", .done, mins: 5, detail: "fixed the links"),
+                    s("api", .working, mins: 3)]
+        #expect(RollCall.line(list, now: now, hour: 15)
+                == "Three sessions. Api is working, 3 minutes in. Docs finished: fixed the links. One other is idle. Nothing needs you.")
+        #expect(RollCall.line([s("blog", .done, mins: 300)], now: now, hour: 15) == "One session. It's idle. Nothing needs you.")
+    }
+
     @Test func aGreetingIsShortAndSaysWhatMatters() {
         let all = [s("blog", .done), s("docs", .done), s("reflow", .needs, mins: 12), s("billing", .working, mins: 80),
                    s("api", .working, mins: 4)]

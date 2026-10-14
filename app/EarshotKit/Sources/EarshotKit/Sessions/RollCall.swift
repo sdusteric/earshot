@@ -12,6 +12,13 @@ public enum RollCall {
     static let longRun: TimeInterval = 30 * 60
     /// A wait on you this long is worth a mention.
     static let longWait: TimeInterval = 10 * 60
+    /// A finish older than this is old news: the roll call counts the session as idle.
+    static let oldFinish: TimeInterval = 20 * 60
+
+    static func finishedLongAgo(_ s: LiveSession, now: Date) -> Bool {
+        guard effectiveState(s) == .done, let since = s.since else { return false }
+        return now.timeIntervalSince(since) > oldFinish
+    }
 
     /// hour: the local hour now, for the late-night note (nil: from the clock).
     public static func line(_ sessions: [LiveSession], now: Date, hour: Int? = nil) -> String {
@@ -20,8 +27,9 @@ public enum RollCall {
         let head = "\(count(total)) session\(total == 1 ? "" : "s")."
         let ordered = sessions.sorted { (rank($0), $0.since ?? now) < (rank($1), $1.since ?? now) }
         // Sessions doing something are named; idle ones are only counted, so
-        // fourteen sessions don't mean fourteen "is idle"s.
-        let named = ordered.filter { effectiveState($0) != .open }
+        // fourteen sessions don't mean fourteen "is idle"s. A session that
+        // finished a while ago is idle by now.
+        let named = ordered.filter { effectiveState($0) != .open && !finishedLongAgo($0, now: now) }
         let idle = total - named.count
         var parts = [head] + named.prefix(6).map { sentence($0, now: now) }
         if named.count > 6 { parts.append("And \(named.count - 6) more.") }
