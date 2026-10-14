@@ -125,13 +125,18 @@ public enum Grammar {
     /// A word that ends a "to" phrase in a negation or a question: the grammar leaves it to the model (G1).
     static let blockersBeforeTo: Set<String> = ["not", "how", "what", "where", "when", "whether", "why", "which", "never"]
 
-    static let allowWords: Set<String> = ["yes", "yeah", "yep", "yup", "allow", "allow it", "approve", "approve it",
-                                          "approved", "go ahead", "do it", "sure", "ok", "okay", "yes please",
-                                          "yes go ahead", "yeah go ahead"]
-    static let denyWords: Set<String> = ["no", "nope", "deny", "deny it", "don't", "dont", "don't do it", "stop",
-                                         "cancel", "no thanks", "no thank you", "nah"]
-    /// A no to a prompt outside its window: "stop" and "cancel" are the Stop command there.
-    static let plainDenyWords = denyWords.subtracting(["stop", "cancel"])
+    /// An answer is a yes or no word, then at most a few words from its tail
+    /// ("okay, go ahead", "no, don't"). Any other word makes it no answer.
+    static let yesWords: Set<String> = ["yes", "yeah", "yep", "yup", "sure", "okay", "ok", "allow", "approve", "approved",
+                                        "go", "do", "alright", "fine"]
+    /// The yes words that count outside a window, where a short noise is often heard as "okay" or "yeah".
+    static let plainYesWords: Set<String> = ["yes", "allow", "approve", "approved"]
+    static let yesTail: Set<String> = ["go", "ahead", "do", "it", "for", "that", "that's", "please", "thing", "once",
+                                       "thanks", "now", "sure", "yes", "yeah", "yep", "okay", "ok", "fine", "alright",
+                                       "right", "then", "allow", "approve"]
+    static let noWords: Set<String> = ["no", "nope", "nah", "not", "don't", "dont", "deny", "stop", "cancel"]
+    static let noTail: Set<String> = ["don't", "dont", "do", "it", "that", "way", "thanks", "thank", "you", "please",
+                                      "not", "now", "yet", "stop", "deny", "no", "nope", "cancel"]
 
     static let everyone: Set<String> = [
         "what's everyone doing", "what is everyone doing", "whats everyone doing", "what's everybody doing",
@@ -184,19 +189,29 @@ public enum Grammar {
         return w
     }
 
-    public static func approvalWord(_ text: String) -> Bool? {
-        let k = Words(text).key
-        if allowWords.contains(k) { return true }
-        if denyWords.contains(k) { return false }
+    /// The answer in an approval window: any yes or no word, with a short tail.
+    public static func windowAnswer(_ text: String) -> Bool? { yesOrNo(text, yes: yesWords, no: noWords) }
+
+    /// An answer outside a window: only yes, allow or approve says yes, unless a
+    /// session is named with it (`named`). "Stop" and "cancel" are the Stop command there.
+    public static func plainAnswer(_ text: String, named: Bool = false) -> Bool? {
+        yesOrNo(text, yes: named ? yesWords : plainYesWords, no: noWords.subtracting(["stop", "cancel"]))
+    }
+
+    static func yesOrNo(_ text: String, yes: Set<String>, no: Set<String>) -> Bool? {
+        var w = Words(text)
+        while let f = w.keys.first, ["um", "uh", "erm", "hmm", "oh", "well"].contains(f) { w = w.slice(1..<w.count) }
+        guard let first = w.keys.first, w.count <= 5 else { return nil }
+        let tail = Set(w.keys.dropFirst())
+        if yes.contains(first), tail.isSubset(of: yesTail) { return true }
+        if no.contains(first), tail.isSubset(of: noTail) { return false }
         return nil
     }
 
     public static func parse(_ transcript: String, known: [String] = []) -> Command? {
-        // "Stop" and "cancel" answer a prompt only inside its window (VoiceLoop
-        // uses approvalWord there). Said after the hotkey, "stop" is the Stop command.
-        if !["stop", "cancel"].contains(Words(transcript).key), let allow = approvalWord(transcript) {
-            return .answer(allow: allow, target: nil)
-        }
+        if let allow = plainAnswer(transcript) { return .answer(allow: allow, target: nil) }
+        // "Okay" or "yeah" alone outside a window answers nothing.
+        if windowAnswer(transcript) == true { return .unknown }
         let w = Words(transcript).trimmingFillers()
         guard !w.isEmpty else { return .unknown }
         if let c = answer(w, known: known) ?? status(w, known: known) ?? stop(w, known: known) ?? start(w) ?? send(w, known: known) { return c }

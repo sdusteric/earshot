@@ -129,6 +129,8 @@ actor SlowCommandModel: CommandModel {
         let nah = FakeModel(answer: .answer(allow: false, target: "billing"))
         #expect(await CommandParser(model: nah).parse("nah billing", sessions: ["billing"])
                 == .answer(allow: false, target: "billing"))
+        // Without a session named, only yes, allow or approve counts.
+        #expect(await CommandParser(model: stray).parse("sure, why not", sessions: []) == .unknown)
         let unheard = FakeModel(answer: .answer(allow: true, target: "payments"))
         #expect(await CommandParser(model: unheard).parse("yeah, the other one", sessions: ["payments"]) == .unknown)
     }

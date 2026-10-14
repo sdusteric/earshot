@@ -41,6 +41,8 @@ public actor VoiceLoop: ListenObserver {
 
     /// A question Earshot asked ("Which one?"), waiting for its answer.
     private var pending: Dispatcher.Pending?
+    /// The prompt Earshot last asked "Say yes or no." about, so it asks only once.
+    private var askedAgain: String?
     /// Follow-up windows to open once a line has been said.
     private var afterLine: [UUID: Listener.FollowUp] = [:]
     /// The open prompt a need line was about when it began, for its window.
@@ -129,7 +131,7 @@ public actor VoiceLoop: ListenObserver {
         let said = u.plain ?? u.text
         let text = Listener.stripWake(said) ?? said
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        if case .followUp(.approval) = u.trigger, Grammar.approvalWord(text) == nil { return }
+        if case .followUp(.approval) = u.trigger, Grammar.windowAnswer(text) == nil { return }
         let e = HistoryEntry(kind: .heard, text: text)
         heardEntry = e.id
         await history.add(e)
@@ -140,8 +142,9 @@ public actor VoiceLoop: ListenObserver {
         let answer = Listener.stripWake(u.text) ?? u.text
         switch u.trigger {
         case .followUp(.approval(let id)):
-            // Only a clear yes or no. Anything else leaves the prompt as it is.
-            if let allow = Grammar.approvalWord(answer) {
+            // Only a clear yes or no. Anything else leaves the prompt as it is,
+            // and the first time Earshot asks again and listens once more.
+            if let allow = Grammar.windowAnswer(answer) {
                 switch await approvals.answer(id, allow: allow) {
                 case .written:
                     await chimes.play(.confirm)
@@ -150,6 +153,9 @@ public actor VoiceLoop: ListenObserver {
                 case .failed: await say("Couldn't answer it.", after: u)
                 }
                 await events.add("command answer")
+            } else if !Grammar.Words(answer).isEmpty, askedAgain != id, await approvals.isOpen(id) {
+                askedAgain = id
+                await say("Say yes or no.", after: u, then: .approval(id: id))
             }
         case .followUp(.reply):
             if let p = pending, !answer.isEmpty {

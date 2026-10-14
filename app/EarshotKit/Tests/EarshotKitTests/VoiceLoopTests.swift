@@ -306,12 +306,45 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await chimes.played == [.confirm])
     }
 
-    @Test func otherWordsInTheWindowDoNothing() async {
+    /// An answer that is not a clear yes or no is asked about once, and the window opens once more.
+    @Test func anUnclearAnswerInTheWindowAsksOnce() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())
+        let player = r.player
         r.heard.yield(said("Yes but use the other file.", .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == ["Say yes or no."] })
+        #expect(await eventually { await followUps.calls == [.approval(id: "1-1-1")] })
+        #expect(await r.book.current.count == 1)
+        // A second unclear answer gets nothing more.
+        r.heard.yield(said("Hmm, let me think.", .followUp(.approval(id: "1-1-1"))))
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(await r.player.played.isEmpty)
+        #expect(await player.played == ["Say yes or no."])
+        #expect(await followUps.calls == [.approval(id: "1-1-1")])
+        r.heard.yield(said("Okay, go ahead.", .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == ["Say yes or no.", "Approved."] })
+        #expect(await r.book.current.isEmpty)
+    }
+
+    @Test(arguments: [("Okay, go ahead.", true), ("Yes, do it.", true), ("Sure thing.", true), ("Allow once.", true),
+                      ("No, don't.", false), ("No way.", false), ("Nope, don't.", false)])
+    func aYesOrNoWithAShortTailAnswers(_ text: String, _ allow: Bool) async throws {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said(text, .followUp(.approval(id: "1-1-1"))))
+        #expect(await eventually { await player.played == [allow ? "Approved." : "Told it no."] })
+        #expect(try String(contentsOfFile: "\(approvalsDir)/answer-s1-1-1-1", encoding: .utf8)
+                == "\(allow ? "allow" : "deny") \(secret)\n")
+    }
+
+    /// Outside the window a lone "okay" is often a noise or a false start: it approves nothing.
+    @Test func aHotkeyOkayDoesNotApprove() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let player = r.player
+        r.heard.yield(said("Okay.", .hotkey))
+        #expect(await eventually { await player.played.count == 1 })
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
         #expect(await r.book.current.count == 1)
     }
 

@@ -64,9 +64,10 @@ import Testing
         ("Start a session for the wedding site.", .start(project: "the wedding site", prompt: nil)),
         // Answers
         ("Yes.", .answer(allow: true, target: nil)),
-        ("Yeah.", .answer(allow: true, target: nil)),
-        ("Go ahead.", .answer(allow: true, target: nil)),
+        ("Yes, please.", .answer(allow: true, target: nil)),
+        ("Allow it.", .answer(allow: true, target: nil)),
         ("No.", .answer(allow: false, target: nil)),
+        ("Yeah billing.", .answer(allow: true, target: "billing")),
         ("Yes billing.", .answer(allow: true, target: "billing")),
         ("Approve billing service.", .answer(allow: true, target: "billing service")),
         ("Allow the blog.", .answer(allow: true, target: "the blog")),
@@ -104,20 +105,32 @@ import Testing
         #expect(Grammar.parse("in billing service,") == .unknown)
     }
 
+    /// In an approval window: a yes or no word, alone or with a short tail.
     @Test(arguments: [
         ("yes", true), ("Yeah.", true), ("yep", true), ("Allow it.", true), ("approve", true), ("Go ahead.", true),
         ("Do it.", true), ("sure", true), ("OK.", true), ("Okay", true), ("yes please", true),
+        ("Okay, go ahead.", true), ("Yes, do it.", true), ("Yep, do it.", true), ("Sure thing.", true),
+        ("Allow once.", true), ("Um, yes.", true), ("Go for it.", true),
         ("no", false), ("Nope.", false), ("deny", false), ("Don't.", false), ("stop", false), ("cancel", false),
-        ("no thanks", false),
+        ("no thanks", false), ("No, don't.", false), ("No way.", false), ("Nope, don't.", false),
+        ("Don't do that.", false),
     ] as [(String, Bool)])
-    func approvalWords(_ said: String, _ allow: Bool) {
-        #expect(Grammar.approvalWord(said) == allow)
+    func windowAnswers(_ said: String, _ allow: Bool) {
+        #expect(Grammar.windowAnswer(said) == allow)
     }
 
-    /// Only a clear word counts: a sentence with other content does nothing.
-    @Test(arguments: ["yes but use the other file", "no idea", "sure, after you run the tests", "", "maybe", "hmm"])
+    /// Only a clear answer counts: a sentence with other content, or both yes and no, is no answer.
+    @Test(arguments: ["yes but use the other file", "no idea", "sure, after you run the tests", "", "maybe", "hmm",
+                      "Yeah, no.", "Okay, stop.", "No, wait, yes", "Yes, don't delete it"])
     func otherSentencesAreNoAnswer(_ said: String) {
-        #expect(Grammar.approvalWord(said) == nil)
+        #expect(Grammar.windowAnswer(said) == nil)
+    }
+
+    /// Outside a window a short noise is often heard as "Okay." or "Yeah.":
+    /// only yes, allow or approve answers a prompt there, or a word with a session name.
+    @Test(arguments: ["Okay.", "OK", "Sure.", "Yeah.", "Yep.", "Do it.", "Go ahead.", "Yeah, go ahead.", "Sure thing."])
+    func fillerWordsDoNotApproveOutsideAWindow(_ said: String) {
+        #expect(Grammar.parse(said, known: Self.known) == .unknown)
     }
 
     // Round 1 (G1): a question or negation before "to" is not a send.
