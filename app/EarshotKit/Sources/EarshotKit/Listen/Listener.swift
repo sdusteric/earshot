@@ -116,6 +116,10 @@ public actor Listener {
     private var refused: Bool { micBusy || blocked }
     private var sensitivity = 5
     private var vocabulary: [String] = []
+    /// The mic chosen in Settings (nil inside: Automatic), and the choice when the
+    /// mic last opened. Outer nil: not told yet.
+    private var inputDevice: String??
+    private var openedWith: String??
     private var segmentStart: Int?
     /// The segment began while Earshot said the wake phrase (or just after): its own voice.
     private var segmentOwn = false
@@ -163,6 +167,24 @@ public actor Listener {
     public func setObserver(_ o: any ListenObserver) { observer = o }
     public func setSensitivity(_ s: Int) { sensitivity = s }
     public func setVocabulary(_ v: [String]) { vocabulary = v }
+
+    /// The mic chosen in Settings. The input reads the choice only when it
+    /// opens, so a change reopens a mic the wake word holds open, at once or
+    /// when the command being heard ends.
+    public func setInputDevice(_ uid: String?) async {
+        inputDevice = .some(uid)
+        if micOpen, openedWith == nil { openedWith = .some(uid) }   // the first call: what is open is current
+        await applyInputDevice()
+    }
+
+    private func applyInputDevice() async {
+        guard micOpen, let wanted = inputDevice, let opened = openedWith, wanted != opened,
+              capture == nil, !hotkeyHeld, pendingOpens == 0, !refused else { return }
+        log.info("the mic choice changed; reopening the mic")
+        await closeMic()
+        await openMic()
+        settlePhase()
+    }
 
     /// What Earshot is saying now (nil when it went quiet), so it never wakes
     /// itself: a session named "earshot" makes it say the wake phrase.
@@ -422,6 +444,7 @@ public actor Listener {
                 return true
             }
             micOpen = true
+            openedWith = inputDevice
             streamID += 1
             let id = streamID
             streamTask = Task { [weak self] in
@@ -497,8 +520,11 @@ public actor Listener {
         await gate.reset()
     }
 
+    /// Closes the mic when nothing needs it. When the wake word keeps it open,
+    /// a mic choice made meanwhile applies now.
     private func closeMicIfIdle() async {
-        if !armed, capture == nil, !hotkeyHeld, pendingOpens == 0 { await closeMic() }
+        guard capture == nil, !hotkeyHeld, pendingOpens == 0 else { return }
+        if !armed { await closeMic() } else { await applyInputDevice() }
     }
 
     private func receive(_ samples: [Float]) async {

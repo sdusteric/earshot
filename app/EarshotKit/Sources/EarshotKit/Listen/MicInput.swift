@@ -170,11 +170,13 @@ public actor MicInput: AudioInput {
     private var cont: AsyncStream<[Float]>.Continuation?
     private var observer: (any NSObjectProtocol)?
     private let log = Logger(subsystem: "com.earshot.app", category: "mic")
-    /// The mic that opened last time, tried first, and mics that gave no
-    /// audio lately, skipped: each failed try costs about half a second
-    /// before the listening chime.
-    private var lastGood: String??
+    /// The mic that opened last time, tried first while the setting is the
+    /// one it opened under, and mics that gave no audio lately, skipped: each
+    /// failed try costs about half a second before the listening chime.
+    private var lastGood: (setting: String?, uid: String?)?
     private var failedAt: [String?: ContinuousClock.Instant] = [:]
+    /// The setting the mic last opened under. A new choice is tried first even if it failed lately.
+    private var lastSetting: String??
     static let retryFailedAfter: Duration = .seconds(600)
     private var heard: HeardFlag?
     /// The mic now open (nil inside: the system default).
@@ -203,14 +205,18 @@ public actor MicInput: AudioInput {
     }
 
     private func build() throws {
-        let candidates = MicInput.order(candidates(setting: deviceUID()), lastGood: lastGood, failedAt: failedAt, now: .now)
+        let setting = deviceUID()
+        if let last = lastSetting, last != setting { failedAt[setting] = nil }
+        lastSetting = .some(setting)
+        let good: String?? = lastGood.flatMap { $0.setting == setting ? .some($0.uid) : nil }
+        let candidates = MicInput.order(candidates(setting: setting), lastGood: good, failedAt: failedAt, now: .now)
         let began = ContinuousClock.now
         for uid in candidates {
             if open(uid) {
                 let ms = (ContinuousClock.now - began).components.attoseconds / 1_000_000_000_000_000
                     + (ContinuousClock.now - began).components.seconds * 1000
                 log.info("mic open in \(ms, privacy: .public) ms")
-                lastGood = .some(uid)
+                lastGood = (setting, uid)
                 current = .some(uid)
                 failedAt[uid] = nil
                 return
@@ -306,7 +312,7 @@ public actor MicInput: AudioInput {
     private func moveOn(from uid: String?, engine: AVAudioEngine, _ why: String) {
         guard self.engine === engine, cont != nil else { return }
         failedAt[uid] = .now
-        if lastGood == .some(uid) { lastGood = nil }
+        if let g = lastGood, g.uid == uid { lastGood = nil }
         guard MicInput.hasAnother(candidates(setting: deviceUID()), than: uid, failedAt: failedAt, now: .now) else {
             log.error("\(why, privacy: .public); no other mic to try")
             return
@@ -343,7 +349,7 @@ public actor MicInput: AudioInput {
             // not allowed, so the next hold starts with another mic.
             log.error("the mic gave only silence; the next hold tries another")
             failedAt[current] = .now
-            if lastGood == .some(current) { lastGood = nil }
+            if let g = lastGood, g.uid == current { lastGood = nil }
         }
         engine = nil
         heard = nil

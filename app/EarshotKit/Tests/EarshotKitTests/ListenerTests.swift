@@ -418,6 +418,36 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await l.heldAudio.isEmpty)
     }
 
+    /// A new mic choice reopens the mic the wake word holds open.
+    @Test func aNewMicChoiceReopensAnOpenMic() async {
+        let l = await make()
+        await l.setInputDevice(nil)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setInputDevice(nil)   // no change: nothing happens
+        #expect(await input.starts == 1)
+        await l.setInputDevice("USB-1")
+        #expect(await eventually { let n = await input.starts; let o = await input.isOpen; return n == 2 && o })
+        #expect(await l.currentPhase == .waiting)
+    }
+
+    /// While a command is being heard the choice waits, then applies when the command ends.
+    @Test func aNewMicChoiceWaitsForTheCommandBeingHeard() async {
+        let l = await make()
+        await l.setInputDevice(nil)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await l.setInputDevice("USB-1")
+        #expect(await input.starts == 1)
+        await input.push([1, 1])
+        #expect(await eventually { await l.capturedSamples == 2 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await eventually { let n = await input.starts; let o = await input.isOpen; return n == 2 && o })
+    }
+
     @Test func followUpTimesOutQuietly() async {
         let l = await make()
         await l.listenFollowUp(.reply)
