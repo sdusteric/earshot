@@ -211,6 +211,9 @@ public actor SpeechOut {
     /// is enqueued, so a line that ends at once is still held.
     public func holdAfter(_ id: UUID) { holdIDs.insert(id) }
 
+    /// Lines marked to hold after them that have not started their hold yet (tests).
+    var markedHolds: Int { holdIDs.count }
+
     /// Releases the hold that belongs to this line only: the finished event of an
     /// earlier line, handled late, cannot free the hold of a later one.
     public func releaseHold(_ id: UUID) {
@@ -346,8 +349,10 @@ public actor SpeechOut {
             }
             emit(.ended(line))
             if !finished && interrupted {
-                // A call started: say this line and the rest later.
-                hold(line)
+                // A call started: say this line and the rest later. The player
+                // refuses the id it stopped, so the line waits under a new one.
+                // That also keeps its banner: the old id was reported started.
+                hold(line.withNewID())
                 for rest in queue where rest.kind != .roll { hold(rest) }
                 queue.removeAll { $0.kind != .roll }
             }

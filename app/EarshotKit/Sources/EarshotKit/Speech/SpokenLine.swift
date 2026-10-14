@@ -19,6 +19,12 @@ public struct SpokenLine: Sendable, Equatable, Identifiable {
         self.transcript = transcript; self.received = received; self.name = name
     }
 
+    /// The same line under a new id. A line stopped mid-play needs one to be
+    /// said again: the player refuses an id it was told to stop.
+    func withNewID() -> SpokenLine {
+        SpokenLine(text: text, kind: kind, session: session, transcript: transcript, received: received, name: name)
+    }
+
     /// The session waits on you: a "needs you" line, or a session's line that
     /// ends by asking something ("Want one more round, or ship it?"), which
     /// the plugin sends as a finished turn. Earshot's own lines never count.
