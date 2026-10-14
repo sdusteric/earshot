@@ -183,6 +183,7 @@ public enum Grammar {
         ("is", "finished"), ("is", "finished yet"), ("how's it going with", ""), ("how is it going with", ""),
         // A bare "how's billing", and how it is often misheard ("how you billing").
         // Only a known session name counts, so other questions still reach the model.
+        ("how are", "going"), ("how are", "doing"),
         ("how's the", ""), ("how is the", ""), ("how's", ""), ("how is", ""), ("how are", ""), ("how you", ""),
         ("how's your", ""), ("how your", ""),
         ("", "status"),
@@ -192,6 +193,13 @@ public enum Grammar {
     /// over Earshot's own line, and the session it would pick is only a guess.
     static let quietWords: Set<String> = ["stop", "stop it", "stop that", "halt", "pause", "stop talking", "quiet",
                                           "be quiet", "quiet please", "shut up", "hush", "enough", "that's enough"]
+    /// Every session at once, in a status question ("how are the other sessions going").
+    static let allSessions: Set<String> = [
+        "everyone", "everybody", "everything", "sessions", "the sessions", "all sessions", "all the sessions",
+        "the other sessions", "all the other sessions", "my sessions", "all my sessions", "the others",
+        "all the others", "the rest", "all of them", "they all",
+    ]
+
     static let everyoneWords: Set<String> = ["everyone", "everybody", "everything", "all", "all sessions",
                                              "all the sessions", "all of them", "them all", "every session",
                                              "all of you", "you all"]
@@ -279,7 +287,7 @@ public enum Grammar {
             guard var t = pre.isEmpty ? Optional(w) : w.after([pre]) else { continue }
             if !post.isEmpty { guard let b = t.before([post]) else { continue }; t = b }
             guard !t.isEmpty, t.count <= 5 else { continue }
-            if ["everyone", "everybody", "everything"].contains(t.key) || pronouns.contains(t.key) { return .status(target: nil) }
+            if allSessions.contains(t.key) || pronouns.contains(t.key) { return .status(target: nil) }
             guard looksKnown(t.text, known: known) else { continue }
             return .status(target: t.text)
         }
@@ -379,7 +387,19 @@ public enum Grammar {
         if let rest = w.after(["send"]), let i = rest.keys.lastIndex(of: "to"), i > 0, i < rest.count - 1 {
             return make(target: rest.slice((i + 1)..<rest.count), prompt: rest.slice(0..<i), known: known)
         }
+        // P for X: a question or ask that ends with a session's whole name ("what else
+        // should we do for earshot"). Only an exact name counts, so "wait for it" doesn't.
+        if let i = w.keys.lastIndex(of: "for"), i >= 2, i < w.count - 1 {
+            let t = w.slice((i + 1)..<w.count)
+            if isExactName(t.text, known: known) { return make(target: t, prompt: w.slice(0..<i), known: known) }
+        }
         return nil
+    }
+
+    /// The words are one of the known names, whole (an optional "the" and "session" aside).
+    static func isExactName(_ text: String, known: [String]) -> Bool {
+        let t = nameWords(text)
+        return !t.isEmpty && known.contains { nameWords($0) == t }
     }
 
     private static func make(target: Words, prompt: Words, known: [String]) -> Command? {

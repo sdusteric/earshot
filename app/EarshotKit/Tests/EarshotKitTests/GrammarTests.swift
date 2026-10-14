@@ -249,6 +249,24 @@ import Testing
         #expect(Grammar.parse(said, known: Self.known) == nil)
     }
 
+    /// "How are all the other sessions going?" is the roll call.
+    @Test(arguments: ["How are all the other sessions going?", "How are the sessions doing?", "How are my sessions going?",
+                      "How are the others doing?"])
+    func theSessionsTogetherAreTheRollCall(_ said: String) {
+        #expect(Grammar.parse(said, known: Self.known) == .status(target: nil))
+    }
+
+    /// A question that ends with a session's whole name goes to that session.
+    @Test func aQuestionForASessionIsSentToIt() {
+        #expect(Grammar.parse("What else do you think we should do for earshot?", known: Self.known)
+                == .send(target: "earshot", prompt: "What else do you think we should do"))
+        #expect(Grammar.parse("Write the changelog for the blog session", known: Self.known)
+                == .send(target: "the blog session", prompt: "Write the changelog"))
+        // Not a name, or not the whole name: left to the model.
+        #expect(Grammar.parse("Can you wait for it", known: Self.known) == nil)
+        #expect(Grammar.parse("What should we do for billing", known: Self.known) == nil)
+    }
+
     @Test func itIsAStatusPronoun() {
         #expect(Grammar.parse("How's it doing", known: Self.known) == .status(target: nil))
         // Asked of Earshot, "how's it going" is a greeting.
