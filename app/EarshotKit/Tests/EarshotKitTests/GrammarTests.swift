@@ -29,6 +29,32 @@ import Testing
         ("Where's billing at?", .status(target: "billing")),
         ("Check on the blog.", .status(target: "the blog")),
         ("Billing status.", .status(target: "Billing")),
+        ("What's everyone working on?", .status(target: nil)),
+        ("What is everyone working on?", .status(target: nil)),
+        ("What's billing working on?", .status(target: "billing")),
+        ("What's blog up to?", .status(target: "blog")),
+        ("Is blog done?", .status(target: "blog")),
+        ("Is billing finished?", .status(target: "billing")),
+        ("Is everyone done?", .status(target: nil)),
+        ("How's it going with blog?", .status(target: "blog")),
+        // What needs you: the roll call, which says those first
+        ("Who needs me?", .status(target: nil)),
+        ("Does anything need me?", .status(target: nil)),
+        ("Is anyone waiting on me?", .status(target: nil)),
+        // Greetings
+        ("How ya doing?", .greet),
+        ("How you doing today?", .greet),
+        ("Good morning.", .greet),
+        // Nothing to do
+        ("Thanks.", .quiet),
+        ("Thank you.", .quiet),
+        ("Okay, thanks.", .quiet),
+        ("Never mind.", .quiet),
+        // Earshot's last line again
+        ("Repeat that.", .repeatLast),
+        ("Say that again.", .repeatLast),
+        ("Can you repeat that?", .repeatLast),
+        ("What was that?", .repeatLast),
         // Send
         ("Tell billing service to run the tests.", .send(target: "billing service", prompt: "run the tests")),
         ("tell billing to run the tests", .send(target: "billing", prompt: "run the tests")),
@@ -45,6 +71,12 @@ import Testing
         ("For earshot: open a PR.", .send(target: "earshot", prompt: "open a PR")),
         ("Please tell blog to deploy, thanks.", .send(target: "blog", prompt: "deploy")),
         ("Send run the linter to billing.", .send(target: "billing", prompt: "run the linter")),
+        // A session named first
+        ("Blog, run the tests.", .send(target: "Blog", prompt: "run the tests")),
+        ("Billing service, update the readme.", .send(target: "Billing service", prompt: "update the readme")),
+        ("Billing, deploy.", .send(target: "Billing", prompt: "deploy")),
+        ("Okay, blog: fix the RSS feed.", .send(target: "blog", prompt: "fix the RSS feed")),
+        ("Blog, yes.", .answer(allow: true, target: "Blog")),
         ("Tell refund rounding to add a test for zero.", .send(target: "refund rounding", prompt: "add a test for zero")),
         // Stop
         ("Stop billing.", .stop(target: "billing", now: false)),
@@ -117,6 +149,35 @@ import Testing
         #expect(Grammar.parse(said, known: Self.known) == nil)
     }
 
+    /// Real session names are often plain words. A name said first must be a whole known
+    /// name (or the start of one), so ordinary sentences still reach the model.
+    static let plainNames = ["wedding", "What's next", "Plugin", "Projects", "earshot", "blog"]
+
+    @Test(arguments: [
+        ("Wedding, send the invites.", Command.send(target: "Wedding", prompt: "send the invites")),
+        ("Plugin, update the readme.", .send(target: "Plugin", prompt: "update the readme")),
+        ("Projects, list the folders.", .send(target: "Projects", prompt: "list the folders")),
+        ("What's wedding up to?", .status(target: "wedding")),
+        ("Is plugin done?", .status(target: "plugin")),
+    ] as [(String, Command)])
+    func plainWordNamesWhereANameIsNeeded(_ said: String, _ expected: Command) {
+        #expect(Grammar.parse(said, known: Self.plainNames) == expected)
+    }
+
+    @Test(arguments: [
+        "What's next, run the tests",       // a name that starts like a question is never said first
+        "Blog post, write it up",           // more than the name
+        "Earshot, run the tests",           // Earshot itself, not a session
+        "So, what's next?",
+        "Is the build done?",
+        "What's the plan?",
+        "Yeah, the wedding is next week",
+        "Okay, so the wedding, it's next week",
+    ])
+    func plainSentencesWithNameWordsGoToTheModel(_ said: String) {
+        #expect(Grammar.parse(said, known: Self.plainNames) == nil)
+    }
+
     @Test func emptyPromptIsNoCommand() {
         #expect(Grammar.parse("tell billing to") == .unknown)
         #expect(Grammar.parse("in billing service,") == .unknown)
@@ -145,9 +206,11 @@ import Testing
 
     /// Outside a window a short noise is often heard as "Okay." or "Yeah.":
     /// only yes, allow or approve answers a prompt there, or a word with a session name.
-    @Test(arguments: ["Okay.", "OK", "Sure.", "Yeah.", "Yep.", "Do it.", "Go ahead.", "Yeah, go ahead.", "Sure thing."])
-    func fillerWordsDoNotApproveOutsideAWindow(_ said: String) {
-        #expect(Grammar.parse(said, known: Self.known) == .unknown)
+    /// A lone okay is quiet; "go ahead" was meant as an answer, so it is not understood.
+    @Test(arguments: [("Okay.", Command.quiet), ("OK", .quiet), ("Sure.", .quiet), ("Yeah.", .quiet), ("Yep.", .quiet),
+                      ("Sure thing.", .quiet), ("Do it.", .unknown), ("Go ahead.", .unknown), ("Yeah, go ahead.", .unknown)])
+    func fillerWordsDoNotApproveOutsideAWindow(_ said: String, _ expected: Command) {
+        #expect(Grammar.parse(said, known: Self.known) == expected)
     }
 
     // Round 1 (G1): a question or negation before "to" is not a send.

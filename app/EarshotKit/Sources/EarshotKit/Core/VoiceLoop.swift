@@ -43,6 +43,10 @@ public actor VoiceLoop: ListenObserver {
     private var pending: Dispatcher.Pending?
     /// The prompt Earshot last asked "Say yes or no." about, so it asks only once.
     private var askedAgain: String?
+    /// The last line Earshot began, for "say that again".
+    private var lastLine: SpokenLine?
+    /// The last question Earshot asked, by its line, so saying it again reopens it.
+    private var lastQuestion: (line: UUID, pending: Dispatcher.Pending)?
     /// Follow-up windows to open once a line has been said.
     private var afterLine: [UUID: Listener.FollowUp] = [:]
     /// The open prompt a need line was about when it began, for its window.
@@ -171,6 +175,8 @@ public actor VoiceLoop: ListenObserver {
             if u.trigger == .wake, case .answer = c {
                 // The wake word alone never answers a prompt; the hotkey and the approval window do.
                 await say("Hold the hotkey to answer it.", after: u)
+            } else if c == .repeatLast {
+                await sayAgain(after: u)
             } else {
                 await apply(await dispatcher.run(c), after: u)
             }
@@ -207,11 +213,28 @@ public actor VoiceLoop: ListenObserver {
         let line = SpokenLine(text: text, kind: .confirm, session: "")
         commandEnded[line.id] = u.endedAt
         if let id = heardEntry { await history?.setReply(text, for: id) }
+        if followUp == .reply, let p = pending { lastQuestion = (line.id, p) }
         if let followUp {
             afterLine[line.id] = followUp
             // Marked before the line can start, so even a line that ends at once is held.
             await speech.holdAfter(line.id)
         }
+        await speech.enqueue(line)
+    }
+
+    /// "Say that again": the last line once more, as it was. A need line opens
+    /// its prompt's window again, and a question can be answered again.
+    private func sayAgain(after u: Listener.Utterance) async {
+        guard let last = lastLine else { await say("I haven't said anything yet.", after: u); return }
+        if let q = lastQuestion, q.line == last.id {
+            pending = q.pending
+            await say(last.text, after: u, then: .reply)
+            return
+        }
+        let line = SpokenLine(text: last.text, kind: last.kind, session: last.session, transcript: last.transcript,
+                              name: last.name)
+        commandEnded[line.id] = u.endedAt
+        if let id = heardEntry { await history?.setReply(last.text, for: id) }
         await speech.enqueue(line)
     }
 
@@ -247,6 +270,7 @@ public actor VoiceLoop: ListenObserver {
     private func lineEvent(_ e: SpeechOut.LineEvent) async {
         switch e {
         case .started(let line):
+            lastLine = line
             // A window is due after this line: keep the queue from moving on until it is open.
             // Lines with a question were marked when enqueued; a need line is decided here,
             // before anything else is awaited.
@@ -293,6 +317,7 @@ public actor VoiceLoop: ListenObserver {
         case .stop: "stop"
         case .stopAll: "stop all"
         case .quiet: "quiet"
+        case .repeatLast: "repeat"
         case .start: "start"
         case .answer: "answer"
         case .unknown: "unknown"

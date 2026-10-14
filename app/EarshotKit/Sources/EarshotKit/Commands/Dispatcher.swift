@@ -66,7 +66,7 @@ public actor Dispatcher {
         switch c {
         case .unknown:
             return Outcome(line: Self.didntGetIt)
-        case .quiet:
+        case .quiet, .repeatLast:   // VoiceLoop says the last line again
             return Outcome()
         case .stopAll:
             return await askStopAll()

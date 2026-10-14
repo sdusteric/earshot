@@ -144,6 +144,11 @@ public enum Grammar {
         "status update", "give me a status update", "give me a status", "status report", "what's happening",
         "what's going on", "what is going on", "how's everything going", "how is everything going",
         "how's everything", "what's the status", "everyone's status",
+        // What needs you: the roll call says those first.
+        "who needs me", "what needs me", "does anything need me", "does anyone need me", "does anybody need me",
+        "is anyone waiting on me", "is anything waiting on me", "is anybody waiting on me", "who's waiting on me",
+        "who is waiting on me", "is anyone waiting for me", "who's waiting for me", "anything need me",
+        "what needs my attention", "does anything need my attention",
     ]
 
     /// Asked of Earshot itself: a short answer with what needs you.
@@ -151,6 +156,21 @@ public enum Grammar {
         "how are you doing", "how are you", "how you doing", "how're you doing", "how's it going",
         "how is it going", "how are things", "how are things going", "what's up", "what's new", "how are we doing",
         "how's it looking", "how are you doing today", "hi", "hello", "hey there", "hi there", "hello there",
+        "how ya doing", "how ya doin", "how you doing today", "how ya doing today", "how are you today",
+        "how's your day", "how's your day going", "good morning", "good afternoon", "good evening", "morning",
+    ]
+
+    /// Nothing to do, and nothing to say back.
+    static let noOps: Set<String> = [
+        "thanks", "thank you", "thanks earshot", "thank you earshot", "thanks a lot", "thank you very much",
+        "thanks so much", "never mind", "nevermind", "forget it", "cancel", "cancel that", "that's all", "that's it",
+        "got it", "cool", "great", "perfect", "nice", "awesome", "all right", "alright", "good",
+    ]
+
+    static let repeatPhrases: Set<String> = [
+        "repeat that", "repeat it", "repeat", "repeat that please", "say that again", "say it again", "say again",
+        "say that again please", "come again", "what did you say", "what was that", "sorry what was that",
+        "pardon", "pardon me", "one more time", "again",
     ]
 
     /// (starts with, ends with) around a target.
@@ -158,7 +178,9 @@ public enum Grammar {
         ("what's the status of", ""), ("what is the status of", ""), ("what's", "doing"), ("what is", "doing"),
         ("whats", "doing"), ("how's", "doing"), ("how is", "doing"), ("how's", "going"), ("how is", "going"),
         ("status of", ""), ("status on", ""), ("what's up with", ""), ("where's", "at"), ("where is", "at"),
-        ("check on", ""),
+        ("check on", ""), ("what's", "working on"), ("what is", "working on"), ("whats", "working on"),
+        ("what's", "up to"), ("what is", "up to"), ("whats", "up to"), ("is", "done"), ("is", "done yet"),
+        ("is", "finished"), ("is", "finished yet"), ("how's it going with", ""), ("how is it going with", ""),
         // A bare "how's billing", and how it is often misheard ("how you billing").
         // Only a known session name counts, so other questions still reach the model.
         ("how's the", ""), ("how is the", ""), ("how's", ""), ("how is", ""), ("how are", ""), ("how you", ""),
@@ -218,12 +240,18 @@ public enum Grammar {
 
     public static func parse(_ transcript: String, known: [String] = []) -> Command? {
         if let allow = plainAnswer(transcript) { return .answer(allow: allow, target: nil) }
-        // "Okay" or "yeah" alone outside a window answers nothing.
-        if windowAnswer(transcript) == true { return .unknown }
+        // "Okay" or "yeah" alone outside a window answers nothing: it is often a noise
+        // or a false start, so Earshot stays quiet. "Go ahead" or "do it" was meant as
+        // an answer, so Earshot says it didn't get it.
+        if windowAnswer(transcript) == true {
+            return Words(transcript).keys.contains { $0 == "go" || $0 == "do" } ? .unknown : .quiet
+        }
         var w = Words(transcript).trimmingFillers()
         // "Earshot, ..." speaks to Earshot itself, not to a session called earshot.
         if w.keys.first == "earshot", w.said.first?.hasSuffix(",") == true { w = w.slice(1..<w.count).trimmingFillers() }
         guard !w.isEmpty else { return .unknown }
+        if noOps.contains(w.key) { return .quiet }
+        if repeatPhrases.contains(w.key) { return .repeatLast }
         if let c = answer(w, known: known) ?? status(w, known: known) ?? stop(w, known: known) ?? start(w) ?? send(w, known: known) { return c }
         return nil
     }
@@ -292,10 +320,11 @@ public enum Grammar {
     /// True when the words are a known name, or the start of one ("billing" for
     /// "billing service"). Stricter than looksKnown: for a name said first,
     /// where an ordinary sentence could start the same way. A name that starts
-    /// like a question ("What's next") never counts here.
+    /// like a question ("What's next"), or after "the" ("so the wedding, it's
+    /// next week"), never counts here.
     static func startsKnownName(_ w: Words, known: [String]) -> Bool {
         let t = nameWords(w.text)
-        guard !t.isEmpty, t.count <= 4, !questionWords.contains(t[0]) else { return false }
+        guard !t.isEmpty, t.count <= 4, w.keys.first != "the", !questionWords.contains(t[0]) else { return false }
         return known.contains { k in
             let n = nameWords(k)
             return !n.isEmpty && n.starts(with: t)
@@ -336,6 +365,13 @@ public enum Grammar {
             }
             if rest.said.last?.hasSuffix(",") == true || rest.said.last?.hasSuffix(":") == true { return .unknown }
             return nil
+        }
+        // X, P: a session named first ("blog, run the tests"). "Blog, yes" answers its prompt.
+        if let (t, p) = w.splitAtComma(), startsKnownName(t, known: known) {
+            if let allow = plainAnswer(p.text, named: true) { return .answer(allow: allow, target: Words(t.text).text) }
+            // "Billing, cancel" is not a prompt to send: the model decides.
+            if noOps.contains(p.key) || quietWords.contains(p.key) { return nil }
+            return make(target: t, prompt: p, known: known)
         }
         // send P to X
         if let rest = w.after(["send"]), let i = rest.keys.lastIndex(of: "to"), i > 0, i < rest.count - 1 {

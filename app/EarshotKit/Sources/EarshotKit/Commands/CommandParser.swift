@@ -61,7 +61,7 @@ public struct CommandParser: Sendable {
             let rest = Grammar.Words(text).keys.filter { !targetWords.contains($0) }.joined(separator: " ")
             guard let approves = Grammar.plainAnswer(rest, named: target != nil) else { return .unknown }
             return .answer(allow: approves, target: target)
-        case .greet, .stopAll, .quiet, .unknown:
+        case .greet, .stopAll, .quiet, .repeatLast, .unknown:
             return c
         }
     }

@@ -141,6 +141,45 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await player.played == ["Blog is working, 5 minutes in."])   // nothing said after it
     }
 
+    @Test func sayThatAgainRepeatsTheLastLine() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        await r.speech.enqueue(SpokenLine(text: "Blog finished: fixed the feed.", kind: .roll, session: "b"))
+        #expect(await eventually { await player.played.count == 1 })
+        r.heard.yield(said("Say that again."))
+        #expect(await eventually { await player.played == ["Blog finished: fixed the feed.", "Blog finished: fixed the feed."] })
+    }
+
+    @Test func repeatWithNothingSaidYet() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        r.heard.yield(said("Repeat that."))
+        #expect(await eventually { await player.played == ["I haven't said anything yet."] })
+    }
+
+    /// A question said again can be answered again.
+    @Test func aRepeatedQuestionOpensItsWindowAgain() async {
+        let r = await rig([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                           agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        let player = r.player
+        r.heard.yield(said("Tell billing to run the tests."))
+        #expect(await eventually { await followUps.calls == [.reply] })
+        r.heard.yield(said("Repeat that."))
+        #expect(await eventually { await followUps.calls == [.reply, .reply] })
+        #expect(await player.played.count == 2)
+        #expect(await player.played.first == player.played.last)
+        r.heard.yield(said("Invoice export.", .followUp(.reply)))
+        #expect(await eventually { await transport.sent.map(\.pid) == [11] })
+    }
+
+    @Test func thanksSaysNothing() async {
+        let r = await rig([agent("b", "blog", status: "busy")])
+        r.heard.yield(said("Thanks."))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await r.player.played.isEmpty)
+        #expect(await transport.sent.isEmpty)
+    }
+
     @Test func notUnderstoodSendsNothing() async {
         let r = await rig([agent("b", "blog")])
         let player = r.player
@@ -357,7 +396,8 @@ actor CountingSpeaker: LineSpeaker {
         await r.book.apply(approval())
         let player = r.player
         r.heard.yield(said("Okay.", .hotkey))
-        #expect(await eventually { await player.played.count == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await player.played.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
         #expect(await r.book.current.count == 1)
     }

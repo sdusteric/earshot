@@ -15,6 +15,8 @@ public enum Command: Sendable, Equatable {
     /// "Stop", "quiet", "never mind": Earshot already stopped talking when you
     /// began, so nothing is said and nothing is sent.
     case quiet
+    /// "Say that again": Earshot's last line once more.
+    case repeatLast
     case start(project: String, prompt: String?)
     /// Yes or no to a permission prompt.
     case answer(allow: Bool, target: String?)
