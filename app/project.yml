@@ -63,3 +63,5 @@ targets:
         # Until then the updater stays off and release-app.sh refuses to release.
         SPARKLE_PUBLIC_KEY: "SPARKLE_PUBLIC_KEY_NOT_SET"
         GENERATE_INFOPLIST_FILE: NO
+        # Drawn by scripts/app-icon.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
