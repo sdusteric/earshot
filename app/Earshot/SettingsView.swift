@@ -187,7 +187,7 @@ private struct VoiceTab: View {
                     Picker("Voice", selection: Binding(get: { model.config.kokoroVoice },
                                                        set: { v in
                                                            model.save { $0.set("EARSHOT_KOKORO_VOICE", v) }
-                                                           model.playTestLine("Hi, I'm \(Self.name(v)). This is how I'll sound.")
+                                                           model.playTestLine("Hi, I'm \(Self.name(v)). This is how I'll sound.", voice: v)
                                                        })) {
                         ForEach(Self.kokoroVoices, id: \.self) { v in
                             HStack {

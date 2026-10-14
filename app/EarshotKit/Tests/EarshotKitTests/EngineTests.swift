@@ -98,4 +98,13 @@ struct FakeEngine: SpeechEngine {
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         #expect(size > 1000)
     }
+
+    /// A voice preview is said, and cached, in the voice it is for, not the one picked since.
+    @Test func aPreviewKeepsItsOwnVoice() {
+        let c = EarshotConfig(text: "EARSHOT_KOKORO_VOICE=af_nicole\n")
+        let preview = SpokenLine(text: "Hi, I'm Bella. This is how I'll sound.", kind: .roll, session: "", voice: "af_bella")
+        #expect(LiveSynth.kokoroVoice(for: preview, config: c) == "af_bella")
+        #expect(LiveSynth.kokoroVoice(for: SpokenLine(text: "Hi.", kind: .roll, session: ""), config: c) == "af_nicole")
+        #expect(KokoroEngine(voice: "af_bella").cacheKey(preview.text) != KokoroEngine(voice: "af_nicole").cacheKey(preview.text))
+    }
 }

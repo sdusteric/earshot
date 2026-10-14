@@ -168,15 +168,19 @@ public final class LiveSynth: Synthesizer, @unchecked Sendable {
 
     public func audio(for line: SpokenLine) async -> URL? {
         let c = config()
-        return await EngineChain.make(config: c, kokoro: engine(for: c)).audio(for: line)
+        return await EngineChain.make(config: c, kokoro: engine(voice: Self.kokoroVoice(for: line, config: c))).audio(for: line)
     }
+
+    /// The line's own voice (a preview), else the configured one. The cache key
+    /// carries the voice, so a preview is never stored under another voice.
+    static func kokoroVoice(for line: SpokenLine, config c: EarshotConfig) -> String { line.voice ?? c.kokoroVoice }
 
     /// Loads Kokoro now when it is the engine, so the first line is not slow.
     /// A cold load takes about 12 seconds.
     public func prepare() async {
         let c = config()
         guard c.engine == .kokoro else { return }
-        await engine(for: c).prepare()
+        await engine(voice: c.kokoroVoice).prepare()
         // Earshot's fixed answers go into the audio cache now, so the first
         // "Sorry, I didn't get that." starts as fast as the hundredth.
         for text in Self.fixedReplies {
@@ -190,10 +194,10 @@ public final class LiveSynth: Synthesizer, @unchecked Sendable {
         "Hold the hotkey to answer it.", "That was too long for me. Try a shorter command.",
     ]
 
-    private func engine(for c: EarshotConfig) -> KokoroEngine {
+    private func engine(voice: String) -> KokoroEngine {
         lock.withLock {
-            if let kokoro, kokoro.voice == c.kokoroVoice { return kokoro }
-            let fresh = KokoroEngine(voice: c.kokoroVoice)
+            if let kokoro, kokoro.voice == voice { return kokoro }
+            let fresh = KokoroEngine(voice: voice)
             kokoro = fresh
             return fresh
         }

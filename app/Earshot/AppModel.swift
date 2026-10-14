@@ -242,9 +242,10 @@ final class AppModel {
 
     func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
 
-    func playTestLine(_ text: String = "This is how Earshot sounds.") {
+    /// A line that is not saved in the history. `voice` says it in that Kokoro voice (a preview).
+    func playTestLine(_ text: String = "This is how Earshot sounds.", voice: String? = nil) {
         guard let core else { return }
-        let line = SpokenLine(text: text, kind: .roll, session: "")
+        let line = SpokenLine(text: text, kind: .roll, session: "", voice: voice)
         unrecorded.insert(line.id)
         Task { await core.speech.enqueue(line) }
     }
