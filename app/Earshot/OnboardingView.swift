@@ -39,6 +39,15 @@ struct OnboardingView: View {
                 Text("Connect to Claude Code").font(.title2.bold())
                 Text("Earshot hears about your sessions through a small Claude Code plugin. It tells Earshot when a session needs you, might be stuck, or finishes, and lets you answer permission prompts by voice.")
                 PluginStatusRow()
+                if model.notificationsUndecided {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("When Earshot can't speak, for example during a call, a session that needs you shows a notification.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button("Allow Notifications") { Task { await model.requestNotifications() } }
+                    }
+                }
             case .voice:
                 Text("Voice").font(.title2.bold())
                 Text("Earshot speaks with \(model.config.engine == .kokoro ? "Kokoro, on this Mac" : model.config.engine == .elevenlabs ? "ElevenLabs" : "the Mac's own voice"). You can change it in Settings.")
@@ -49,7 +58,13 @@ struct OnboardingView: View {
                 if model.micAllowed {
                     Label("The microphone is allowed.", systemImage: "checkmark.circle")
                 } else {
-                    Button("Allow the Microphone") { Task { await model.requestMic() } }
+                    if model.micDenied {
+                        Text("Earshot isn't allowed to use the mic. Turn it on in System Settings, Privacy & Security, Microphone.")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button(AppModel.permissionAction(denied: model.micDenied, ask: "Allow the Microphone")) {
+                        Task { await model.requestMic() }
+                    }
                 }
                 Toggle("Listen for \u{201C}Hey Earshot\u{201D} (the mic indicator stays on while it listens)",
                        isOn: Binding(get: { model.config.wakeWord },
@@ -62,7 +77,13 @@ struct OnboardingView: View {
                     if model.hotkeyAllowed {
                         Label("The hotkey is allowed.", systemImage: "checkmark.circle")
                     } else {
-                        Button("Allow the Hotkey") { model.requestHotkeyAccess() }
+                        if model.hotkeyDenied {
+                            Text("Earshot isn't allowed to see the key. Turn it on in System Settings, Privacy & Security, Input Monitoring.")
+                                .foregroundStyle(.secondary)
+                        }
+                        Button(AppModel.permissionAction(denied: model.hotkeyDenied, ask: "Allow the Hotkey")) {
+                            model.requestHotkeyAccess()
+                        }
                     }
                 } else {
                     Text("The hold-to-talk hotkey is off. You can turn it on in Settings, under Listening.")
@@ -72,8 +93,9 @@ struct OnboardingView: View {
                 Text("Listening needs about 1 GB of speech models, downloaded once. Earshot keeps speaking while they download.")
                 switch model.modelState {
                 case .ready: Label("The models are ready.", systemImage: "checkmark.circle")
-                case .downloading(let p): ProgressView(value: p) { Text("Downloading") }
-                case .missing: Button("Download") { model.downloadModels() }
+                case .downloading(let p):
+                    ProgressView(value: p) { Text("Downloading") } currentValueLabel: { Text(model.modelState.percent ?? "") }
+                case .missing: Button(ListenModelFiles.partial ? "Finish Download" : "Download") { model.downloadModels() }
                 case .failed: Button("Try Again") { model.downloadModels() }
                 }
             case .ducking:
@@ -82,8 +104,7 @@ struct OnboardingView: View {
                 Toggle("Lower other apps while Earshot talks",
                        isOn: Binding(get: { model.config.duckEnabled },
                                      set: { on in model.save { $0.set("EARSHOT_DUCK", on ? nil : "off") } }))
-                Toggle("Open Earshot when you log in",
-                       isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                LaunchAtLoginToggle()
             case .tryIt:
                 Text("Try it").font(.title2.bold())
                 if model.config.wakeWord {
@@ -93,7 +114,7 @@ struct OnboardingView: View {
                 } else {
                     Text("Turn on the wake word or the hotkey in Settings, under Listening, to give Earshot a command.")
                 }
-                if let b = model.listenBlock, model.config.wakeWord { Text(ListenPolicy.menuLine(b)).foregroundStyle(.secondary) }
+                if let b = model.listenBlock, model.config.wakeWord { Text(model.blockLine(b)).foregroundStyle(.secondary) }
             }
             Spacer()
             HStack {
@@ -118,6 +139,9 @@ struct OnboardingView: View {
             if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
         }
         .permissionRefresh(model)
-        .task { await model.checkPlugin(force: true) }
+        .task {
+            model.refreshNotifications()
+            await model.checkPlugin(force: true)
+        }
     }
 }

@@ -12,11 +12,15 @@ public struct SpokenLine: Sendable, Equatable, Identifiable {
     public var received: Date
     /// The session's spoken name, when the plugin sent one ("billing service").
     public var name: String?
+    /// A Kokoro voice for this line only, instead of the one in the config: a
+    /// voice preview in Settings is said in the voice it is for, even after you
+    /// picked another. Kept for lines short enough not to be split (80 characters).
+    public var voice: String?
 
     public init(id: UUID = UUID(), text: String, kind: LineKind, session: String, transcript: String? = nil,
-                received: Date = Date(), name: String? = nil) {
+                received: Date = Date(), name: String? = nil, voice: String? = nil) {
         self.id = id; self.text = text; self.kind = kind; self.session = session
-        self.transcript = transcript; self.received = received; self.name = name
+        self.transcript = transcript; self.received = received; self.name = name; self.voice = voice
     }
 
     /// The same line under a new id. A line stopped mid-play needs one to be

@@ -298,17 +298,19 @@ final class Box<T>: @unchecked Sendable {
         #"{"v":1,"type":"approval","session":"s1","id":"1-2-3","name":"blog","what":"to run tests","answer":"\#(dir)/answer-s1-1-2-3","secret":"0123456789abcdef0123456789abcdef","pid":1,"sent":\#(Int(sent))}"#
     }
 
-    @Test func takesAnApprovalOnlyWhenItCanListen() async throws {
+    /// Allow and Deny in the panel need no mic, so a prompt is taken even while
+    /// Earshot can't listen (a call, no mic permission, listening off).
+    @Test func takesAnApprovalWhetherOrNotItCanListen() async throws {
         let dir = NSTemporaryDirectory() + "ek-ap-\(UUID().uuidString.prefix(6))"
-        for (canListen, expected) in [(true, #"{"ok":true}"#), (false, #"{"ok":false,"reason":"not listening"}"#)] {
+        for canListen in [true, false] {
             let p = path()
             let book = ApprovalBook(stateDir: dir, isAlive: { _ in true })
             let c = core(p, canListen: canListen, book: book)
             try await c.start()
             let now = Date().timeIntervalSince1970 * 1000
-            #expect(try send(p, approvalJSON(dir, sent: now)) == expected)
+            #expect(try send(p, approvalJSON(dir, sent: now)) == #"{"ok":true}"#)
             try await Task.sleep(for: .milliseconds(100))
-            #expect(await book.current.count == (canListen ? 1 : 0))
+            #expect(await book.current.count == 1)
             c.stop()
         }
     }

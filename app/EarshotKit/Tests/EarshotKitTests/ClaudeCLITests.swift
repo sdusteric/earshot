@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import EarshotKit
 
@@ -41,6 +42,41 @@ import Testing
         #expect(ClaudeCLI.locate(home: "/Users/me", isExecutable: { $0 == "/nix/bin/claude" },
                                  loginShell: { "/nix/bin/claude" }) == "/nix/bin/claude")
         #expect(ClaudeCLI.locate(home: "/Users/me", isExecutable: { _ in false }, loginShell: { nil }) == nil)
+    }
+
+    /// Your own shell first (bash or fish keep claude on their own PATH), then zsh, each once.
+    @Test func loginShellsStartWithYours() {
+        #expect(ClaudeCLI.loginShells(user: "/opt/homebrew/bin/fish", account: "/bin/zsh") == ["/opt/homebrew/bin/fish", "/bin/zsh"])
+        #expect(ClaudeCLI.loginShells(user: nil, account: "/bin/bash") == ["/bin/bash", "/bin/zsh"])
+        #expect(ClaudeCLI.loginShells(user: "/bin/zsh", account: "/bin/zsh") == ["/bin/zsh"])
+        #expect(ClaudeCLI.loginShells(user: "fish", account: nil) == ["/bin/zsh"])
+    }
+
+    @Test func aMissingClaudeFailsUntilItIsFound() async {
+        let path = Mutex<String?>(nil)
+        let claude = LocatedClaude(find: { path.withLock { $0 } })
+        #expect(await claude.locate() == nil)
+        #expect(await claude.run(["--version"], cwd: nil, timeout: .seconds(1)).status == -1)
+        path.withLock { $0 = "/bin/echo" }
+        #expect(await claude.locate() == "/bin/echo")
+        let r = await claude.run(["hi"], cwd: nil, timeout: .seconds(5))
+        #expect(String(decoding: r.stdout, as: UTF8.self) == "hi\n")
+        path.withLock { $0 = nil }
+        #expect(await claude.locate() == "/bin/echo")   // kept once found
+    }
+
+    @Test func overlappingLooksShareOneSearch() async {
+        let searches = Mutex(0)
+        let claude = LocatedClaude(find: {
+            searches.withLock { $0 += 1 }
+            Thread.sleep(forTimeInterval: 0.2)
+            return "/bin/echo"
+        })
+        async let a = claude.locate()
+        async let b = claude.locate()
+        let (x, y) = await (a, b)
+        #expect(x == "/bin/echo" && y == "/bin/echo")
+        #expect(searches.withLock { $0 } == 1)
     }
 
     @Test func runsAProgramAndReadsItsOutput() async {

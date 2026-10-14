@@ -18,6 +18,8 @@ final class AppModel {
     /// Whether Claude Code has the Earshot plugin, and an install under way.
     var pluginStatus: PluginStatus = .checking
     var pluginWorking = false
+    /// What the plugin row says while `pluginWorking`.
+    var pluginWorkLine = "Installing through Claude Code\u{2026}"
     /// What the Activity window shows; set before opening it from the panel.
     var activityFilter: ActivityFilter = .all
     /// Goes up when a click on a banner asks for the Activity window (see EarshotApp).
@@ -27,16 +29,28 @@ final class AppModel {
     var speechState: SpeechOut.State = .idle
     var listenPhase: Listener.Phase = .off
     var listenBlock: ListenBlock?
+    /// Why a command can't be heard now (the hotkey, Talk, the orb), or nil.
+    var commandBlock: ListenBlock?
+    /// The app holding the mic while another app uses it, for "Not listening while Zoom uses the mic."
+    var micApp: String?
+    /// macOS hasn't asked about Earshot's notifications yet.
+    var notificationsUndecided = false
     var modelState: ListenModels.State = ListenModelFiles.present ? .ready : .missing
     var micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    /// You answered the mic prompt with no (or a profile blocks it): only System Settings can change it.
+    var micDenied = AppModel.micAnsweredNo
     var hotkeyAllowed = HotkeyTap.allowed
+    var hotkeyDenied = HotkeyTap.denied
     /// Another app has secure keyboard entry on, so the hotkey is refused.
     var secureInput = IsSecureEventInputEnabled()
     var wakeLoadFailed = false
     var mutedUntil: Date?
     var config = EarshotConfig.load()
     var startError: String?
-    var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// On, or waiting for your OK in System Settings, Login Items.
+    var launchAtLogin = [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+    var launchAtLoginNeedsApproval = SMAppService.mainApp.status == .requiresApproval
+    var launchAtLoginError: String?
 
     @ObservationIgnored let updater = Updater()
     @ObservationIgnored private var core: EarshotCore?
@@ -68,7 +82,7 @@ final class AppModel {
     @ObservationIgnored private var wakeUnloadTimer: Task<Void, Never>?
     @ObservationIgnored private var wakeUnloading: Task<Void, Never>?
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
-    /// The closed chime for a hold refused under secure input, once it is a real hold.
+    /// The answer to a refused hold (closed chime or mic prompt), once it is a real hold.
     @ObservationIgnored private var refusedHold: Task<Void, Never>?
     @ObservationIgnored private var bannerPoster: BannerPoster?
 
@@ -105,11 +119,20 @@ final class AppModel {
         mic = live.mic
         speakLevel = live.speakLevel
         readMute()
+        // The terminal (/earshot mute) can change the mute file at any time.
+        Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self else { return }
+                self.readMute()
+            }
+        }
         let poster = BannerPoster { [weak self] in self?.openActivity() }
         bannerPoster = poster
         Task {
             await live.core.banners.connect(show: { await poster.show($0) }, remove: { poster.remove($0) })
             notificationsDenied = await BannerPoster.denied()
+            notificationsUndecided = await BannerPoster.undecided()
         }
         // Locked or asleep is away; coming back after 10 minutes or more may say a recap.
         Task {
@@ -139,9 +162,18 @@ final class AppModel {
         Task {
             let stack = await ListenStack.live(core: live.core, history: history) { box.value }
             self.stack = stack
-            pluginLink = PluginLink(runner: stack.claudePath.map { ClaudeCLI(path: $0) })
+            // Claude Code may be installed after launch: each check looks for it until it is found.
+            let claude = stack.claude
+            pluginLink = PluginLink(find: { await claude.locate() == nil ? nil : claude })
             await checkPlugin(force: true)
-            Task { for await s in await stack.models.changes() { modelState = s; await listeningChanged() } }
+            Task {
+                for await s in await stack.models.changes() {
+                    let shown = modelState.showing(s)
+                    guard shown != modelState else { continue }
+                    modelState = shown
+                    await listeningChanged()
+                }
+            }
             Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
             // A session opened while the plugin is silent arms the wake word within a minute.
@@ -154,6 +186,7 @@ final class AppModel {
             Task {
                 for await busy in live.mic.changes() {
                     micInUse = busy
+                    micApp = busy ? micAppName() : nil
                     await stack.listener.setMicBusy(busy)
                     await listeningChanged()
                 }
@@ -204,13 +237,30 @@ final class AppModel {
     func setLaunchAtLogin(_ on: Bool) {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {}
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+            launchAtLoginError = nil
+        } catch {
+            // register() can throw yet leave the item waiting for approval; the status below says which.
+            launchAtLoginError = "Couldn't change it: \(error.localizedDescription)"
+        }
+        readLaunchAtLogin()
     }
 
-    func playTestLine(_ text: String = "This is how Earshot sounds.") {
+    /// Re-reads the login item, which you can approve or remove in System Settings.
+    private func readLaunchAtLogin() {
+        let status = SMAppService.mainApp.status
+        let on = status == .enabled || status == .requiresApproval
+        if on != launchAtLogin { launchAtLogin = on }
+        let waiting = status == .requiresApproval
+        if waiting != launchAtLoginNeedsApproval { launchAtLoginNeedsApproval = waiting }
+        if waiting, launchAtLoginError != nil { launchAtLoginError = nil }
+    }
+
+    func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
+
+    /// A line that is not saved in the history. `voice` says it in that Kokoro voice (a preview).
+    func playTestLine(_ text: String = "This is how Earshot sounds.", voice: String? = nil) {
         guard let core else { return }
-        let line = SpokenLine(text: text, kind: .roll, session: "")
+        let line = SpokenLine(text: text, kind: .roll, session: "", voice: voice)
         unrecorded.insert(line.id)
         Task { await core.speech.enqueue(line) }
     }
@@ -233,7 +283,18 @@ final class AppModel {
 
     /// Re-reads whether notifications are allowed, which changes in System Settings.
     func refreshNotifications() {
-        Task { notificationsDenied = await BannerPoster.denied() }
+        Task {
+            notificationsDenied = await BannerPoster.denied()
+            notificationsUndecided = await BannerPoster.undecided()
+        }
+    }
+
+    /// Asks for notifications now (onboarding), rather than the first time a
+    /// banner is needed, which is often mid-call.
+    func requestNotifications() async {
+        await BannerPoster.ask()
+        notificationsDenied = await BannerPoster.denied()
+        notificationsUndecided = await BannerPoster.undecided()
     }
 
     /// A line Earshot started saying. Replies to what you said are saved with
@@ -305,7 +366,9 @@ final class AppModel {
         }
         // The load took a while: arm from the state now, not the state before it.
         let now = listenInputs(configBox.value)
-        await stack.listener.setBlocked(ListenPolicy.commandBlock(now) != nil)
+        let blocked = ListenPolicy.commandBlock(now)
+        if blocked != commandBlock { commandBlock = blocked }
+        await stack.listener.setBlocked(blocked != nil)
         let fresh = ListenPolicy.wakeBlock(now)
         listenBlock = fresh
         await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
@@ -371,17 +434,15 @@ final class AppModel {
             i.micAllowed = micAllowed; i.modelsReady = modelState == .ready; i.micInUse = micInUse
             i.locked = watch.state.locked; i.asleep = watch.state.asleep
             i.fullScreenSilent = configBox.value.fullScreen == .silent && fullScreenNow
-            guard ListenPolicy.commandBlock(i) == nil else { return }
+            if let block = ListenPolicy.commandBlock(i) {
+                // Refused, but not silently: the closed chime, or the mic prompt the first time.
+                refuseHold(askForMic: block == .micPermission && Self.micUnasked)
+                return
+            }
             // Secure input may hide key presses from the tap, so a chord could look like a hold.
-            // Refused, but not silently: a hold past the minimum gets the closed chime.
             if IsSecureEventInputEnabled() {
                 secureInput = true
-                refusedHold?.cancel()
-                refusedHold = Task { [stack] in
-                    try? await Task.sleep(for: .milliseconds(200))
-                    guard !Task.isCancelled else { return }
-                    await stack?.play(.closed)
-                }
+                refuseHold(askForMic: false)
                 return
             }
             Task { await listener.hotkeyDown() }
@@ -394,13 +455,40 @@ final class AppModel {
         }
     }
 
+    /// A hotkey press Earshot can't take. Only a real hold gets an answer, after the
+    /// minimum hold, since a quick tap or a chord (Option with a letter) is not a command.
+    private func refuseHold(askForMic: Bool) {
+        refusedHold?.cancel()
+        refusedHold = Task { [weak self, stack] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            if askForMic { await self?.requestMic() } else { await stack?.play(.closed) }
+        }
+    }
+
+    /// The name of the app capturing from the mic, for the "not listening" line.
+    private func micAppName() -> String? {
+        guard let id = mic?.appsUsingMic().first(where: { $0.counts && !$0.bundleID.isEmpty })?.bundleID else { return nil }
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.localizedName { return app }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    /// Why Earshot isn't listening, naming the app that holds the mic when it can.
+    func blockLine(_ b: ListenBlock) -> String { ListenPolicy.menuLine(b, micApp: micApp) }
+
     /// Clicking the orb: one command, as after "Hey Earshot". Refused like the
-    /// hotkey when Earshot can't listen now; the closed chime says so.
+    /// hotkey when Earshot can't listen now; the closed chime says so, and the
+    /// first time without the mic, macOS asks for it.
     func tapToTalk() {
         guard let stack else { return }
         let i = listenInputs(configBox.value)
-        guard ListenPolicy.commandBlock(i) == nil else {
-            Task { await stack.play(.closed) }
+        if let block = ListenPolicy.commandBlock(i) {
+            if block == .micPermission, Self.micUnasked {
+                Task { await requestMic() }
+            } else {
+                Task { await stack.play(.closed) }
+            }
             return
         }
         Task { await stack.listener.tapToTalk() }
@@ -408,18 +496,40 @@ final class AppModel {
 
     // MARK: Claude Code plugin
 
-    /// Asks Claude Code again, at most once a minute unless forced.
+    /// Asks Claude Code again, at most once a minute unless forced. While
+    /// `claude` is not found, each check looks for it again.
     func checkPlugin(force: Bool = false) async {
         guard let pluginLink, !pluginWorking else { return }
         if !force, let last = lastPluginCheck, Date().timeIntervalSince(last) < 60 { return }
         lastPluginCheck = Date()
+        let hadClaude = stack?.claudePath != nil
         pluginStatus = await pluginLink.check()
+        if !hadClaude, stack?.claudePath != nil { await listeningChanged() }   // sessions can be listed now
     }
 
-    /// Installs, turns on, or updates the plugin, whichever it needs.
-    func connectPlugin() {
+    /// The plugin row's button: look again for Claude Code or its plugin list,
+    /// or install, turn on, or update the plugin, whichever it needs.
+    func fixPlugin() {
+        if pluginStatus.actionRechecks { recheckPlugin() } else { connectPlugin() }
+    }
+
+    private func recheckPlugin() {
         guard let pluginLink, !pluginWorking else { return }
         pluginWorking = true
+        pluginWorkLine = "Checking Claude Code\u{2026}"
+        Task {
+            let hadClaude = stack?.claudePath != nil
+            pluginStatus = await pluginLink.check()
+            lastPluginCheck = Date()
+            pluginWorking = false
+            if !hadClaude, stack?.claudePath != nil { await listeningChanged() }
+        }
+    }
+
+    private func connectPlugin() {
+        guard let pluginLink, !pluginWorking else { return }
+        pluginWorking = true
+        pluginWorkLine = "Installing through Claude Code\u{2026}"
         Task {
             pluginStatus = await pluginLink.connect()
             lastPluginCheck = Date()
@@ -427,27 +537,63 @@ final class AppModel {
         }
     }
 
+    /// Asks for the mic the first time. Once you answered, macOS shows nothing
+    /// again, so this opens the Microphone pane of System Settings instead.
     func requestMic() async {
-        _ = await AVCaptureDevice.requestAccess(for: .audio)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined: _ = await AVCaptureDevice.requestAccess(for: .audio)
+        case .authorized: break
+        default: Self.openPrivacyPane("Privacy_Microphone")
+        }
+        micDenied = Self.micAnsweredNo
         await listeningChanged()
     }
 
+    /// The same for Input Monitoring: the prompt once, then System Settings.
     func requestHotkeyAccess() {
-        HotkeyTap.requestAccess()
+        if HotkeyTap.denied {
+            Self.openPrivacyPane("Privacy_ListenEvent")
+        } else {
+            HotkeyTap.requestAccess()
+        }
         hotkeyAllowed = hotkeyTap?.start() ?? false
+        hotkeyDenied = HotkeyTap.denied
+    }
+
+    /// What a permission button says: macOS asks only once, so after that it opens System Settings.
+    static func permissionAction(denied: Bool, ask: String = "Allow\u{2026}") -> String {
+        denied ? "Open System Settings" : ask
+    }
+
+    private static var micUnasked: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined }
+
+    private static var micAnsweredNo: Bool {
+        let s = AVCaptureDevice.authorizationStatus(for: .audio)
+        return s == .denied || s == .restricted
+    }
+
+    private static func openPrivacyPane(_ anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Re-reads the mic and Input Monitoring permissions, which change in System
     /// Settings, and whether another app has secure keyboard entry on.
     func refreshPermissions() {
+        readLaunchAtLogin()
+        readMute()
         let secure = IsSecureEventInputEnabled()
         if secure != secureInput { secureInput = secure }
         var changed = false
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         if mic != micAllowed { micAllowed = mic; changed = true }
+        let micNo = Self.micAnsweredNo
+        if micNo != micDenied { micDenied = micNo }
         var hot = HotkeyTap.allowed
         if hot { hot = hotkeyTap?.start() ?? false }
         if hot != hotkeyAllowed { hotkeyAllowed = hot; changed = true }
+        let hotNo = !hot && HotkeyTap.denied
+        if hotNo != hotkeyDenied { hotkeyDenied = hotNo }
         if changed { Task { await listeningChanged() } }
     }
 
@@ -472,10 +618,10 @@ final class AppModel {
     // MARK: Mute
 
     func mute(for interval: TimeInterval) {
-        let until = Date().addingTimeInterval(interval)
+        let text = MuteFile.text(until: Date().addingTimeInterval(interval))
         try? FileManager.default.createDirectory(at: .earshotDir, withIntermediateDirectories: true)
-        try? "\(Int(until.timeIntervalSince1970))\n".write(to: Self.muteFile, atomically: true, encoding: .utf8)
-        setMuted(until)
+        try? text.write(to: Self.muteFile, atomically: true, encoding: .utf8)
+        setMuted(MuteFile.until(text))
     }
 
     /// Until you unmute: an empty mute file, which the plugin reads the same way.
@@ -499,26 +645,24 @@ final class AppModel {
     /// The mute file says muted now, read the way the plugin reads it, so a
     /// mute set from the terminal counts too.
     static func muteActive() -> Bool {
-        guard let text = try? String(contentsOf: muteFile, encoding: .utf8) else { return false }
-        let digits = text.filter { $0.isNumber }
-        if digits.isEmpty { return true }
-        return Date(timeIntervalSince1970: TimeInterval(digits) ?? 0) > Date()
+        MuteFile.until(try? String(contentsOf: muteFile, encoding: .utf8)) != nil
     }
 
+    /// Shows what the mute file says now. A mute that ran out is left in place:
+    /// the plugin reads it as not muted too, and removing it could remove a newer one.
     private func readMute() {
-        guard let text = try? String(contentsOf: Self.muteFile, encoding: .utf8) else { return }
-        let digits = text.filter { $0.isNumber }
-        if digits.isEmpty { mutedUntil = .distantFuture; return }
-        let until = Date(timeIntervalSince1970: TimeInterval(digits) ?? 0)
-        if until > Date() { setMuted(until) } else { unmute() }
+        let until = MuteFile.until(try? String(contentsOf: Self.muteFile, encoding: .utf8))
+        if until != mutedUntil { setMuted(until) }
     }
 
     private func setMuted(_ until: Date?) {
         mutedUntil = until
         muteTimer?.invalidate()
+        muteTimer = nil
         guard let until, until != .distantFuture else { return }
-        muteTimer = Timer.scheduledTimer(withTimeInterval: until.timeIntervalSinceNow, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.unmute() }
+        // At the end, the file is read again: a mute set meanwhile (from the terminal) stays.
+        muteTimer = Timer.scheduledTimer(withTimeInterval: max(until.timeIntervalSinceNow, 0) + 0.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readMute() }
         }
     }
 
@@ -541,7 +685,7 @@ final class AppModel {
         Kokoro models: \(KokoroEngine.modelsPresent ? "present" : "missing")
         Sessions: \(sessions.count)
         Mic in use by: \(micApps.isEmpty ? "nothing" : micApps.joined(separator: ", "))
-        Listening: \(listenPhase), \(listenBlock.map(ListenPolicy.menuLine) ?? "wake word armed")
+        Listening: \(listenPhase), \(listenBlock.map { ListenPolicy.menuLine($0) } ?? "wake word armed")
         Wake word: \(c.wakeWord ? "on" : "off"), sensitivity \(c.wakeSensitivity), battery rule \(c.wakeOnBattery.rawValue)
         Hotkey: \(c.hotkey.rawValue), Input Monitoring \(hotkeyAllowed ? "allowed" : "not allowed")
         Mic permission: \(micAllowed ? "allowed" : "not allowed")

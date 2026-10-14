@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import EarshotKit
 
@@ -30,7 +31,7 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
         #expect(PluginLink.status(fromList: old) == .outdated(version: "0.9.2"))
         let other = try! JSONSerialization.data(withJSONObject: [["id": "superpowers@x", "version": "6", "enabled": true]])
         #expect(PluginLink.status(fromList: other) == .notInstalled)
-        #expect(PluginLink.status(fromList: Data("nope".utf8)) == .failed("Couldn't read Claude Code's plugin list."))
+        #expect(PluginLink.status(fromList: Data("nope".utf8)) == .checkFailed("Couldn't read Claude Code's plugin list."))
     }
 
     @Test func versionsCompareByNumber() {
@@ -74,5 +75,31 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
 
     @Test func noClaudeMeansNoClaude() async {
         #expect(await PluginLink(runner: nil).check() == .noClaude)
+        #expect(PluginStatus.noClaude.action == "Check Again")
+        #expect(PluginStatus.noClaude.actionRechecks)
+    }
+
+    /// Claude Code installed after Earshot opened is found at the next check.
+    @Test func claudeIsLookedForAgainUntilFound() async {
+        let r = PluginRunner(["plugin list --json": listJSON([])])
+        let found = Mutex(false)
+        let link = PluginLink(find: { found.withLock { $0 } ? r : nil })
+        #expect(await link.check() == .noClaude)
+        found.withLock { $0 = true }
+        #expect(await link.check() == .notInstalled)
+    }
+
+    /// Try Again after a failed `plugin list` asks again; it never installs on a guess.
+    @Test func aFailedCheckInstallsNothing() async {
+        let r = PluginRunner(["plugin list --json": RunResult(status: 1)])
+        let status = await PluginLink(runner: r).connect()
+        #expect(status == .checkFailed("Couldn't ask Claude Code about its plugins."))
+        #expect(status.action == "Check Again" && status.actionRechecks)
+        #expect(await r.calls == ["plugin list --json"])
+    }
+
+    @Test func aFailedInstallIsTriedAgainNotRechecked() {
+        #expect(PluginStatus.failed("Couldn't install the plugin.").action == "Try Again")
+        #expect(!PluginStatus.failed("Couldn't install the plugin.").actionRechecks)
     }
 }

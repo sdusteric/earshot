@@ -186,7 +186,7 @@ enum BoundedRun {
 }
 
 /// Runs the claude command line. Apps opened from the Dock get a short PATH,
-/// so the binary is found once, at launch.
+/// so the binary is looked for in the usual places and then in a login shell.
 public final class ClaudeCLI: ClaudeRunner {
     public let path: String
     private let cachedVersion = Mutex<String?>(nil)
@@ -194,8 +194,9 @@ public final class ClaudeCLI: ClaudeRunner {
     public init(path: String) { self.path = path }
 
     public static func locate() -> String? {
-        locate(home: NSHomeDirectory(), isExecutable: { FileManager.default.isExecutableFile(atPath: $0) },
-               loginShell: loginShellLookup)
+        let shells = loginShells(user: ProcessInfo.processInfo.environment["SHELL"], account: accountShell())
+        return locate(home: NSHomeDirectory(), isExecutable: { FileManager.default.isExecutableFile(atPath: $0) },
+                      loginShell: { loginShellLookup(shells: shells) })
     }
 
     public static func locate(home: String, isExecutable: (String) -> Bool, loginShell: () -> String?) -> String? {
@@ -206,12 +207,35 @@ public final class ClaudeCLI: ClaudeRunner {
         return nil
     }
 
-    /// Asks the login shell once, with a 3 s limit: it has the PATH the user set up.
-    static func loginShellLookup() -> String? {
+    /// The shells to ask, in order: yours ($SHELL, else the account's), then zsh.
+    /// bash and fish users keep claude on a PATH that only their own shell sets up.
+    static func loginShells(user: String?, account: String?) -> [String] {
+        var list: [String] = []
+        for s in [user, account, "/bin/zsh"] {
+            guard let s, s.hasPrefix("/"), !list.contains(s) else { continue }
+            list.append(s)
+        }
+        return list
+    }
+
+    private static func accountShell() -> String? {
+        guard let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell else { return nil }
+        return String(cString: shell)
+    }
+
+    /// Asks each login shell in turn, each with a 3 s limit: it has the PATH the user set up.
+    static func loginShellLookup(shells: [String]) -> String? {
+        for shell in shells where FileManager.default.isExecutableFile(atPath: shell) {
+            if let p = ask(shell), p.hasPrefix("/") { return p }
+        }
+        return nil
+    }
+
+    private static func ask(_ shell: String) -> String? {
         let box = Mutex<RunResult?>(nil)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            let r = await BoundedRun.run(executable: "/bin/zsh", args: ["-lic", "command -v claude"], cwd: nil,
+            let r = await BoundedRun.run(executable: shell, args: ["-lic", "command -v claude"], cwd: nil,
                                          environment: nil, timeout: 3)
             box.withLock { $0 = r }
             done.signal()
@@ -238,5 +262,52 @@ public final class ClaudeCLI: ClaudeRunner {
         let v = r.status == 0 ? String(decoding: r.stdout, as: UTF8.self).split(separator: " ").first.map(String.init) : nil
         if let v { cachedVersion.withLock { $0 = v } }
         return v
+    }
+}
+
+/// The `claude` command, which may be installed after Earshot opens. Until it
+/// is found, every run fails at once; `locate()` looks for it again.
+public final class LocatedClaude: ClaudeRunner {
+    private struct State {
+        var cli: ClaudeCLI?
+        var search: Task<String?, Never>?
+    }
+
+    private let find: @Sendable () -> String?
+    private let state = Mutex(State())
+
+    /// `find` blocks (it may ask login shells), so it runs off the caller's thread.
+    public init(find: @escaping @Sendable () -> String? = { ClaudeCLI.locate() }) { self.find = find }
+
+    public var path: String? { state.withLock { $0.cli?.path } }
+
+    /// The path, looking for it when it is not known yet. Calls that overlap
+    /// share one search. Once found, it is kept.
+    @discardableResult
+    public func locate() async -> String? {
+        let search: Task<String?, Never>? = state.withLock { s in
+            if s.cli != nil { return nil }
+            if let t = s.search { return t }
+            let find = self.find
+            let t = Task.detached { find() }
+            s.search = t
+            return t
+        }
+        guard let search else { return path }
+        let found = await search.value
+        return state.withLock { s in
+            if s.search == search { s.search = nil }
+            if s.cli == nil, let found { s.cli = ClaudeCLI(path: found) }
+            return s.cli?.path
+        }
+    }
+
+    public func run(_ args: [String], cwd: String?, timeout: Duration) async -> RunResult {
+        guard let cli = state.withLock({ $0.cli }) else { return RunResult(status: -1, stderr: "claude not found") }
+        return await cli.run(args, cwd: cwd, timeout: timeout)
+    }
+
+    public func version() async -> String? {
+        await state.withLock({ $0.cli })?.version()
     }
 }

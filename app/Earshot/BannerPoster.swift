@@ -31,6 +31,16 @@ final class BannerPoster: NSObject, UNUserNotificationCenterDelegate, Sendable {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.id(session)])
     }
 
+    /// True until macOS has asked about Earshot's notifications.
+    static func undecided() async -> Bool {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .notDetermined
+    }
+
+    /// Shows macOS's notification prompt, once.
+    static func ask() async {
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
+    }
+
     /// True when you turned Earshot's notifications off in System Settings.
     static func denied() async -> Bool {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .denied

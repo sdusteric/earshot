@@ -1,6 +1,7 @@
 import CoreGraphics
 import EarshotKit
 import Foundation
+import IOKit.hid
 
 /// Watches modifier and key events for the hotkey. Listen only: it never
 /// changes or blocks an event. Needs Input Monitoring permission.
@@ -19,6 +20,10 @@ import Foundation
     }
 
     static var allowed: Bool { CGPreflightListenEventAccess() }
+
+    /// You already answered macOS's Input Monitoring prompt and Earshot is not
+    /// allowed: asking again shows nothing, so System Settings is the way.
+    static var denied: Bool { IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeDenied }
 
     /// Shows macOS's Input Monitoring prompt (once) and adds Earshot to the list.
     static func requestAccess() { _ = CGRequestListenEventAccess() }

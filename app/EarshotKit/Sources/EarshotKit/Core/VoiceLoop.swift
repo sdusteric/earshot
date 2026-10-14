@@ -32,6 +32,8 @@ public actor VoiceLoop: ListenObserver {
     private let speech: any LineSpeaker
     private let chimes: any Chimes
     private let events: EventLog
+    /// Whether a spoken answer could be heard now. Clicked answers never wait on it.
+    private let canListen: @Sendable () -> Bool
     /// What you said and what Earshot answered. Never the event log.
     private let history: HistoryStore?
     /// The history entry for the utterance being answered, for its reply.
@@ -57,10 +59,10 @@ public actor VoiceLoop: ListenObserver {
 
     public init(followUps: any FollowUpListening, parser: CommandParser, dispatcher: Dispatcher, directory: SessionDirectory,
                 approvals: ApprovalBook, speech: any LineSpeaker, chimes: any Chimes, events: EventLog,
-                history: HistoryStore? = nil) {
+                history: HistoryStore? = nil, canListen: @escaping @Sendable () -> Bool = { true }) {
         self.followUps = followUps; self.parser = parser; self.dispatcher = dispatcher; self.directory = directory
         self.approvals = approvals; self.speech = speech; self.chimes = chimes; self.events = events
-        self.history = history
+        self.history = history; self.canListen = canListen
     }
 
     public func start(utterances: AsyncStream<Listener.Utterance>) async {
@@ -243,8 +245,10 @@ public actor VoiceLoop: ListenObserver {
         case .started(let line):
             // A window is due after this line: keep the queue from moving on until it is open.
             // Lines with a question were marked when enqueued; a need line is decided here,
-            // before anything else is awaited.
-            if line.kind == .need, !line.session.isEmpty, let a = await approvals.latest(session: line.session) {
+            // before anything else is awaited. No window while Earshot can't listen; the
+            // prompt still takes a click.
+            if line.kind == .need, !line.session.isEmpty, canListen(),
+               let a = await approvals.latest(session: line.session) {
                 needPrompt[line.id] = a.id
                 await speech.holdAfter(line.id)
             }

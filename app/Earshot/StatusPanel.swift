@@ -98,16 +98,17 @@ struct StatusPanel: View {
 
     @ViewBuilder private var notices: some View {
         let needsHotkey = model.config.hotkey != .off && !model.hotkeyAllowed
+        let needsMic = !model.micAllowed && (model.config.hotkey != .off || model.config.wakeWord)
         let needsPlugin = model.pluginStatus.action != nil || model.pluginWorking
         let needsModels: Bool = switch model.modelState {
         case .missing, .failed: true
         default: false
         }
-        if needsPlugin || needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
+        if needsPlugin || needsMic || needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
             VStack(alignment: .leading, spacing: 8) {
                 if needsPlugin {
-                    Notice(text: model.pluginWorking ? "Connecting to Claude Code\u{2026}" : model.pluginStatus.line,
-                           action: model.pluginWorking ? nil : model.pluginStatus.action) { model.connectPlugin() }
+                    Notice(text: model.pluginWorking ? model.pluginWorkLine : model.pluginStatus.line,
+                           action: model.pluginWorking ? nil : model.pluginStatus.action) { model.fixPlugin() }
                 }
                 if needsModels {
                     if ListenModelFiles.partial {
@@ -118,8 +119,19 @@ struct StatusPanel: View {
                                action: model.modelState == .failed ? "Try Again" : "Download") { model.downloadModels() }
                     }
                 }
+                if needsMic {
+                    Notice(text: model.micDenied
+                           ? "Earshot can't hear you. Turn on the mic for Earshot in System Settings, Privacy & Security, Microphone."
+                           : "Allow the mic so Earshot can hear you.",
+                           action: AppModel.permissionAction(denied: model.micDenied)) {
+                        Task { await model.requestMic() }
+                    }
+                }
                 if needsHotkey {
-                    Notice(text: "Allow Input Monitoring so Earshot can see the hotkey.", action: "Allow\u{2026}") {
+                    Notice(text: model.hotkeyDenied
+                           ? "Turn on Earshot in System Settings, Privacy & Security, Input Monitoring, so it can see the hotkey."
+                           : "Allow Input Monitoring so Earshot can see the hotkey.",
+                           action: AppModel.permissionAction(denied: model.hotkeyDenied)) {
                         model.requestHotkeyAccess()
                     }
                 }
@@ -135,17 +147,21 @@ struct StatusPanel: View {
     // MARK: Sessions
 
     private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SectionTitle(title: "Sessions", trailing: model.sessions.isEmpty ? nil : "\(model.sessions.count)")
-            if model.sessions.isEmpty {
-                Text("No Claude Code sessions. Start one and Earshot tells you when it needs you or finishes.")
+        // The plugin's sessions, plus the ones only `claude agents` lists (all of them without the plugin).
+        let sessions = SessionInfo.panelList(known: model.sessions, live: model.liveSessions)
+        return VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "Sessions", trailing: sessions.isEmpty ? nil : "\(sessions.count)")
+            if sessions.isEmpty {
+                Text(model.pluginStatus.isConnected || model.pluginStatus == .checking
+                     ? "No Claude Code sessions. Start one and Earshot tells you when it needs you or finishes."
+                     : "No Claude Code sessions found. Connect the Earshot plugin so Earshot can tell you when a session needs you or finishes.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
             } else {
-                ForEach(model.sessions) { s in
+                ForEach(sessions) { s in
                     SessionRow(session: s, last: model.lastLine(for: s.id)) {
                         show(.session(s.id))
                     } replay: { entry in
@@ -428,7 +444,7 @@ extension AppModel {
         }
         if let b = listenBlock {
             if b == .wakeOff, let key = hotkeyName { return "Hold \(key) to talk" }
-            return ListenPolicy.menuLine(b)
+            return blockLine(b)
         }
         return "Listening for \u{201C}Hey Earshot\u{201D}"
     }

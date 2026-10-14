@@ -7,7 +7,10 @@ public struct ListenStack: Sendable {
     public let loop: VoiceLoop
     public let directory: SessionDirectory
     public let models: ListenModels
-    public let claudePath: String?
+    /// The `claude` command. The first plugin check looks for it, and later checks
+    /// look again until it is found (Claude Code may be installed after launch).
+    public let claude: LocatedClaude
+    public var claudePath: String? { claude.path }
     let gate: SileroGate
     let spotter: CtcWakeSpotter
     let chimes: SystemChimes
@@ -19,8 +22,7 @@ public struct ListenStack: Sendable {
         })
         let listener = Listener(input: MicInput(deviceUID: { config().inputDevice }), gate: gate, spotter: spotter,
                                 transcriber: transcriber, chimes: chimes)
-        let claudePath = await Task.detached { ClaudeCLI.locate() }.value
-        let runner = ClaudeCLI(path: claudePath ?? "/nonexistent/claude")
+        let runner = LocatedClaude()
         let directory = SessionDirectory(runner: runner, store: core.sessions, labeler: Labeler(model: FoundationLabelModel()))
         let speech = core.speech
         let dispatcher = Dispatcher(directory: directory, store: core.sessions, transport: CCSocketTransport(), runner: runner,
@@ -32,11 +34,11 @@ public struct ListenStack: Sendable {
                                     })
         let loop = VoiceLoop(followUps: listener, parser: CommandParser(model: FoundationCommandModel()), dispatcher: dispatcher,
                              directory: directory, approvals: core.approvals, speech: speech, chimes: chimes, events: core.events,
-                             history: history)
+                             history: history, canListen: { [availability = core.availability] in availability.canListen })
         await listener.setObserver(loop)
         await loop.start(utterances: listener.utterances)
         return ListenStack(listener: listener, loop: loop, directory: directory, models: ListenModels(),
-                           claudePath: claudePath, gate: gate, spotter: spotter, chimes: chimes)
+                           claude: runner, gate: gate, spotter: spotter, chimes: chimes)
     }
 
     /// The VAD and the spotter, which stay loaded while the wake word may listen.

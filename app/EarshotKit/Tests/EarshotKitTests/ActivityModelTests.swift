@@ -17,6 +17,29 @@ import Testing
     func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
     func close(_ a: CGPoint, _ b: CGPoint) -> Bool { abs(a.x - b.x) < 1e-6 && abs(a.y - b.y) < 1e-6 }
 
+    // MARK: Panel sessions
+
+    func live(_ id: String, busy: Bool = false, waiting: Bool = false) -> LiveSession {
+        LiveSession(id: id, pid: 1, kind: "interactive", cwd: "/p/\(id)", project: id, title: "", label: "", name: id,
+                    busy: busy, waiting: waiting, state: nil, detail: nil, since: nil)
+    }
+
+    /// Without the plugin the panel still lists what `claude agents` sees.
+    @Test func thePanelListsSessionsOnlyClaudeCodeKnows() {
+        let list = SessionInfo.panelList(known: [], live: [live("idle"), live("busy", busy: true), live("asks", waiting: true)],
+                                         now: now)
+        #expect(list.map(\.id) == ["asks", "busy", "idle"])
+        #expect(list.map(\.state) == [.needs, .working, .open])
+        #expect(list.allSatisfy { $0.updated == now })
+    }
+
+    @Test func thePluginsSessionsComeFirstAndAreNotListedTwice() {
+        let known = SessionInfo(id: "blog", name: "blog", state: .done, detail: nil, updated: now, project: "blog", title: nil)
+        let list = SessionInfo.panelList(known: [known], live: [live("blog", busy: true), live("wedding", waiting: true)], now: now)
+        #expect(list.map(\.id) == ["blog", "wedding"])
+        #expect(list.first?.state == .done)
+    }
+
     // MARK: Geometry
 
     @Test func nowIsAtTheTopAndThePastRunsCounterclockwise() {

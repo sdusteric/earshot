@@ -187,7 +187,7 @@ private struct VoiceTab: View {
                     Picker("Voice", selection: Binding(get: { model.config.kokoroVoice },
                                                        set: { v in
                                                            model.save { $0.set("EARSHOT_KOKORO_VOICE", v) }
-                                                           model.playTestLine("Hi, I'm \(Self.name(v)). This is how I'll sound.")
+                                                           model.playTestLine("Hi, I'm \(Self.name(v)). This is how I'll sound.", voice: v)
                                                        })) {
                         ForEach(Self.kokoroVoices, id: \.self) { v in
                             HStack {
@@ -325,7 +325,7 @@ private struct ListeningTab: View {
                     Text("Off").tag(EarshotConfig.Hotkey.off)
                 }
                 if model.config.hotkey != .off, !model.hotkeyAllowed {
-                    PermissionRow(title: "Input Monitoring", allowed: false,
+                    PermissionRow(title: "Input Monitoring", allowed: false, denied: model.hotkeyDenied,
                                   why: "So Earshot can see the hotkey. It watches only that key.") { model.requestHotkeyAccess() }
                 }
                 if model.config.hotkey != .off, model.secureInput {
@@ -361,7 +361,7 @@ private struct ListeningTab: View {
                 Text("Wake word")
             } footer: {
                 if model.config.wakeWord, let b = model.listenBlock {
-                    Footnote(ListenPolicy.menuLine(b))
+                    Footnote(model.blockLine(b))
                 } else if model.config.wakeWord, model.wakeLoadFailed {
                     Footnote("The wake word couldn't start. Earshot retries every minute.")
                 } else {
@@ -426,6 +426,8 @@ private struct ListeningTab: View {
 private struct PermissionRow: View {
     let title: String
     let allowed: Bool
+    /// Asked before and refused: the button opens System Settings.
+    let denied: Bool
     let why: String
     let request: () -> Void
 
@@ -436,7 +438,7 @@ private struct PermissionRow: View {
                     .labelStyle(.titleAndIcon)
                     .foregroundStyle(.secondary)
             } else {
-                Button("Allow\u{2026}", action: request)
+                Button(AppModel.permissionAction(denied: denied), action: request)
             }
         } label: {
             Text(title)
@@ -461,8 +463,7 @@ private struct GeneralTab: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Open Earshot when you log in",
-                       isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                LaunchAtLoginToggle()
             }
 
             Section {
@@ -475,9 +476,9 @@ private struct GeneralTab: View {
             .task { await model.checkPlugin() }
 
             Section {
-                PermissionRow(title: "Microphone", allowed: model.micAllowed,
+                PermissionRow(title: "Microphone", allowed: model.micAllowed, denied: model.micDenied,
                               why: "To hear the hotkey, the wake word, and yes or no.") { Task { await model.requestMic() } }
-                PermissionRow(title: "Input Monitoring", allowed: model.hotkeyAllowed,
+                PermissionRow(title: "Input Monitoring", allowed: model.hotkeyAllowed, denied: model.hotkeyDenied,
                               why: "To see the hold-to-talk key.") { model.requestHotkeyAccess() }
             } header: {
                 Text("Permissions")
@@ -509,7 +510,11 @@ private struct GeneralTab: View {
                 LabeledContent("Speech models") {
                     switch model.modelState {
                     case .ready: Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
-                    case .downloading(let p): ProgressView(value: p).frame(width: 140)
+                    case .downloading(let p):
+                        HStack(spacing: 8) {
+                            ProgressView(value: p).frame(width: 120)
+                            Text(model.modelState.percent ?? "").monospacedDigit().foregroundStyle(.secondary)
+                        }
                     case .missing:
                         Button(ListenModelFiles.partial ? "Finish Download" : "Download (about 1 GB)") { model.downloadModels() }
                     case .failed: Button("Try Again") { model.downloadModels() }
@@ -543,6 +548,29 @@ private struct GeneralTab: View {
     }
 }
 
+/// Open at login, with what macOS still needs when it holds the login item for your OK.
+/// Used in Settings and the welcome steps.
+struct LaunchAtLoginToggle: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Toggle("Open Earshot when you log in",
+               isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+        if model.launchAtLoginNeedsApproval {
+            HStack(alignment: .firstTextBaseline) {
+                Text("macOS needs your OK: allow Earshot in System Settings, General, Login Items.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Open System Settings") { model.openLoginItems() }
+            }
+        } else if let error = model.launchAtLoginError {
+            Text(error).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// The plugin's state, with the button that fixes it. Used in Settings and the welcome steps.
 struct PluginStatusRow: View {
     @Environment(AppModel.self) private var model
@@ -554,11 +582,11 @@ struct PluginStatusRow: View {
             } else if model.pluginStatus.isConnected {
                 Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
             } else if let action = model.pluginStatus.action {
-                Button(action) { model.connectPlugin() }
+                Button(action) { model.fixPlugin() }
             }
         } label: {
             Text("Earshot plugin")
-            Text(model.pluginWorking ? "Installing through Claude Code\u{2026}" : model.pluginStatus.line)
+            Text(model.pluginWorking ? model.pluginWorkLine : model.pluginStatus.line)
         }
     }
 }
