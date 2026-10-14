@@ -113,6 +113,14 @@ final class AppModel {
         mic = live.mic
         speakLevel = live.speakLevel
         readMute()
+        // The terminal (/earshot mute) can change the mute file at any time.
+        Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self else { return }
+                self.readMute()
+            }
+        }
         let poster = BannerPoster { [weak self] in self?.openActivity() }
         bannerPoster = poster
         Task {
@@ -533,6 +541,7 @@ final class AppModel {
     /// Settings, and whether another app has secure keyboard entry on.
     func refreshPermissions() {
         readLaunchAtLogin()
+        readMute()
         let secure = IsSecureEventInputEnabled()
         if secure != secureInput { secureInput = secure }
         var changed = false
@@ -569,10 +578,10 @@ final class AppModel {
     // MARK: Mute
 
     func mute(for interval: TimeInterval) {
-        let until = Date().addingTimeInterval(interval)
+        let text = MuteFile.text(until: Date().addingTimeInterval(interval))
         try? FileManager.default.createDirectory(at: .earshotDir, withIntermediateDirectories: true)
-        try? "\(Int(until.timeIntervalSince1970))\n".write(to: Self.muteFile, atomically: true, encoding: .utf8)
-        setMuted(until)
+        try? text.write(to: Self.muteFile, atomically: true, encoding: .utf8)
+        setMuted(MuteFile.until(text))
     }
 
     /// Until you unmute: an empty mute file, which the plugin reads the same way.
@@ -596,26 +605,24 @@ final class AppModel {
     /// The mute file says muted now, read the way the plugin reads it, so a
     /// mute set from the terminal counts too.
     static func muteActive() -> Bool {
-        guard let text = try? String(contentsOf: muteFile, encoding: .utf8) else { return false }
-        let digits = text.filter { $0.isNumber }
-        if digits.isEmpty { return true }
-        return Date(timeIntervalSince1970: TimeInterval(digits) ?? 0) > Date()
+        MuteFile.until(try? String(contentsOf: muteFile, encoding: .utf8)) != nil
     }
 
+    /// Shows what the mute file says now. A mute that ran out is left in place:
+    /// the plugin reads it as not muted too, and removing it could remove a newer one.
     private func readMute() {
-        guard let text = try? String(contentsOf: Self.muteFile, encoding: .utf8) else { return }
-        let digits = text.filter { $0.isNumber }
-        if digits.isEmpty { mutedUntil = .distantFuture; return }
-        let until = Date(timeIntervalSince1970: TimeInterval(digits) ?? 0)
-        if until > Date() { setMuted(until) } else { unmute() }
+        let until = MuteFile.until(try? String(contentsOf: Self.muteFile, encoding: .utf8))
+        if until != mutedUntil { setMuted(until) }
     }
 
     private func setMuted(_ until: Date?) {
         mutedUntil = until
         muteTimer?.invalidate()
+        muteTimer = nil
         guard let until, until != .distantFuture else { return }
-        muteTimer = Timer.scheduledTimer(withTimeInterval: until.timeIntervalSinceNow, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.unmute() }
+        // At the end, the file is read again: a mute set meanwhile (from the terminal) stays.
+        muteTimer = Timer.scheduledTimer(withTimeInterval: max(until.timeIntervalSinceNow, 0) + 0.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readMute() }
         }
     }
 
