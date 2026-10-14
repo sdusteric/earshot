@@ -1,21 +1,25 @@
 /// The last few seconds of mic audio, in memory only. Positions are absolute
 /// sample counts since the mic opened, so a segment can be cut out later.
+/// The buffer grows to its capacity as audio comes in, so an empty ring holds nothing.
 public struct SampleRing: Sendable {
     public let capacity: Int
-    private var buffer: [Float]
+    private var buffer: [Float] = []
     private var head = 0   // where the next sample goes
     public private(set) var total = 0
 
     public init(seconds: Double = 10, rate: Int = 16_000) {
-        capacity = max(1, Int(seconds * Double(rate)))
-        buffer = [Float](repeating: 0, count: capacity)
+        self.init(capacity: Int(seconds * Double(rate)))
+    }
+
+    public init(capacity: Int) {
+        self.capacity = max(1, capacity)
     }
 
     public var oldest: Int { max(0, total - capacity) }
 
     public mutating func append(_ s: [Float]) {
         for x in s.suffix(capacity) {
-            buffer[head] = x
+            if buffer.count < capacity { buffer.append(x) } else { buffer[head] = x }
             head = (head + 1) % capacity
         }
         total += s.count
@@ -27,6 +31,15 @@ public struct SampleRing: Sendable {
         guard lo < hi else { return [] }
         let startSlot = (head - (total - lo) + capacity * 2) % capacity
         return (0..<(hi - lo)).map { buffer[(startSlot + $0) % capacity] }
+    }
+
+    /// Overwrites everything before `position` with silence: a command's audio
+    /// is gone once it has been heard, not just once newer audio replaces it.
+    public mutating func erase(upTo position: Int) {
+        let lo = oldest, hi = min(position, total)
+        guard lo < hi else { return }
+        let startSlot = (head - (total - lo) + capacity * 2) % capacity
+        for i in 0..<(hi - lo) { buffer[(startSlot + i) % capacity] = 0 }
     }
 }
 

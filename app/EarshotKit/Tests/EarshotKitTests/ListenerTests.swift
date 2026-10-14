@@ -340,6 +340,47 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         #expect(await spotter.calls == 0)
     }
 
+    /// The ring holds the 15 s cap, not 10 s: a long prompt is heard whole.
+    @Test func aHotkeyCommandCanRunPastTenSeconds() async {
+        let st = ScriptTranscriber(fixed: "words")
+        let l = await make(transcriber: st)
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([Float](repeating: 1, count: 50))   // 12.8 s
+        #expect(await eventually { await l.capturedSamples == 50 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.tooLong == false)
+        #expect(await st.clips.first?.count == 50 * 4096)
+    }
+
+    /// The wake word keeps the mic open, but a command's audio does not stay in the ring once heard.
+    @Test func aCommandsAudioIsErasedOnceHeard() async {
+        let l = await make()
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([1, 1, 1])
+        #expect(await eventually { await l.capturedSamples == 3 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await input.isOpen)
+        #expect(await l.heldAudio.count == 3 * 4096)
+        #expect(await l.heldAudio.allSatisfy { $0 == 0 })
+    }
+
+    @Test func noAudioIsKeptOnceTheMicCloses() async {
+        let l = await make()
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        await input.push([1, 1, 1])
+        #expect(await eventually { await l.capturedSamples == 3 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await !input.isOpen })
+        #expect(await l.heldAudio.isEmpty)
+    }
+
     @Test func followUpTimesOutQuietly() async {
         let l = await make()
         await l.listenFollowUp(.reply)
@@ -494,7 +535,7 @@ func eventually(_ check: @escaping @Sendable () async -> Bool) async -> Bool {
         let l = await make(transcriber: t)
         await l.hotkeyDown()
         try? await Task.sleep(for: .milliseconds(60))
-        await input.push([Float](repeating: 1, count: 45))   // 11.5 s, the ring holds 10 s
+        await input.push([Float](repeating: 1, count: 60))   // 15.4 s, past the 15 s cap
         #expect(await eventually { await heard.items.count == 1 })
         let u = await heard.items.first
         #expect(u?.tooLong == true)

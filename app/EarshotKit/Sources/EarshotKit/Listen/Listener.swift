@@ -3,7 +3,7 @@ import os
 
 /// Hears one command at a time: after "Hey Earshot", while the hotkey is
 /// held, or in a short window after Earshot asked something. Audio lives
-/// only in the ring buffer.
+/// only in the ring buffer, and a command's audio is erased once it is heard.
 public actor Listener {
     public enum FollowUp: Sendable, Equatable {
         /// The answer to a permission prompt Earshot just announced.
@@ -101,7 +101,7 @@ public actor Listener {
         didSet { if phase != oldValue { phaseConts.values.forEach { $0.yield(phase) } } }
     }
 
-    private var ring = SampleRing()
+    private var ring: SampleRing
     private var chunker = Chunker()
     private var energy = EnergyGate()
     private var streamTask: Task<Void, Never>?
@@ -144,6 +144,7 @@ public actor Listener {
                 chimes: any Chimes, timing: Timing = Timing()) {
         self.input = input; self.gate = gate; self.spotter = spotter; self.transcriber = transcriber
         self.chimes = chimes; self.timing = timing
+        ring = Self.ring(timing)
         let (stream, cont) = AsyncStream<Utterance>.makeStream()
         utterances = stream
         utteranceCont = cont
@@ -151,6 +152,12 @@ public actor Listener {
 
     /// Samples received since the mic opened (tests wait on it).
     var capturedSamples: Int { ring.total }
+    /// The audio the ring still holds (tests check it was erased).
+    var heldAudio: [Float] { ring.samples(from: ring.oldest) }
+
+    /// Room for the longest command and the pre-roll before it, about 15 s
+    /// (1 MB). Empty until the mic delivers audio.
+    private static func ring(_ t: Timing) -> SampleRing { SampleRing(capacity: t.maxCommandSamples + t.preRollSamples) }
 
     public func setObserver(_ o: any ListenObserver) { observer = o }
     public func setSensitivity(_ s: Int) { sensitivity = s }
@@ -215,9 +222,10 @@ public actor Listener {
             capture = nil
             let end = ring.total
             lastCaptureEnd = end
+            let clip = takeClip(c, end: end)
             Task {
                 await self.dropSegment()
-                await self.finish(c, end: end, claimed: true)
+                await self.finish(c, end: end, claimed: true, clip: clip)
             }
         }
         hotkeyHeld = true
@@ -397,7 +405,7 @@ public actor Listener {
             let stream = try await input.start()
             _ = chunker.drain()
             // Nothing from before the mic closed: no pre-roll reaches it, and the last command's audio is gone.
-            ring = SampleRing()
+            ring = Self.ring(timing)
             lastCaptureEnd = 0
             segmentStart = nil
             spotted = false
@@ -460,6 +468,7 @@ public actor Listener {
     }
 
     /// A command can't be longer than what the ring still holds, less the pre-roll.
+    /// The ring is sized for Timing.maxCommandSamples, so this is that cap.
     private var maxCommand: Int { min(timing.maxCommandSamples, ring.capacity - timing.preRollSamples) }
 
     /// A capture ended without an end edge from the VAD (the length cap, or a
@@ -479,6 +488,9 @@ public actor Listener {
         streamTask = nil
         await input.stop()
         _ = chunker.drain()
+        // No audio is kept while the mic is closed.
+        ring = Self.ring(timing)
+        lastCaptureEnd = 0
         segmentStart = nil
         spotted = false
         await gate.reset()
@@ -557,16 +569,25 @@ public actor Listener {
 
     // MARK: - Ending a capture
 
+    /// The capture's audio, which is then erased from the ring: once heard, a
+    /// command is kept only as text.
+    private func takeClip(_ c: Capture, end: Int) -> [Float] {
+        let clip = ring.samples(from: c.start, to: end)
+        ring.erase(upTo: end)
+        return clip
+    }
+
     /// Stage 4: transcribes the clip and hands it on.
-    /// `claimed`: the capture was already taken off `capture` (a new press during the tail).
-    private func finish(_ c: Capture, end: Int, claimed: Bool = false) async {
+    /// `claimed`: the capture was already taken off `capture` (a new press during the tail),
+    /// and `clip` is its audio, taken then.
+    private func finish(_ c: Capture, end: Int, claimed: Bool = false, clip taken: [Float]? = nil) async {
         guard claimed || capture?.id == c.id else { return }
         if !claimed {
             capture = nil
             phase = .transcribing
         }
         lastCaptureEnd = max(lastCaptureEnd, end)
-        let clip = ring.samples(from: c.start, to: end)
+        let clip = taken ?? takeClip(c, end: end)
         var text = ""
         var plain: String?
         if clip.count >= timing.minClipSamples {
@@ -621,11 +642,12 @@ public actor Listener {
         guard capture?.id == c.id else { return }
         capture = nil
         lastCaptureEnd = ring.total
+        let head = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
+        ring.erase(upTo: ring.total)
         await dropSegment()
         var heard = true
         if c.trigger == .wake, !c.commandPhase {
             phase = .transcribing
-            let head = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
             var text = ""
             do { text = try await transcriber.transcribe(head, vocabulary: []) } catch {
                 log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
@@ -647,6 +669,7 @@ public actor Listener {
     private func drop(_ c: Capture) async {
         guard capture?.id == c.id else { return }
         capture = nil
+        ring.erase(upTo: ring.total)
         await observer?.captureEnded(heard: false)
     }
 
