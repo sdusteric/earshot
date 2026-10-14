@@ -9,19 +9,33 @@ import Foundation
 /// always asked about first (`confirmSend`). It never answers a permission
 /// prompt and never stops anything.
 public enum Tolerant {
+    /// How alike two words are, each pair worked out once per command: the
+    /// alignments below ask for the same pairs many times.
+    final class Memo {
+        private var sims: [String: Double] = [:]
+        func sim(_ a: String, _ b: String) -> Double {
+            let k = a + "|" + b
+            if let v = sims[k] { return v }
+            let v = SoundsLike.similarity(a, b)
+            sims[k] = v
+            return v
+        }
+    }
+
     /// `gated`: the mic sent exact zeros, then speech began at once, so its
     /// start was likely cut (see ClipLevel.gated). It allows a little more.
     public static func parse(_ text: String, known: [String], gated: Bool) -> Command? {
         let w = Grammar.Words(text).trimmingFillers()
         guard !w.isEmpty, w.count <= 14 else { return nil }
         let keys = w.keys.map(SoundsLike.letters)
-        if let c = template(keys, gated: gated) { return c }
+        let memo = Memo()
+        if let c = template(keys, gated: gated, memo) { return c }
         if keys.contains(where: { ["everyone", "everybody"].contains($0) }),
            !keys.contains(where: { ["tell", "ask", "stop", "send"].contains($0) }) {
             return .status(target: nil)
         }
         guard let spot = findName(keys, known: known, gated: gated) else { return nil }
-        return withName(w, keys, spot, gated: gated)
+        return withName(w, keys, spot, gated: gated, memo)
     }
 
     // MARK: - Whole commands
@@ -44,11 +58,11 @@ public enum Tolerant {
 
     static func weight(_ t: String) -> Double { light.contains(t) ? 0.5 : 1 }
 
-    private static func template(_ heard: [String], gated: Bool) -> Command? {
+    private static func template(_ heard: [String], gated: Bool, _ memo: Memo) -> Command? {
         var best: (ratio: Double, command: Command)?
         for (templates, command) in [(rollCall, Command.status(target: nil)), (greetings, .greet)] {
             for t in templates {
-                guard let r = fit(heard, t, gated: gated), r <= (best?.ratio ?? 0.3) else { continue }
+                guard let r = fit(heard, t, gated: gated, memo), r <= (best?.ratio ?? 0.3) else { continue }
                 best = (r, command)
             }
         }
@@ -58,7 +72,7 @@ public enum Tolerant {
     /// How far the heard words are from the template, as a share of the
     /// template's weight (0 is the same; nil when too little of it was heard).
     /// The template's first words may be missing: the gate ate them.
-    static func fit(_ heard: [String], _ template: [String], gated: Bool) -> Double? {
+    static func fit(_ heard: [String], _ template: [String], gated: Bool, _ memo: Memo = Memo()) -> Double? {
         var best: Double?
         // Gated, all but the last two words may be gone ("sessions going").
         let maxDrop = min(gated ? template.count - 2 : 2, template.count - 1)
@@ -66,7 +80,7 @@ public enum Tolerant {
             let t = Array(template[k...])
             let total = t.reduce(0) { $0 + weight($1) }
             guard t.filter({ !light.contains($0) }).count >= 2 || k == 0 else { continue }
-            let (cost, matched) = align(heard, t, cutStart: k > 0 || gated)
+            let (cost, matched) = align(heard, t, cutStart: k > 0 || gated, memo)
             guard matched >= min(2, t.filter({ !light.contains($0) }).count) else { continue }
             let r = (cost + 0.05 * Double(k)) / total
             if r < (best ?? .infinity) { best = r }
@@ -76,7 +90,7 @@ public enum Tolerant {
 
     /// Edit distance over words, where a substitution costs by how unalike the
     /// words sound. Returns the cost and how many heavy template words were heard.
-    static func align(_ h: [String], _ t: [String], cutStart: Bool) -> (Double, Int) {
+    static func align(_ h: [String], _ t: [String], cutStart: Bool, _ memo: Memo) -> (Double, Int) {
         let insert = 0.5
         let n = h.count, m = t.count
         var cost = [[Double]](repeating: [Double](repeating: 0, count: m + 1), count: n + 1)
@@ -88,7 +102,7 @@ public enum Tolerant {
         guard n > 0, m > 0 else { return (cost[n][m], 0) }
         for i in 1...n {
             for j in 1...m {
-                var sim = SoundsLike.similarity(h[i - 1], t[j - 1])
+                var sim = memo.sim(h[i - 1], t[j - 1])
                 // The first word heard may be the end of a word the gate cut.
                 if i == 1, cutStart, h[0].count >= 2, t[j - 1].count > h[0].count, t[j - 1].hasSuffix(h[0]) {
                     sim = max(sim, 0.8)
@@ -134,11 +148,11 @@ public enum Tolerant {
     /// How well heard letters match a name: SoundsLike.similarity, or a little
     /// less than the sound alone when the sound key is long enough to say much
     /// ("your child" and "earshot" sound alike and are spelled apart).
-    static func nameScore(_ heard: String, _ name: String) -> Double {
+    static func nameScore(_ heard: String, _ name: String, heardKey: String? = nil, nameKey: String? = nil) -> Double {
         if heard == name { return 1 }
-        let kh = SoundsLike.key(heard), kn = SoundsLike.key(name)
+        let kh = heardKey ?? SoundsLike.key(heard), kn = nameKey ?? SoundsLike.key(name)
         let bySound = min(kh.count, kn.count) >= 4 ? 0.9 * SoundsLike.ratio(Array(kh), Array(kn)) : 0
-        return max(SoundsLike.similarity(heard, name), bySound)
+        return max(SoundsLike.similarity(heard, kh, name, kn), bySound)
     }
 
     /// The session name that best matches some run of the heard words, by
@@ -146,17 +160,27 @@ public enum Tolerant {
     /// name, cut by the gate ("shot" for "earshot").
     static func findName(_ keys: [String], known: [String], gated: Bool) -> Spot? {
         var best: Spot?
+        // Each run of heard words as one string and its sound key, worked out once.
+        var runs: [[Int]: (text: String, key: String)] = [:]
+        func run(_ s: Int, _ len: Int, _ span: [String]) -> (text: String, key: String) {
+            if let r = runs[[s, len]] { return r }
+            let text = span.joined()
+            let r = (text, SoundsLike.key(text))
+            runs[[s, len]] = r
+            return r
+        }
         for name in known {
             let nameWords = Grammar.nameWords(name).map(SoundsLike.letters).filter { !$0.isEmpty }
             guard !nameWords.isEmpty else { continue }
-            let whole = nameWords.joined()
+            let whole = nameWords.joined(), wholeKey = SoundsLike.key(whole)
             for s in keys.indices {
                 for len in 1...min(nameWords.count + 1, keys.count - s) {
                     var span = Array(keys[s..<(s + len)])
                     if span.first == "the", span.count > 1 { span.removeFirst() }
                     if span.last == "session", span.count > 1 { span.removeLast() }
                     guard !span.allSatisfy(notName.contains) else { continue }
-                    var score = nameScore(span.joined(), whole)
+                    let heard = run(s, len, span)
+                    var score = nameScore(heard.text, whole, heardKey: heard.key, nameKey: wholeKey)
                     if s == 0, gated, !span.contains(where: commandWords.contains),
                        SoundsLike.endsName(span.joined(separator: " "), name) {
                         score = max(score, 0.85)
@@ -181,7 +205,8 @@ public enum Tolerant {
     static let statusLeads = ["check on", "status of", "whats the status of", "status on", "hows", "how is",
                               "whats up with", "how about"].map { $0.split(separator: " ").map(String.init) }
 
-    private static func withName(_ w: Grammar.Words, _ keys: [String], _ spot: Spot, gated: Bool) -> Command? {
+    private static func withName(_ w: Grammar.Words, _ keys: [String], _ spot: Spot, gated: Bool,
+                                 _ memo: Memo) -> Command? {
         let lead = Array(keys[..<spot.start]), rest = Array(keys[spot.end...])
         // A stop is never guessed: it goes by the grammar only.
         if keys.contains(where: stopWords.contains) { return nil }
@@ -193,10 +218,10 @@ public enum Tolerant {
         // A known name and nothing else: how is it doing.
         if lead.isEmpty, rest.isEmpty, spot.score >= 0.9 { return .status(target: spot.name) }
         // A status question: "<how's> NAME doing", "what's NAME working on".
-        if lead.count <= 3, !rest.isEmpty, statusTails.contains(where: { closeEnough(rest, $0, gated: gated) }) {
+        if lead.count <= 3, !rest.isEmpty, statusTails.contains(where: { closeEnough(rest, $0, gated: gated, memo) }) {
             return .status(target: spot.name)
         }
-        if rest.isEmpty, !lead.isEmpty, statusLeads.contains(where: { closeEnough(lead, $0, gated: gated, endOnly: true) }) {
+        if rest.isEmpty, !lead.isEmpty, statusLeads.contains(where: { closeEnough(lead, $0, gated: gated, endOnly: true, memo) }) {
             return .status(target: spot.name)
         }
         // "[tell] NAME to <prompt>": the tell or ask may be cut or garbled.
@@ -219,15 +244,16 @@ public enum Tolerant {
     }
 
     /// The words are this phrase, near enough. `endOnly`: the phrase's start may be missing (a cut).
-    static func closeEnough(_ heard: [String], _ phrase: [String], gated: Bool, endOnly: Bool = false) -> Bool {
+    static func closeEnough(_ heard: [String], _ phrase: [String], gated: Bool, endOnly: Bool = false,
+                            _ memo: Memo) -> Bool {
         guard heard.count <= phrase.count + 1 else { return false }
         let total = phrase.reduce(0) { $0 + weight($1) }
-        let (cost, _) = align(heard, phrase, cutStart: gated)
+        let (cost, _) = align(heard, phrase, cutStart: gated, memo)
         if cost / total <= 0.35 { return true }
         guard endOnly || gated, phrase.count > 1 else { return false }
         for k in 1..<phrase.count {
             let t = Array(phrase[k...])
-            let (c, _) = align(heard, t, cutStart: true)
+            let (c, _) = align(heard, t, cutStart: true, memo)
             if c / t.reduce(0, { $0 + weight($1) }) <= 0.3 { return true }
         }
         return false

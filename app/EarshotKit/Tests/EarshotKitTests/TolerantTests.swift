@@ -4,7 +4,9 @@ import Testing
 
 /// What a webcam mic with its noise gate on made of real commands, and the
 /// bench's degraded speech (tests/hearing).
-@Suite struct TolerantTests {
+/// Serialized: run all at once in a debug build, its cases take every core for
+/// a moment, and the Listener's timing tests miss their windows.
+@Suite(.serialized) struct TolerantTests {
     static let known = ["wedding", "guest confirmation email", "blog", "Projects", "reflow", "finebrief", "earshot",
                         "billing service", "your home folder", "diet journal", "kairos", "Daze", "Ardo", "Launch",
                         "What's next", "Project status"]

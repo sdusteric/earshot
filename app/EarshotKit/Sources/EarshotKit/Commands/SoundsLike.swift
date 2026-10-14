@@ -70,9 +70,13 @@ public enum SoundsLike {
     /// averaged: sound keys alone are short, so "blog" and "billing" would pass.
     public static func similarity(_ a: String, _ b: String) -> Double {
         let la = letters(a), lb = letters(b)
+        return similarity(la, key(la), lb, key(lb))
+    }
+
+    /// The same, for letters and sound keys already worked out.
+    static func similarity(_ la: String, _ ka: String, _ lb: String, _ kb: String) -> Double {
         guard !la.isEmpty, !lb.isEmpty else { return 0 }
         if la == lb { return 1 }
-        let ka = key(la), kb = key(lb)
         let bySound = ka.isEmpty || kb.isEmpty ? 0 : ratio(Array(ka), Array(kb))
         return (bySound + ratio(Array(la), Array(lb))) / 2
     }
