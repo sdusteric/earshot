@@ -26,7 +26,8 @@ public struct SpokenLine: Sendable, Equatable, Identifiable {
     /// The same line under a new id. A line stopped mid-play needs one to be
     /// said again: the player refuses an id it was told to stop.
     func withNewID() -> SpokenLine {
-        SpokenLine(text: text, kind: kind, session: session, transcript: transcript, received: received, name: name)
+        SpokenLine(text: text, kind: kind, session: session, transcript: transcript, received: received, name: name,
+                   voice: voice)
     }
 
     /// The session waits on you: a "needs you" line, or a session's line that

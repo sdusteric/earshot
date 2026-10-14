@@ -357,6 +357,8 @@ final class AppModel {
         listenBlock = ListenPolicy.wakeBlock(i)
         hotkeyTap?.setHotkey(c.hotkey)
         await stack.listener.setSensitivity(c.wakeSensitivity)
+        // A new mic choice applies now, even while the wake word holds the mic open.
+        await stack.listener.setInputDevice(c.inputDevice)
         // Retry a failed load at most once a minute.
         if listenBlock == nil, !wakeLoaded, lastWakeLoad.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
             lastWakeLoad = Date()

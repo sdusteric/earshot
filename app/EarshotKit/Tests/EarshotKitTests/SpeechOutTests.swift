@@ -780,6 +780,15 @@ actor SlowEndDucker: Ducking {
 }
 
 @Suite struct LinePiecesTests {
+    /// A preview's own voice stays with every piece, and with a line held under a new id.
+    @Test func aLinesVoiceSurvivesSplittingAndANewID() {
+        let l = SpokenLine(text: "This is a long preview line. It goes on past eighty characters so that it splits in two.",
+                           kind: .confirm, session: "", voice: "bf_emma")
+        #expect(SpeechOut.pieces(of: l).allSatisfy { $0.voice == "bf_emma" })
+        #expect(l.withNewID().voice == "bf_emma")
+        #expect(l.withNewID().id != l.id)
+    }
+
     @Test func shortLinesStayWhole() {
         let l = SpokenLine(text: "Sorry, I didn't get that.", kind: .confirm, session: "")
         #expect(SpeechOut.pieces(of: l) == [l])

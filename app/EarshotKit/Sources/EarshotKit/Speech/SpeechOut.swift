@@ -411,7 +411,7 @@ public actor SpeechOut {
         }
         return texts.map {
             SpokenLine(text: $0, kind: line.kind, session: line.session, transcript: line.transcript,
-                       received: line.received, name: line.name)
+                       received: line.received, name: line.name, voice: line.voice)
         }
     }
 
