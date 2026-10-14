@@ -37,6 +37,28 @@ actor SlowCommandModel: CommandModel {
         #expect(await model.asked == ["Run the tests."])
     }
 
+    /// Garbled words are read tolerantly before the model is asked: it is quicker, and safer.
+    @Test func theTolerantReadingComesBeforeTheModel() async {
+        let model = FakeModel(answer: .send(target: "blog", prompt: "are the other seconds going"))
+        let p = CommandParser(model: model)
+        #expect(await p.parse("Are the other seconds going?", sessions: ["blog"]) == .status(target: nil))
+        #expect(await p.parse("Shot to run the tests.", sessions: ["earshot"], gated: true)
+                == .confirmSend(target: "earshot", prompt: "run the tests"))
+        #expect(await model.asked.isEmpty)
+    }
+
+    /// The tolerant reading takes the words heard before the boost.
+    @Test func theTolerantReadingUsesTheUnboostedWords() async {
+        let p = CommandParser(model: nil)
+        #expect(await p.parse("Are you wedding?", plain: "Are you doing?", sessions: ["wedding"]) == .greet)
+    }
+
+    /// "Everyone" is the roll call, never a session.
+    @Test func theModelsEveryoneIsTheRollCall() async {
+        let p = CommandParser(model: FakeModel(answer: .status(target: "everyone")))
+        #expect(await p.parse("Uh everyone at the moment", sessions: ["blog"]) == .status(target: nil))
+    }
+
     /// The name boost turned "doing" into the session "wedding".
     @Test func theUnboostedWordsWinWhenTheyMakeACommand() async {
         let model = FakeModel(answer: .status(target: "wedding"))

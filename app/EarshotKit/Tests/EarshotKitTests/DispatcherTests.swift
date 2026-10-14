@@ -297,6 +297,54 @@ actor FakeTransport: SessionTransport {
         #expect(await none.run(.stopAll).line == "No Claude sessions are open.")
     }
 
+    // MARK: Sends heard unclearly
+
+    /// A send heard unclearly is read back, and goes only on a clear yes.
+    @Test func anUnclearSendIsReadBackThenSentOnAYes() async {
+        let (d, _, _) = make([agent("a", "earshot", pid: 10), agent("b", "blog", pid: 11)])
+        let o = await d.run(.confirmSend(target: "earshot", prompt: "what else should we do"))
+        #expect(o.line == "Send to earshot: what else should we do?")
+        #expect(await transport.sent.isEmpty)
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(p == .confirmSend(session: "a", prompt: "what else should we do"))
+        #expect(await d.reply("Yes.", to: p).line == "Sent to earshot.")
+        #expect(await transport.sent == [.init(pid: 10, session: "a", text: "what else should we do", priority: .next)])
+    }
+
+    @Test func anUnclearSendWithoutAYesSendsNothing() async {
+        let (d, _, _) = make([agent("a", "earshot", pid: 10)])
+        guard let p = await d.run(.confirmSend(target: "earshot", prompt: "run the tests")).pending else {
+            Issue.record("no question"); return
+        }
+        #expect(await d.reply("No.", to: p).line == "Okay, I didn't send it.")
+        #expect(await d.reply("Run the tests", to: p).line == "Okay, I didn't send it.")
+        #expect(await transport.sent.isEmpty)
+    }
+
+    /// The yes confirms the send. A permission prompt open meanwhile stays open.
+    @Test func theYesToAnUnclearSendNeverAnswersAPrompt() async {
+        let (d, _, book) = make([agent("a", "earshot", pid: 10)])
+        await book.apply(approval("a", "1-1-1", "earshot"))
+        guard let p = await d.run(.confirmSend(target: "earshot", prompt: "run the tests")).pending else {
+            Issue.record("no question"); return
+        }
+        _ = await d.reply("Yes.", to: p)
+        #expect(await transport.sent.map(\.text) == ["run the tests"])
+        #expect(await book.isOpen("1-1-1"))
+    }
+
+    @Test func anUnclearSendToANameThatIsGoneIsNotUnderstood() async {
+        let (d, _, _) = make([agent("b", "blog")])
+        #expect(await d.run(.confirmSend(target: "earshot", prompt: "run the tests")).line == Dispatcher.didntGetIt)
+    }
+
+    @Test func whatWasHeardIsSaidBack() {
+        #expect(Dispatcher.didntGet("Are the other seconds going?") == "Sorry, I heard: Are the other seconds going.")
+        #expect(Dispatcher.didntGet("  ") == Dispatcher.didntGetIt)
+        let long = Dispatcher.didntGet("one two three four five six seven eight nine ten eleven twelve thirteen")
+        #expect(long == "Sorry, I heard: one two three four five six seven eight nine ten eleven twelve...")
+    }
+
     @Test func stopNowOnABackgroundSessionRunsClaudeStop() async {
         let (d, runner, _) = make([agent("g", "wedding", pid: 20, kind: "background", status: "busy")])
         #expect(await d.run(.stop(target: "wedding", now: true)).line == "Stopped wedding.")

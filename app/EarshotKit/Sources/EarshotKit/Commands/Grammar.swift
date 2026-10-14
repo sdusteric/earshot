@@ -189,6 +189,10 @@ public enum Grammar {
         ("", "status"),
     ]
 
+    /// What ends a status question after the name ("doing", "working on").
+    static let statusTails: Set<String> = ["doing", "going", "working on", "up to", "done", "done yet", "finished",
+                                           "finished yet", "doing right now", "working on right now"]
+
     /// Said to quiet Earshot. A bare stop never reaches a session: you often say it
     /// over Earshot's own line, and the session it would pick is only a guess.
     static let quietWords: Set<String> = ["stop", "stop it", "stop that", "halt", "pause", "stop talking", "quiet",
@@ -381,6 +385,8 @@ public enum Grammar {
             if let allow = plainAnswer(p.text, named: true) { return .answer(allow: allow, target: Words(t.text).text) }
             // "Billing, cancel" is not a prompt to send: the model decides.
             if noOps.contains(p.key) || quietWords.contains(p.key) { return nil }
+            // "Billing, working on?": a status question that lost its "what's", not a prompt.
+            if statusTails.contains(p.key) { return .status(target: Words(t.text).text) }
             return make(target: t, prompt: p, known: known)
         }
         // send P to X
@@ -389,9 +395,13 @@ public enum Grammar {
         }
         // P for X: a question or ask that ends with a session's whole name ("what else
         // should we do for earshot"). Only an exact name counts, so "wait for it" doesn't.
+        // Names are often plain words ("the launch", "the wedding"), and "what's the plan
+        // for the launch" may not be meant for a session, so Earshot reads it back first.
         if let i = w.keys.lastIndex(of: "for"), i >= 2, i < w.count - 1 {
             let t = w.slice((i + 1)..<w.count)
-            if isExactName(t.text, known: known) { return make(target: t, prompt: w.slice(0..<i), known: known) }
+            if isExactName(t.text, known: known), case .send(let target?, let prompt)? = make(target: t, prompt: w.slice(0..<i), known: known) {
+                return .confirmSend(target: target, prompt: prompt)
+            }
         }
         return nil
     }

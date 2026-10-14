@@ -4,6 +4,9 @@ public enum Command: Sendable, Equatable {
     /// Put a prompt into a session. No target: the only session, or the one
     /// Earshot last spoke about.
     case send(target: String?, prompt: String)
+    /// A send heard unclearly (the name by its sound, or the first words cut):
+    /// Earshot reads it back and sends it only on a yes.
+    case confirmSend(target: String, prompt: String)
     /// No target: the roll call.
     case status(target: String?)
     /// "How are you doing?": a short answer with what needs you, not the whole roll call.

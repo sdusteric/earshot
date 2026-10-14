@@ -181,12 +181,21 @@ public actor VoiceLoop: ListenObserver {
                 await apply(await dispatcher.reply(answer, to: p), after: u)
             }
         case .wake, .hotkey, .tap:
+            let asked = pending
             pending = nil
             afterLine.removeAll()
-            let c = await parser.parse(u.text, plain: u.plain, sessions: await directory.vocabulary())
+            let c = await parser.parse(u.text, plain: u.plain, sessions: await directory.vocabulary(), gated: u.gated)
             signposter.emitEvent("command")
             await events.add("command \(Self.kind(c))")
-            if u.trigger == .wake, case .answer = c {
+            if case .confirmSend = asked, case .answer(_, nil) = c, let asked {
+                // A yes or no just after "Send to blog: ...?", said with the hotkey after the
+                // window closed, answers that question, never a permission prompt.
+                await apply(await dispatcher.reply(answer, to: asked), after: u)
+            } else if c == .unknown, let heard = u.plain.map({ Listener.stripWake($0) ?? $0 }) ?? Optional(answer),
+                      !Grammar.Words(heard).isEmpty {
+                // Say what was heard (before names were boosted), so a garbled mic is plain to hear.
+                await say(Dispatcher.didntGet(heard), after: u)
+            } else if u.trigger == .wake, case .answer = c {
                 // The wake word alone never answers a prompt; the hotkey, a click and the approval window do.
                 await say("Hold the hotkey to answer it.", after: u)
             } else if c == .repeatLast {
@@ -359,6 +368,7 @@ public actor VoiceLoop: ListenObserver {
     static func kind(_ c: Command) -> String {
         switch c {
         case .send: "send"
+        case .confirmSend: "send unclear"
         case .status: "status"
         case .greet: "greet"
         case .stop: "stop"

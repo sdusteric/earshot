@@ -208,12 +208,45 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await transport.sent.isEmpty)
     }
 
-    @Test func notUnderstoodSendsNothing() async {
+    /// Not understood: Earshot says what it heard, so a garbled mic is plain to hear.
+    @Test func notUnderstoodSendsNothingAndSaysWhatItHeard() async {
         let r = await rig([agent("b", "blog")])
         let player = r.player
         r.heard.yield(said("Banana."))
-        #expect(await eventually { await player.played == ["Sorry, I didn't get that."] })
+        #expect(await eventually { await player.played == ["Sorry, I heard: Banana."] })
         #expect(await transport.sent.isEmpty)
+    }
+
+    /// The words heard before names were boosted are the ones read back.
+    @Test func whatIsReadBackIsThePlainWords() async {
+        let r = await rig([agent("b", "blog")])
+        let player = r.player
+        r.heard.yield(.init(text: "Wedding cake.", trigger: .hotkey, endedAt: .now, plain: "Bedding cake."))
+        #expect(await eventually { await player.played == ["Sorry, I heard: Bedding cake."] })
+    }
+
+    /// A send heard unclearly is read back, and a yes in the window sends it.
+    @Test func anUnclearSendIsReadBackAndAYesSendsIt() async {
+        let r = await rig([agent("b", "blog", pid: 11), agent("c", "docs", pid: 12)])
+        let player = r.player
+        r.heard.yield(said("What else should we do for blog?"))
+        #expect(await eventually { await followUps.calls == [.reply] })
+        #expect(await player.played == ["Send to blog: What else should we do?"])
+        #expect(await transport.sent.isEmpty)
+        r.heard.yield(said("Yes.", .followUp(.reply)))
+        #expect(await eventually { await transport.sent.map(\.text) == ["What else should we do"] })
+    }
+
+    /// A hotkey yes right after that question answers it, not a permission prompt.
+    @Test func aHotkeyYesAfterTheQuestionSendsAndApprovesNothing() async {
+        let r = await rig([agent("s1", "billing-service", pid: 10), agent("c", "docs", pid: 12)])
+        await r.book.apply(approval())
+        r.heard.yield(said("Run the migration for billing service."))
+        #expect(await eventually { await followUps.calls == [.reply] })
+        r.heard.yield(said("Yes.", .hotkey))
+        #expect(await eventually { await transport.sent.map(\.text) == ["Run the migration"] })
+        #expect(await r.book.isOpen("1-1-1"))
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
     }
 
     /// Earshot must not hear its own "needs your OK" line as the answer.

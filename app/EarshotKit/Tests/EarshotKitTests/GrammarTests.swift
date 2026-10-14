@@ -250,18 +250,25 @@ import Testing
     }
 
     /// "How are all the other sessions going?" is the roll call.
+    /// "What's billing service working on?" with its first word cut by a noise gate.
+    @Test func aNameThenAStatusEndIsAStatusNotAPrompt() {
+        #expect(Grammar.parse("Billing service, working on.", known: Self.known) == .status(target: "Billing service"))
+        #expect(Grammar.parse("Blog, doing?", known: Self.known) == .status(target: "Blog"))
+    }
+
     @Test(arguments: ["How are all the other sessions going?", "How are the sessions doing?", "How are my sessions going?",
                       "How are the others doing?"])
     func theSessionsTogetherAreTheRollCall(_ said: String) {
         #expect(Grammar.parse(said, known: Self.known) == .status(target: nil))
     }
 
-    /// A question that ends with a session's whole name goes to that session.
-    @Test func aQuestionForASessionIsSentToIt() {
+    /// A question that ends with a session's whole name goes to that session, once
+    /// you say yes: names are often plain words, so it may not have been meant for one.
+    @Test func aQuestionForASessionIsSentToItOnAYes() {
         #expect(Grammar.parse("What else do you think we should do for earshot?", known: Self.known)
-                == .send(target: "earshot", prompt: "What else do you think we should do"))
+                == .confirmSend(target: "earshot", prompt: "What else do you think we should do"))
         #expect(Grammar.parse("Write the changelog for the blog session", known: Self.known)
-                == .send(target: "the blog session", prompt: "Write the changelog"))
+                == .confirmSend(target: "the blog session", prompt: "Write the changelog"))
         // Not a name, or not the whole name: left to the model.
         #expect(Grammar.parse("Can you wait for it", known: Self.known) == nil)
         #expect(Grammar.parse("What should we do for billing", known: Self.known) == nil)

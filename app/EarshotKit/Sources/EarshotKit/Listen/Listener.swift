@@ -24,10 +24,13 @@ public actor Listener {
         /// What was heard without session names boosted, when the boost changed it.
         /// The boost can turn a word into a name that sounds like it ("doing" into "wedding").
         public let plain: String?
+        /// The mic's noise gate likely cut the start of what was said (see ClipLevel.gated).
+        public let gated: Bool
 
         public init(text: String, trigger: Trigger, endedAt: ContinuousClock.Instant, tooLong: Bool = false,
-                    plain: String? = nil) {
+                    plain: String? = nil, gated: Bool = false) {
             self.text = text; self.trigger = trigger; self.endedAt = endedAt; self.tooLong = tooLong; self.plain = plain
+            self.gated = gated
         }
     }
 
@@ -690,7 +693,7 @@ public actor Listener {
         await observer?.captureEnded(heard: heard)
         if heard {
             utteranceCont.yield(Utterance(text: text, trigger: c.trigger, endedAt: .now,
-                                          plain: plain?.isEmpty == false ? plain : nil))
+                                          plain: plain?.isEmpty == false ? plain : nil, gated: ClipLevel.gated(clip)))
         } else if !refused, capture == nil {
             await chimes.play(.closed)
         }

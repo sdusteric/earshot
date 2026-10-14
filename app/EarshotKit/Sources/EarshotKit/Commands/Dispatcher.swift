@@ -12,6 +12,8 @@ public actor Dispatcher {
         case chooseApproval(allow: Bool, [String])
         /// "Stop billing and blog?": these sessions stop on a clear yes.
         case confirmStop([String])
+        /// "Send to earshot: run the tests?": a send heard unclearly goes on a clear yes.
+        case confirmSend(session: String, prompt: String)
     }
 
     public struct Outcome: Sendable, Equatable {
@@ -28,6 +30,18 @@ public actor Dispatcher {
     }
 
     public static let didntGetIt = "Sorry, I didn't get that."
+
+    /// What Earshot says when it heard words but no command in them: the words,
+    /// so you know whether the mic or the wording was the trouble. At most 12
+    /// words are read back. Spoken only; never logged.
+    public static func didntGet(_ heard: String) -> String {
+        let words = heard.split(whereSeparator: \.isWhitespace)
+        guard !words.isEmpty else { return didntGetIt }
+        let said = words.prefix(12).joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;: "))
+        guard !said.isEmpty else { return didntGetIt }
+        return "Sorry, I heard: \(said)" + (words.count > 12 ? "..." : ".")
+    }
+
     public static let stopText = "Stop what you're doing and wait for the user."
     static let counts = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
 
@@ -84,6 +98,8 @@ public actor Dispatcher {
             return await targeted(c, target)
         case .status(let target?):
             return await targeted(c, target)
+        case .confirmSend(let target, let prompt):
+            return await askToSend(target, prompt)
         }
     }
 
@@ -112,6 +128,11 @@ public actor Dispatcher {
         case .confirmStop(let ids):
             guard Grammar.windowAnswer(text) == true else { return Outcome(line: "Okay, I didn't stop anything.") }
             return await stopAll(ids)
+        case .confirmSend(let id, let prompt):
+            guard Grammar.windowAnswer(text) == true else { return Outcome(line: "Okay, I didn't send it.") }
+            await directory.refresh(ifOlderThan: 2)
+            guard let s = await directory.session(id) else { return Outcome(line: "That session has closed.") }
+            return await send(prompt, to: s)
         }
     }
 
@@ -133,6 +154,22 @@ public actor Dispatcher {
         case .noTarget:
             return Outcome(line: "Which session? Open ones are \(Self.listThree(sessions)).",
                            pending: .chooseSession(c, sessions.map(\.id)))
+        }
+    }
+
+    /// A send heard unclearly: read back first. When the name could be several
+    /// sessions, "Which one?" is the check: naming one is a clear choice.
+    private func askToSend(_ target: String, _ prompt: String) async -> Outcome {
+        await directory.refresh(ifOlderThan: 2)
+        guard !(await directory.sessions).isEmpty else { return Outcome(line: "No Claude sessions are open.") }
+        switch await directory.resolve(target) {
+        case .one(let s):
+            return Outcome(line: "Send to \(s.name): \(prompt)?", pending: .confirmSend(session: s.id, prompt: prompt),
+                           spokeAbout: s.id)
+        case .several:
+            return await targeted(.send(target: target, prompt: prompt), target)
+        case .none, .noTarget:
+            return Outcome(line: Self.didntGetIt)
         }
     }
 

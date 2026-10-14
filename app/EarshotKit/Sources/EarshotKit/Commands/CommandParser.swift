@@ -22,9 +22,13 @@ public struct CommandParser: Sendable {
     /// changed them. They win when they already make a command, so a name that
     /// sounds like a plain word ("wedding" for "doing") doesn't take over, and
     /// the model only ever sees them, never a boost the grammar couldn't use.
-    public func parse(_ text: String, plain: String? = nil, sessions: [String]) async -> Command {
+    /// What the grammar misses goes to the tolerant reading (Tolerant), on the
+    /// plain words, before the model: it is quick, and what it finds is read-only
+    /// or asked about first. `gated`: the mic's noise gate likely cut the start.
+    public func parse(_ text: String, plain: String? = nil, sessions: [String], gated: Bool = false) async -> Command {
         if let plain, let c = Grammar.parse(plain, known: sessions), c != .unknown { return c }
         if let c = Grammar.parse(text, known: sessions) { return c }
+        if let c = Tolerant.parse(plain ?? text, known: sessions, gated: gated) { return c }
         guard let model else { return .unknown }
         let heard = plain ?? text
         let answer = await bounded(timeout, Command?.none) {
@@ -48,7 +52,11 @@ public struct CommandParser: Sendable {
         case .start(let project, let prompt):
             return backed([project, prompt], by: said) ? c : .unknown
         case .status(let target):
-            return backed([target], by: said) ? c : .unknown
+            guard backed([target], by: said) else { return .unknown }
+            // "Everyone up to?": everyone is the roll call, not a session.
+            if let target, Grammar.allSessions.contains(Grammar.Words(target).key)
+                || Grammar.everyoneWords.contains(Grammar.Words(target).key) { return .status(target: nil) }
+            return c
         case .stop(let target, _):
             // "Hold on a second" is not a stop: one of the stop words must have been said.
             guard backed([target], by: said) && said.contains(where: saysStop) else { return .unknown }
@@ -61,7 +69,7 @@ public struct CommandParser: Sendable {
             let rest = Grammar.Words(text).keys.filter { !targetWords.contains($0) }.joined(separator: " ")
             guard let approves = Grammar.plainAnswer(rest, named: target != nil) else { return .unknown }
             return .answer(allow: approves, target: target)
-        case .greet, .stopAll, .quiet, .repeatLast, .unknown:
+        case .greet, .stopAll, .quiet, .repeatLast, .unknown, .confirmSend:
             return c
         }
     }
