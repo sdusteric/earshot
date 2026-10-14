@@ -444,7 +444,7 @@ extension AppModel {
         }
         if let b = listenBlock {
             if b == .wakeOff, let key = hotkeyName { return "Hold \(key) to talk" }
-            return ListenPolicy.menuLine(b)
+            return blockLine(b)
         }
         return "Listening for \u{201C}Hey Earshot\u{201D}"
     }

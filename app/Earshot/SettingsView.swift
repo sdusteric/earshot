@@ -361,7 +361,7 @@ private struct ListeningTab: View {
                 Text("Wake word")
             } footer: {
                 if model.config.wakeWord, let b = model.listenBlock {
-                    Footnote(ListenPolicy.menuLine(b))
+                    Footnote(model.blockLine(b))
                 } else if model.config.wakeWord, model.wakeLoadFailed {
                     Footnote("The wake word couldn't start. Earshot retries every minute.")
                 } else {

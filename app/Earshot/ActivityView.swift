@@ -100,6 +100,10 @@ struct ActivityView: View {
                     Button("Say the Recap") { model.playTestLine(recap) }
                         .disabled(model.sessions.isEmpty && model.liveSessions.isEmpty)
                     Button("Talk") { model.tapToTalk() }
+                    if let b = model.commandBlock {
+                        // Talk can't be heard now: say why next to it, not only with the closed chime.
+                        Text(model.blockLine(b)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                    }
                 }
                 .controlSize(.regular)
                 NowStrip(entry: model.history.last).padding(.top, 8)

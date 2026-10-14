@@ -69,14 +69,15 @@ public enum ListenPolicy {
     public static let secureInputLine =
         "The hotkey is paused while another app uses secure keyboard entry (for example Terminal's Secure Keyboard Entry)."
 
-    public static func menuLine(_ b: ListenBlock) -> String {
+    /// `micApp` names the app holding the mic, when it is known ("Zoom").
+    public static func menuLine(_ b: ListenBlock, micApp: String? = nil) -> String {
         switch b {
         case .micPermission: "Listening is off: Earshot can't use the mic. Allow it in System Settings, Privacy & Security, Microphone."
         case .models(let p):
             "Listening starts when the speech models finish downloading" + (p.map { " (\(Int($0 * 100))%)." } ?? ".")
         case .wakeOff: "The wake word is off. Hold the hotkey to talk."
         case .asleep, .locked: "Not listening while the Mac is locked."
-        case .micInUse: "Not listening while another app uses the mic."
+        case .micInUse: "Not listening while \(micApp ?? "another app") uses the mic."
         case .fullScreen: "Not listening while an app is full screen."
         case .lowPower: "Not listening for the wake word in Low Power Mode."
         case .battery: "Not listening for the wake word on battery."

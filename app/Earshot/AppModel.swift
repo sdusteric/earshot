@@ -29,6 +29,12 @@ final class AppModel {
     var speechState: SpeechOut.State = .idle
     var listenPhase: Listener.Phase = .off
     var listenBlock: ListenBlock?
+    /// Why a command can't be heard now (the hotkey, Talk, the orb), or nil.
+    var commandBlock: ListenBlock?
+    /// The app holding the mic while another app uses it, for "Not listening while Zoom uses the mic."
+    var micApp: String?
+    /// macOS hasn't asked about Earshot's notifications yet.
+    var notificationsUndecided = false
     var modelState: ListenModels.State = ListenModelFiles.present ? .ready : .missing
     var micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     /// You answered the mic prompt with no (or a profile blocks it): only System Settings can change it.
@@ -126,6 +132,7 @@ final class AppModel {
         Task {
             await live.core.banners.connect(show: { await poster.show($0) }, remove: { poster.remove($0) })
             notificationsDenied = await BannerPoster.denied()
+            notificationsUndecided = await BannerPoster.undecided()
         }
         // Locked or asleep is away; coming back after 10 minutes or more may say a recap.
         Task {
@@ -179,6 +186,7 @@ final class AppModel {
             Task {
                 for await busy in live.mic.changes() {
                     micInUse = busy
+                    micApp = busy ? micAppName() : nil
                     await stack.listener.setMicBusy(busy)
                     await listeningChanged()
                 }
@@ -275,7 +283,18 @@ final class AppModel {
 
     /// Re-reads whether notifications are allowed, which changes in System Settings.
     func refreshNotifications() {
-        Task { notificationsDenied = await BannerPoster.denied() }
+        Task {
+            notificationsDenied = await BannerPoster.denied()
+            notificationsUndecided = await BannerPoster.undecided()
+        }
+    }
+
+    /// Asks for notifications now (onboarding), rather than the first time a
+    /// banner is needed, which is often mid-call.
+    func requestNotifications() async {
+        await BannerPoster.ask()
+        notificationsDenied = await BannerPoster.denied()
+        notificationsUndecided = await BannerPoster.undecided()
     }
 
     /// A line Earshot started saying. Replies to what you said are saved with
@@ -347,7 +366,9 @@ final class AppModel {
         }
         // The load took a while: arm from the state now, not the state before it.
         let now = listenInputs(configBox.value)
-        await stack.listener.setBlocked(ListenPolicy.commandBlock(now) != nil)
+        let blocked = ListenPolicy.commandBlock(now)
+        if blocked != commandBlock { commandBlock = blocked }
+        await stack.listener.setBlocked(blocked != nil)
         let fresh = ListenPolicy.wakeBlock(now)
         listenBlock = fresh
         await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
@@ -444,6 +465,17 @@ final class AppModel {
             if askForMic { await self?.requestMic() } else { await stack?.play(.closed) }
         }
     }
+
+    /// The name of the app capturing from the mic, for the "not listening" line.
+    private func micAppName() -> String? {
+        guard let id = mic?.appsUsingMic().first(where: { $0.counts && !$0.bundleID.isEmpty })?.bundleID else { return nil }
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.localizedName { return app }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    /// Why Earshot isn't listening, naming the app that holds the mic when it can.
+    func blockLine(_ b: ListenBlock) -> String { ListenPolicy.menuLine(b, micApp: micApp) }
 
     /// Clicking the orb: one command, as after "Hey Earshot". Refused like the
     /// hotkey when Earshot can't listen now; the closed chime says so, and the
@@ -653,7 +685,7 @@ final class AppModel {
         Kokoro models: \(KokoroEngine.modelsPresent ? "present" : "missing")
         Sessions: \(sessions.count)
         Mic in use by: \(micApps.isEmpty ? "nothing" : micApps.joined(separator: ", "))
-        Listening: \(listenPhase), \(listenBlock.map(ListenPolicy.menuLine) ?? "wake word armed")
+        Listening: \(listenPhase), \(listenBlock.map { ListenPolicy.menuLine($0) } ?? "wake word armed")
         Wake word: \(c.wakeWord ? "on" : "off"), sensitivity \(c.wakeSensitivity), battery rule \(c.wakeOnBattery.rawValue)
         Hotkey: \(c.hotkey.rawValue), Input Monitoring \(hotkeyAllowed ? "allowed" : "not allowed")
         Mic permission: \(micAllowed ? "allowed" : "not allowed")

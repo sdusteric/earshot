@@ -97,6 +97,11 @@ import Testing
         #expect(!ListenPolicy.canListen(i))
     }
 
+    @Test func theMicLineNamesTheAppWhenKnown() {
+        #expect(ListenPolicy.menuLine(.micInUse) == "Not listening while another app uses the mic.")
+        #expect(ListenPolicy.menuLine(.micInUse, micApp: "Zoom") == "Not listening while Zoom uses the mic.")
+    }
+
     @Test func everyBlockHasAMenuLineWithoutEmDashes() {
         let all: [ListenBlock] = [.micPermission, .models(nil), .models(0.5), .wakeOff, .asleep, .locked, .micInUse,
                                   .fullScreen, .lowPower, .battery, .noSessions]

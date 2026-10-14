@@ -39,6 +39,15 @@ struct OnboardingView: View {
                 Text("Connect to Claude Code").font(.title2.bold())
                 Text("Earshot hears about your sessions through a small Claude Code plugin. It tells Earshot when a session needs you, might be stuck, or finishes, and lets you answer permission prompts by voice.")
                 PluginStatusRow()
+                if model.notificationsUndecided {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("When Earshot can't speak, for example during a call, a session that needs you shows a notification.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button("Allow Notifications") { Task { await model.requestNotifications() } }
+                    }
+                }
             case .voice:
                 Text("Voice").font(.title2.bold())
                 Text("Earshot speaks with \(model.config.engine == .kokoro ? "Kokoro, on this Mac" : model.config.engine == .elevenlabs ? "ElevenLabs" : "the Mac's own voice"). You can change it in Settings.")
@@ -105,7 +114,7 @@ struct OnboardingView: View {
                 } else {
                     Text("Turn on the wake word or the hotkey in Settings, under Listening, to give Earshot a command.")
                 }
-                if let b = model.listenBlock, model.config.wakeWord { Text(ListenPolicy.menuLine(b)).foregroundStyle(.secondary) }
+                if let b = model.listenBlock, model.config.wakeWord { Text(model.blockLine(b)).foregroundStyle(.secondary) }
             }
             Spacer()
             HStack {
@@ -130,6 +139,9 @@ struct OnboardingView: View {
             if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
         }
         .permissionRefresh(model)
-        .task { await model.checkPlugin(force: true) }
+        .task {
+            model.refreshNotifications()
+            await model.checkPlugin(force: true)
+        }
     }
 }
