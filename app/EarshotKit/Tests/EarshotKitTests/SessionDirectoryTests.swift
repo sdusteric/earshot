@@ -25,6 +25,7 @@ actor FakeRunner: ClaudeRunner {
                 if let n = a.name { d["name"] = n }
                 if let s = a.status { d["status"] = s }
                 if let s = a.state { d["state"] = s }
+                if let t = a.startedAt { d["startedAt"] = t }
                 return d
             }
             return RunResult(status: 0, stdout: try! JSONSerialization.data(withJSONObject: objs))
@@ -36,8 +37,8 @@ actor FakeRunner: ClaudeRunner {
 }
 
 func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, kind: String = "interactive",
-           status: String? = "idle") -> AgentEntry {
-    AgentEntry(sessionId: id, pid: pid, cwd: "/p/\(dir)", kind: kind, name: name, status: status)
+           status: String? = "idle", startedAt: Double? = nil) -> AgentEntry {
+    AgentEntry(sessionId: id, pid: pid, cwd: "/p/\(dir)", kind: kind, name: name, status: status, startedAt: startedAt)
 }
 
 @Suite struct SessionDirectoryTests {
@@ -140,6 +141,21 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
             Issue.record("expected invoices"); return
         }
         #expect(s.id == "b")
+    }
+
+    /// Two untitled sessions in blog: named by age, and picked by name, order or age.
+    @Test func untitledTwinsCanBeTold() async {
+        let (d, _) = await directory([agent("a", "blog", startedAt: 1_790_000_200_000), agent("b", "blog", startedAt: 1_790_000_100_000)])
+        #expect(Set(await d.sessions.map(\.name)) == ["the newer blog session", "the older blog session"])
+        guard case .one(let s) = await d.resolve("the older blog session") else { Issue.record("by name"); return }
+        #expect(s.id == "b")
+        guard case .several = await d.resolve("blog") else { Issue.record("expected several"); return }
+        // Offered oldest first, as "Which one?" says them.
+        for (said, id) in [("The older one.", "b"), ("newer", "a"), ("The first one.", "b"), ("the second", "a"),
+                           ("The last one.", "a"), ("the newest", "a")] {
+            guard case .one(let s) = await d.resolve(said, among: ["b", "a"]) else { Issue.record("no pick for \(said)"); continue }
+            #expect(s.id == id, "\(said)")
+        }
     }
 
     @Test func vocabularyHasProjectsAndLabels() async {

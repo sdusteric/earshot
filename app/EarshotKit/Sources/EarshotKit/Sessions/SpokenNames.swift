@@ -62,15 +62,37 @@ public enum SpokenNames {
         public let project: String
         public let title: String
         public let label: String
-        public init(id: String, project: String, title: String, label: String) {
-            self.id = id; self.project = project; self.title = title; self.label = label
+        public let started: Date?
+        public init(id: String, project: String, title: String, label: String, started: Date? = nil) {
+            self.id = id; self.project = project; self.title = title; self.label = label; self.started = started
         }
     }
 
+    static let places = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+
     /// The shortest name that is unique among these sessions: the project
     /// when it is the only one there; else "the <label> session" when no
-    /// other session has that label; else "<label> in <project>".
+    /// other session has that label; else "<label> in <project>". Untitled
+    /// sessions that share a folder go by age: "the older blog session" and
+    /// "the newer blog session", or "the first blog session" and on for three
+    /// or more (oldest first, or as listed when a start time is missing).
     public static func names(_ entries: [Entry]) -> [String: String] {
+        var out = baseNames(entries)
+        for (project, group) in Dictionary(grouping: entries.filter { out[$0.id] == $0.project }, by: \.project)
+        where group.count > 1 {
+            let known = group.allSatisfy { $0.started != nil }
+            let aged = known ? group.enumerated().sorted { ($0.element.started!, $0.offset) < ($1.element.started!, $1.offset) }
+                .map(\.element) : group
+            for (i, e) in aged.enumerated() {
+                let place = known && aged.count == 2 ? (i == 0 ? "older" : "newer")
+                    : i < places.count ? places[i] : "number \(i + 1)"
+                out[e.id] = "the \(place) \(project) session"
+            }
+        }
+        return out
+    }
+
+    private static func baseNames(_ entries: [Entry]) -> [String: String] {
         var out: [String: String] = [:]
         for e in entries {
             let others = entries.filter { $0.id != e.id }

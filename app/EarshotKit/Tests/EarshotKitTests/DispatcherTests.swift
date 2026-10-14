@@ -85,6 +85,16 @@ actor FakeTransport: SessionTransport {
         #expect(await transport.sent.map(\.pid) == [11])
     }
 
+    @Test func twoUntitledInOneFolderAreAskedAboutByAge() async {
+        let (d, _, _) = make([agent("a", "blog", pid: 10, startedAt: 1_790_000_200_000),
+                              agent("b", "blog", pid: 11, startedAt: 1_790_000_100_000)])
+        let o = await d.run(.send(target: "blog", prompt: "deploy"))
+        #expect(o.line == "Blog has two: the older blog session and the newer blog session. Which one?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("The newer one.", to: p).line == "Sent to the newer blog session.")
+        #expect(await transport.sent.map(\.pid) == [10])
+    }
+
     @Test func anUnknownTargetListsAtMostThree() async {
         let (d, _, _) = make([agent("a", "billing-service"), agent("b", "blog"), agent("c", "earshot"), agent("e", "extra")])
         let line = await d.run(.send(target: "payments", prompt: "x")).line ?? ""

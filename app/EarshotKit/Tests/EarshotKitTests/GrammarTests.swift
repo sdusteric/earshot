@@ -71,6 +71,7 @@ import Testing
         ("For earshot: open a PR.", .send(target: "earshot", prompt: "open a PR")),
         ("Please tell blog to deploy, thanks.", .send(target: "blog", prompt: "deploy")),
         ("Send run the linter to billing.", .send(target: "billing", prompt: "run the linter")),
+        ("Tell the newer blog session to deploy.", .send(target: "the newer blog session", prompt: "deploy")),
         // A session named first
         ("Blog, run the tests.", .send(target: "Blog", prompt: "run the tests")),
         ("Billing service, update the readme.", .send(target: "Billing service", prompt: "update the readme")),
@@ -86,6 +87,7 @@ import Testing
         ("Tell billing to stop.", .stop(target: "billing", now: false)),
         ("Tell billing to stop now.", .stop(target: "billing", now: true)),
         ("Pause blog.", .stop(target: "blog", now: false)),
+        ("Stop the older blog session.", .stop(target: "the older blog session", now: false)),
         ("Blog, stop.", .stop(target: "Blog", now: false)),
         ("Tell it to stop.", .stop(target: nil, now: false)),
         // A bare stop is for Earshot's own voice: it never reaches a session.

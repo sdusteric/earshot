@@ -30,12 +30,16 @@ public struct AgentEntry: Decodable, Sendable, Equatable {
     public let status: String?
     /// For background sessions without a process, for example blocked.
     public let state: String?
+    /// When the session started, in milliseconds since 1970.
+    public let startedAt: Double?
 
     public init(sessionId: String, pid: Int32?, cwd: String, kind: String, name: String? = nil, status: String? = nil,
-                state: String? = nil) {
+                state: String? = nil, startedAt: Double? = nil) {
         self.sessionId = sessionId; self.pid = pid; self.cwd = cwd; self.kind = kind
-        self.name = name; self.status = status; self.state = state
+        self.name = name; self.status = status; self.state = state; self.startedAt = startedAt
     }
+
+    public var started: Date? { startedAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
 
     public var isBackground: Bool { kind == "background" }
     public var isBusy: Bool { status == "busy" }

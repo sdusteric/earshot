@@ -203,7 +203,9 @@ public enum Grammar {
     /// True when a target could be one of the known names. With no names known, any target passes.
     public static func looksKnown(_ target: String, known: [String]) -> Bool {
         if known.isEmpty { return true }
-        let t = nameWords(target)
+        var t = nameWords(target)
+        // Untitled sessions in one folder go by age ("the newer blog session").
+        if t.count > 1, ["older", "newer", "first", "second", "third"].contains(t[0]) { t.removeFirst() }
         guard !t.isEmpty else { return false }
         return known.contains { k in
             let n = nameWords(k)

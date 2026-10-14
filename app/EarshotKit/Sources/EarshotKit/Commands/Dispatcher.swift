@@ -124,7 +124,9 @@ public actor Dispatcher {
         switch await directory.resolve(target) {
         case .one(let s):
             return await act(c, on: s)
-        case .several(let list):
+        case .several(let found):
+            // Oldest first, so "the first one" and "the older one" agree.
+            let list = SessionDirectory.oldestFirst(found)
             return Outcome(line: whichOne(list), pending: .chooseSession(c, list.map(\.id)))
         case .none:
             return Outcome(line: "I don't know a session called \(target ?? "that"). Open ones are \(Self.listThree(sessions)).")
