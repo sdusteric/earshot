@@ -64,7 +64,8 @@ actor CountingSpeaker: LineSpeaker {
         let counter: CountingSpeaker
     }
 
-    func rig(_ agents: [AgentEntry], blocking: Bool = false, history: HistoryStore? = nil) async -> Rig {
+    func rig(_ agents: [AgentEntry], blocking: Bool = false, history: HistoryStore? = nil,
+             canListen: @escaping @Sendable () -> Bool = { true }) async -> Rig {
         let player = FakePlayer(blocking: blocking)
         let speech = SpeechOut(synth: FakeSynth(), player: player, mic: mic, ducker: ducker, settle: .milliseconds(30))
         await speech.start()
@@ -78,7 +79,7 @@ actor CountingSpeaker: LineSpeaker {
         let counter = CountingSpeaker(speech)
         let loop = VoiceLoop(followUps: followUps, parser: CommandParser(model: nil), dispatcher: dispatcher,
                              directory: directory, approvals: book, speech: counter, chimes: chimes, events: EventLog(),
-                             history: history)
+                             history: history, canListen: canListen)
         let (stream, cont) = AsyncStream<Listener.Utterance>.makeStream()
         await loop.start(utterances: stream)
         return Rig(loop: loop, speech: speech, player: player, book: book, heard: cont, counter: counter)
@@ -146,6 +147,19 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await followUps.calls.isEmpty)
         await player.finish()
         #expect(await eventually { await followUps.calls == [.approval(id: "1-1-1")] })
+    }
+
+    /// During a call or without the mic: the need line opens no window, but a click still answers.
+    @Test func whileItCantListenTheLineOpensNoWindowButAClickAnswers() async {
+        let r = await rig([agent("s1", "billing-service")], canListen: { false })
+        await r.book.apply(approval())
+        await r.speech.enqueue(SpokenLine(text: "Hey, billing service needs your OK to run the migration.", kind: .need, session: "s1"))
+        await r.speech.waitUntilIdle()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await followUps.calls.isEmpty)
+        #expect(await r.loop.lineEntries == 0)
+        #expect(await r.loop.click("1-1-1", allow: false) == .written)
+        #expect(hookTakesTheAnswer() == "deny \(secret)\n")
     }
 
     @Test func noWindowWithoutAnOpenPrompt() async {

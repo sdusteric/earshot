@@ -55,10 +55,10 @@ public final class EarshotCore: Sendable {
                 if late(s.sent) { return LineServer.Answer(reply: AppReply(ok: false, reason: "late").encoded) }
             case .approval(let a) where !a.isClosed:
                 // The hook stops waiting after 0.2 s; it then sends closed.
+                // Taken even when Earshot can't listen now: Allow and Deny in the panel
+                // need no mic, and during a call they are the only way to answer away
+                // from the terminal. Only the spoken follow-up window waits on listening.
                 if late(a.sent) { return LineServer.Answer(reply: AppReply(ok: false, reason: "late").encoded) }
-                if !availability.canListen {
-                    return LineServer.Answer(reply: AppReply(ok: false, reason: "not listening").encoded)
-                }
             default:
                 break   // status, and closed approvals, however late
             }

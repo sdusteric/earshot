@@ -34,7 +34,7 @@ public struct ListenStack: Sendable {
                                     })
         let loop = VoiceLoop(followUps: listener, parser: CommandParser(model: FoundationCommandModel()), dispatcher: dispatcher,
                              directory: directory, approvals: core.approvals, speech: speech, chimes: chimes, events: core.events,
-                             history: history)
+                             history: history, canListen: { [availability = core.availability] in availability.canListen })
         await listener.setObserver(loop)
         await loop.start(utterances: listener.utterances)
         return ListenStack(listener: listener, loop: loop, directory: directory, models: ListenModels(),

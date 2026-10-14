@@ -140,8 +140,8 @@ public actor ApprovalBook {
 }
 
 /// Whether the app can listen right now: mic permission granted, the models
-/// on this Mac, and listening not switched off. The app sets it; the plugin
-/// socket reads it for each approval, on its own queue.
+/// on this Mac, and listening not switched off. The app sets it; the voice
+/// loop reads it before it opens a follow-up window for a permission prompt.
 public final class ListenAvailability: Sendable {
     private let value = Mutex(false)
     public init() {}
