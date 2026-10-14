@@ -49,7 +49,13 @@ struct OnboardingView: View {
                 if model.micAllowed {
                     Label("The microphone is allowed.", systemImage: "checkmark.circle")
                 } else {
-                    Button("Allow the Microphone") { Task { await model.requestMic() } }
+                    if model.micDenied {
+                        Text("Earshot isn't allowed to use the mic. Turn it on in System Settings, Privacy & Security, Microphone.")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button(AppModel.permissionAction(denied: model.micDenied, ask: "Allow the Microphone")) {
+                        Task { await model.requestMic() }
+                    }
                 }
                 Toggle("Listen for \u{201C}Hey Earshot\u{201D} (the mic indicator stays on while it listens)",
                        isOn: Binding(get: { model.config.wakeWord },
@@ -62,7 +68,13 @@ struct OnboardingView: View {
                     if model.hotkeyAllowed {
                         Label("The hotkey is allowed.", systemImage: "checkmark.circle")
                     } else {
-                        Button("Allow the Hotkey") { model.requestHotkeyAccess() }
+                        if model.hotkeyDenied {
+                            Text("Earshot isn't allowed to see the key. Turn it on in System Settings, Privacy & Security, Input Monitoring.")
+                                .foregroundStyle(.secondary)
+                        }
+                        Button(AppModel.permissionAction(denied: model.hotkeyDenied, ask: "Allow the Hotkey")) {
+                            model.requestHotkeyAccess()
+                        }
                     }
                 } else {
                     Text("The hold-to-talk hotkey is off. You can turn it on in Settings, under Listening.")

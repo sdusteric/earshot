@@ -325,7 +325,7 @@ private struct ListeningTab: View {
                     Text("Off").tag(EarshotConfig.Hotkey.off)
                 }
                 if model.config.hotkey != .off, !model.hotkeyAllowed {
-                    PermissionRow(title: "Input Monitoring", allowed: false,
+                    PermissionRow(title: "Input Monitoring", allowed: false, denied: model.hotkeyDenied,
                                   why: "So Earshot can see the hotkey. It watches only that key.") { model.requestHotkeyAccess() }
                 }
                 if model.config.hotkey != .off, model.secureInput {
@@ -426,6 +426,8 @@ private struct ListeningTab: View {
 private struct PermissionRow: View {
     let title: String
     let allowed: Bool
+    /// Asked before and refused: the button opens System Settings.
+    let denied: Bool
     let why: String
     let request: () -> Void
 
@@ -436,7 +438,7 @@ private struct PermissionRow: View {
                     .labelStyle(.titleAndIcon)
                     .foregroundStyle(.secondary)
             } else {
-                Button("Allow\u{2026}", action: request)
+                Button(AppModel.permissionAction(denied: denied), action: request)
             }
         } label: {
             Text(title)
@@ -475,9 +477,9 @@ private struct GeneralTab: View {
             .task { await model.checkPlugin() }
 
             Section {
-                PermissionRow(title: "Microphone", allowed: model.micAllowed,
+                PermissionRow(title: "Microphone", allowed: model.micAllowed, denied: model.micDenied,
                               why: "To hear the hotkey, the wake word, and yes or no.") { Task { await model.requestMic() } }
-                PermissionRow(title: "Input Monitoring", allowed: model.hotkeyAllowed,
+                PermissionRow(title: "Input Monitoring", allowed: model.hotkeyAllowed, denied: model.hotkeyDenied,
                               why: "To see the hold-to-talk key.") { model.requestHotkeyAccess() }
             } header: {
                 Text("Permissions")

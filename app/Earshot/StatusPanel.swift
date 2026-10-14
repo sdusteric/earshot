@@ -98,12 +98,13 @@ struct StatusPanel: View {
 
     @ViewBuilder private var notices: some View {
         let needsHotkey = model.config.hotkey != .off && !model.hotkeyAllowed
+        let needsMic = !model.micAllowed && (model.config.hotkey != .off || model.config.wakeWord)
         let needsPlugin = model.pluginStatus.action != nil || model.pluginWorking
         let needsModels: Bool = switch model.modelState {
         case .missing, .failed: true
         default: false
         }
-        if needsPlugin || needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
+        if needsPlugin || needsMic || needsHotkey || needsModels || (model.config.hotkey != .off && model.secureInput) {
             VStack(alignment: .leading, spacing: 8) {
                 if needsPlugin {
                     Notice(text: model.pluginWorking ? "Connecting to Claude Code\u{2026}" : model.pluginStatus.line,
@@ -118,8 +119,19 @@ struct StatusPanel: View {
                                action: model.modelState == .failed ? "Try Again" : "Download") { model.downloadModels() }
                     }
                 }
+                if needsMic {
+                    Notice(text: model.micDenied
+                           ? "Earshot can't hear you. Turn on the mic for Earshot in System Settings, Privacy & Security, Microphone."
+                           : "Allow the mic so Earshot can hear you.",
+                           action: AppModel.permissionAction(denied: model.micDenied)) {
+                        Task { await model.requestMic() }
+                    }
+                }
                 if needsHotkey {
-                    Notice(text: "Allow Input Monitoring so Earshot can see the hotkey.", action: "Allow\u{2026}") {
+                    Notice(text: model.hotkeyDenied
+                           ? "Turn on Earshot in System Settings, Privacy & Security, Input Monitoring, so it can see the hotkey."
+                           : "Allow Input Monitoring so Earshot can see the hotkey.",
+                           action: AppModel.permissionAction(denied: model.hotkeyDenied)) {
                         model.requestHotkeyAccess()
                     }
                 }

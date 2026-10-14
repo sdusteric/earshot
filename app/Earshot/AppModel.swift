@@ -29,7 +29,10 @@ final class AppModel {
     var listenBlock: ListenBlock?
     var modelState: ListenModels.State = ListenModelFiles.present ? .ready : .missing
     var micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    /// You answered the mic prompt with no (or a profile blocks it): only System Settings can change it.
+    var micDenied = AppModel.micAnsweredNo
     var hotkeyAllowed = HotkeyTap.allowed
+    var hotkeyDenied = HotkeyTap.denied
     /// Another app has secure keyboard entry on, so the hotkey is refused.
     var secureInput = IsSecureEventInputEnabled()
     var wakeLoadFailed = false
@@ -68,7 +71,7 @@ final class AppModel {
     @ObservationIgnored private var wakeUnloadTimer: Task<Void, Never>?
     @ObservationIgnored private var wakeUnloading: Task<Void, Never>?
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
-    /// The closed chime for a hold refused under secure input, once it is a real hold.
+    /// The answer to a refused hold (closed chime or mic prompt), once it is a real hold.
     @ObservationIgnored private var refusedHold: Task<Void, Never>?
     @ObservationIgnored private var bannerPoster: BannerPoster?
 
@@ -371,17 +374,15 @@ final class AppModel {
             i.micAllowed = micAllowed; i.modelsReady = modelState == .ready; i.micInUse = micInUse
             i.locked = watch.state.locked; i.asleep = watch.state.asleep
             i.fullScreenSilent = configBox.value.fullScreen == .silent && fullScreenNow
-            guard ListenPolicy.commandBlock(i) == nil else { return }
+            if let block = ListenPolicy.commandBlock(i) {
+                // Refused, but not silently: the closed chime, or the mic prompt the first time.
+                refuseHold(askForMic: block == .micPermission && Self.micUnasked)
+                return
+            }
             // Secure input may hide key presses from the tap, so a chord could look like a hold.
-            // Refused, but not silently: a hold past the minimum gets the closed chime.
             if IsSecureEventInputEnabled() {
                 secureInput = true
-                refusedHold?.cancel()
-                refusedHold = Task { [stack] in
-                    try? await Task.sleep(for: .milliseconds(200))
-                    guard !Task.isCancelled else { return }
-                    await stack?.play(.closed)
-                }
+                refuseHold(askForMic: false)
                 return
             }
             Task { await listener.hotkeyDown() }
@@ -394,13 +395,29 @@ final class AppModel {
         }
     }
 
+    /// A hotkey press Earshot can't take. Only a real hold gets an answer, after the
+    /// minimum hold, since a quick tap or a chord (Option with a letter) is not a command.
+    private func refuseHold(askForMic: Bool) {
+        refusedHold?.cancel()
+        refusedHold = Task { [weak self, stack] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            if askForMic { await self?.requestMic() } else { await stack?.play(.closed) }
+        }
+    }
+
     /// Clicking the orb: one command, as after "Hey Earshot". Refused like the
-    /// hotkey when Earshot can't listen now; the closed chime says so.
+    /// hotkey when Earshot can't listen now; the closed chime says so, and the
+    /// first time without the mic, macOS asks for it.
     func tapToTalk() {
         guard let stack else { return }
         let i = listenInputs(configBox.value)
-        guard ListenPolicy.commandBlock(i) == nil else {
-            Task { await stack.play(.closed) }
+        if let block = ListenPolicy.commandBlock(i) {
+            if block == .micPermission, Self.micUnasked {
+                Task { await requestMic() }
+            } else {
+                Task { await stack.play(.closed) }
+            }
             return
         }
         Task { await stack.listener.tapToTalk() }
@@ -427,14 +444,44 @@ final class AppModel {
         }
     }
 
+    /// Asks for the mic the first time. Once you answered, macOS shows nothing
+    /// again, so this opens the Microphone pane of System Settings instead.
     func requestMic() async {
-        _ = await AVCaptureDevice.requestAccess(for: .audio)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined: _ = await AVCaptureDevice.requestAccess(for: .audio)
+        case .authorized: break
+        default: Self.openPrivacyPane("Privacy_Microphone")
+        }
+        micDenied = Self.micAnsweredNo
         await listeningChanged()
     }
 
+    /// The same for Input Monitoring: the prompt once, then System Settings.
     func requestHotkeyAccess() {
-        HotkeyTap.requestAccess()
+        if HotkeyTap.denied {
+            Self.openPrivacyPane("Privacy_ListenEvent")
+        } else {
+            HotkeyTap.requestAccess()
+        }
         hotkeyAllowed = hotkeyTap?.start() ?? false
+        hotkeyDenied = HotkeyTap.denied
+    }
+
+    /// What a permission button says: macOS asks only once, so after that it opens System Settings.
+    static func permissionAction(denied: Bool, ask: String = "Allow\u{2026}") -> String {
+        denied ? "Open System Settings" : ask
+    }
+
+    private static var micUnasked: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined }
+
+    private static var micAnsweredNo: Bool {
+        let s = AVCaptureDevice.authorizationStatus(for: .audio)
+        return s == .denied || s == .restricted
+    }
+
+    private static func openPrivacyPane(_ anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Re-reads the mic and Input Monitoring permissions, which change in System
@@ -445,9 +492,13 @@ final class AppModel {
         var changed = false
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         if mic != micAllowed { micAllowed = mic; changed = true }
+        let micNo = Self.micAnsweredNo
+        if micNo != micDenied { micDenied = micNo }
         var hot = HotkeyTap.allowed
         if hot { hot = hotkeyTap?.start() ?? false }
         if hot != hotkeyAllowed { hotkeyAllowed = hot; changed = true }
+        let hotNo = !hot && HotkeyTap.denied
+        if hotNo != hotkeyDenied { hotkeyDenied = hotNo }
         if changed { Task { await listeningChanged() } }
     }
 
