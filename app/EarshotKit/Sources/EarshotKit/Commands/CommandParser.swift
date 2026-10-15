@@ -38,15 +38,51 @@ public struct CommandParser: Sendable {
             if let c = Tolerant.parse(second, known: sessions, gated: gated) { return c }
             if Grammar.parse(text, known: sessions) == .unknown { return .unknown }
         }
-        guard let model else { return .unknown }
         let heard = plain ?? text
+        guard let model else { return Self.readBack(heard, sessions: sessions) }
         let answer = await bounded(timeout, Command?.none) {
             guard await model.isAvailable else { return nil }
             return await model.parse(heard, sessions: sessions)
         }
-        guard let c = answer else { return .unknown }
+        guard let c = answer else { return Self.readBack(heard, sessions: sessions) }
         return Self.accept(c, heard: heard, sessions: sessions)
     }
+
+    /// What the words still make when the model gives no answer (off, failed or too slow)
+    /// and they say one open session's whole name: a question about it is its status,
+    /// which only reads, and anything else is read back and sent on a yes. A name's
+    /// single word isn't enough, as titles are often everyday words ("What's next").
+    /// Never a stop, a start, an answer to a permission prompt, or a pick between two sessions.
+    static func readBack(_ text: String, sessions: [String]) -> Command {
+        let said = words(text)
+        let named = sessions.filter { saysWhole($0, in: said) }
+        guard named.count == 1, let name = named.first else { return .unknown }
+        let w = Grammar.Words(text)
+        if w.keys.contains(where: answerWords.contains) || said.contains(where: saysStop) { return .unknown }
+        if said.contains("start") || said.contains("session") && said.contains("new") { return .unknown }
+        if let first = w.keys.first, statusStarts.contains(first) { return .status(target: name) }
+        let nameWords = words(name)
+        let asked = said.filter { s in s.count >= 3 && !unbackedWords.contains(s) && !nameWords.contains { s.hasPrefix($0) } }
+        guard asked.count >= 2 else { return .unknown }
+        return .confirmSend(target: name, prompt: w.text)
+    }
+
+    /// The name's words were said together, in order ("billing service", "blogs" for "blog").
+    static func saysWhole(_ name: String, in said: [String]) -> Bool {
+        let n = words(name)
+        guard !n.isEmpty, n.count <= said.count else { return false }
+        return (0...(said.count - n.count)).contains { i in
+            zip(said[i..<(i + n.count)], n).allSatisfy { $0 == $1 || $0 == $1 + "s" }
+        }
+    }
+
+    /// Words that make it sound like a yes or no to a permission prompt.
+    static let answerWords: Set<String> = ["yes", "yeah", "yep", "yup", "sure", "okay", "ok", "alright", "allow", "approve",
+                                           "approved", "absolutely", "definitely", "no", "nope", "nah", "deny", "not",
+                                           "don't", "dont"]
+    /// First words of a question about a session.
+    static let statusStarts: Set<String> = ["is", "are", "has", "does", "did", "what", "what's", "whats", "how", "how's",
+                                            "hows", "where"]
 
     /// Keeps a model answer only when the user's words back it up: every content word of
     /// the target and prompt must have been said (M1), and an approval needs a clear

@@ -101,6 +101,34 @@ actor SlowCommandModel: CommandModel {
         #expect(await CommandParser(model: failing).parse("Run the tests.", sessions: []) == .unknown)
     }
 
+    /// With no answer from the model (off, failed or too slow), words that say one open
+    /// session's whole name are read back and sent on a yes. Nothing is ever sent outright.
+    @Test func noModelAnswerReadsBackWhatNamesOneSession() async {
+        let sessions = ["billing service", "blog", "What's next", "Showcase site links"]
+        let heard = "See if billing service can speed up the query."
+        for model in [nil, FakeModel(answer: nil), FakeModel(available: false, answer: nil)] as [FakeModel?] {
+            #expect(await CommandParser(model: model).parse(heard, sessions: sessions)
+                    == .confirmSend(target: "billing service", prompt: "See if billing service can speed up the query"))
+        }
+        let p = CommandParser(model: nil)
+        // A question about it only reads its status.
+        #expect(await p.parse("Is billing service still on the migration?", sessions: sessions)
+                == .status(target: "billing service"))
+        #expect(await p.parse("Has the blog finished the deploy?", sessions: sessions) == .status(target: "blog"))
+        // One word of a name is not the name: titles are often everyday words.
+        #expect(await p.parse("See if billing can speed up the query.", sessions: sessions) == .unknown)
+        #expect(await p.parse("What else should we do?", sessions: sessions) == .unknown)
+        #expect(await p.parse("I have to fix the broken links.", sessions: sessions) == .unknown)
+        // Never a pick between two sessions, a stop, a start, or an answer to a permission prompt.
+        #expect(await p.parse("Billing service and blog should both rebase.", sessions: sessions) == .unknown)
+        #expect(await p.parse("Maybe billing service could halt the deploy.", sessions: sessions) == .unknown)
+        #expect(await p.parse("Start a new session and blog to write a post.", sessions: sessions) == .unknown)
+        #expect(await p.parse("Sure, let billing service run that.", sessions: sessions) == .unknown)
+        #expect(await p.parse("Nah, billing service can't have that.", sessions: sessions) == .unknown)
+        // The model's own "didn't get it" stands.
+        #expect(await CommandParser(model: FakeModel(answer: .unknown)).parse(heard, sessions: sessions) == .unknown)
+    }
+
     @Test(arguments: [
         ("send", "billing", "run the tests", false, Command.send(target: "billing", prompt: "run the tests")),
         ("send", "", "run the tests", false, .send(target: nil, prompt: "run the tests")),
@@ -265,7 +293,8 @@ actor SlowCommandModel: CommandModel {
     @Test func aSlowModelGivesUpAfterItsLimit() async {
         let p = CommandParser(model: SlowCommandModel(), timeout: .milliseconds(50))
         let start = ContinuousClock.now
-        #expect(await p.parse("Maybe billing could run the tests.", sessions: ["billing"]) == .unknown)
+        #expect(await p.parse("Maybe billing could run the tests.", sessions: ["billing"])
+                == .confirmSend(target: "billing", prompt: "Maybe billing could run the tests"))
         #expect(ContinuousClock.now - start < .seconds(1))
     }
 }
