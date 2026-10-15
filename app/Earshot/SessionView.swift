@@ -183,7 +183,9 @@ struct SessionView: View {
                     Text("\(SessionStyle.title(a.name)) wants to \(a.what).").fontWeight(.medium)
                     HStack(spacing: 8) {
                         Button("Deny") { model.answer(a, allow: false) }
-                        Button("Allow") { model.answer(a, allow: true) }.keyboardShortcut(.defaultAction)
+                        Button("Allow") { model.answer(a, allow: true) }
+                            // Return allows only when it can mean one prompt.
+                            .keyboardShortcut(waitingApprovals.count == 1 ? .defaultAction : nil)
                     }
                 }
                 .modifier(PendingBox())

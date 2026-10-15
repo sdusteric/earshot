@@ -54,6 +54,7 @@ struct EarshotApp: App {
             ActivityView().environment(model)
         }
         .defaultSize(width: 1180, height: 760)
+        .commands { ActivityCommands() }
 
         Settings { SettingsView().environment(model) }
 
