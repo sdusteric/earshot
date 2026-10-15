@@ -36,6 +36,29 @@ public struct BannerBook: Sendable {
     public mutating func clear(session: String) -> Bool { shown.remove(session) != nil }
 }
 
+/// Allow and Deny on a permission prompt's banner. A banner gets them only
+/// when its session has exactly one open prompt, so each button answers one
+/// prompt, never a guess between two. Nothing is ever allowed without a press.
+public enum BannerApproval {
+    /// The prompt a banner for this session would answer, or nil when the
+    /// session has no open prompt or more than one.
+    public static func match(session: String, open: [OpenApproval]) -> OpenApproval? {
+        let these = open.filter { $0.session == session }
+        return these.count == 1 ? these[0] : nil
+    }
+
+    /// The prompt a pressed button answers: the one with that id and session,
+    /// while it is still open. Nil once it was answered, closed or its hook is gone.
+    public static func target(id: String, session: String, open: [OpenApproval]) -> OpenApproval? {
+        open.first { $0.id == id && $0.session == session }
+    }
+
+    /// The banner's text for a prompt: what it asks for ("Wants to run the migration.").
+    public static func body(_ a: OpenApproval) -> String {
+        a.what.isEmpty ? "Wants your OK." : "Wants \(a.what)."
+    }
+}
+
 /// Posts the banners. The app connects the poster; until then, and while the
 /// setting is off, nothing is posted. A banner waits a few seconds first, and
 /// is dropped when the line got said meanwhile (a short dictation held it) or

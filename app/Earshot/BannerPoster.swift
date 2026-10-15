@@ -1,15 +1,39 @@
 import EarshotKit
 import UserNotifications
 
-/// Shows Earshot's banners (see Banners in EarshotKit) and opens Activity
-/// when you click one. Permission is asked the first time a banner is needed.
+/// Shows Earshot's banners (see Banners in EarshotKit) and opens Activity on
+/// the session when you click one. A banner for a permission prompt carries
+/// Allow and Deny, which answer that one prompt (see BannerApproval).
+/// Permission is asked the first time a banner is needed.
 final class BannerPoster: NSObject, UNUserNotificationCenterDelegate, Sendable {
-    private let clicked: @MainActor @Sendable () -> Void
+    /// A click on the banner itself, with the banner's session.
+    private let clicked: @MainActor @Sendable (String?) -> Void
+    /// The open permission prompts, read when a banner is posted.
+    private let approvals: @Sendable () async -> [OpenApproval]
+    /// Allow (true) or Deny pressed on a banner: the prompt's id and session.
+    private let answer: @MainActor @Sendable (_ id: String, _ session: String, _ allow: Bool) -> Void
 
-    init(clicked: @escaping @MainActor @Sendable () -> Void) {
+    static let approvalCategory = "approval"
+    static let allowAction = "allow"
+    static let denyAction = "deny"
+    private static let sessionKey = "session"
+    private static let approvalKey = "approval"
+
+    init(clicked: @escaping @MainActor @Sendable (String?) -> Void,
+         approvals: @escaping @Sendable () async -> [OpenApproval],
+         answer: @escaping @MainActor @Sendable (_ id: String, _ session: String, _ allow: Bool) -> Void) {
         self.clicked = clicked
+        self.approvals = approvals
+        self.answer = answer
         super.init()
-        UNUserNotificationCenter.current().delegate = self
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // Allow needs the Mac unlocked; neither button brings Earshot forward.
+        let allow = UNNotificationAction(identifier: Self.allowAction, title: "Allow", options: [.authenticationRequired])
+        let deny = UNNotificationAction(identifier: Self.denyAction, title: "Deny", options: [])
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: Self.approvalCategory, actions: [allow, deny], intentIdentifiers: [], options: []),
+        ])
     }
 
     /// One banner per session: a newer one replaces it.
@@ -23,6 +47,14 @@ final class BannerPoster: NSObject, UNUserNotificationCenterDelegate, Sendable {
         content.title = banner.title
         content.body = banner.body
         content.threadIdentifier = banner.session
+        var info: [String: String] = [Self.sessionKey: banner.session]
+        // The session's one open prompt, when it has exactly one: the buttons answer it.
+        if let a = BannerApproval.match(session: banner.session, open: await approvals()) {
+            content.categoryIdentifier = Self.approvalCategory
+            content.body = BannerApproval.body(a)
+            info[Self.approvalKey] = a.id
+        }
+        content.userInfo = info
         try? await center.add(UNNotificationRequest(identifier: Self.id(banner.session), content: content, trigger: nil))
     }
 
@@ -53,7 +85,17 @@ final class BannerPoster: NSObject, UNUserNotificationCenterDelegate, Sendable {
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
-        await clicked()
+        let info = response.notification.request.content.userInfo
+        let session = info[Self.sessionKey] as? String
+        switch response.actionIdentifier {
+        case UNNotificationDefaultActionIdentifier:
+            await clicked(session)
+        case Self.allowAction, Self.denyAction:
+            // Only a banner made for one prompt has these; the app checks it is still open.
+            guard let id = info[Self.approvalKey] as? String, let session else { return }
+            await answer(id, session, response.actionIdentifier == Self.allowAction)
+        default:
+            break   // dismissed
+        }
     }
 }

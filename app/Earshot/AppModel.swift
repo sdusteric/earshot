@@ -130,7 +130,11 @@ final class AppModel {
                 self.readMute()
             }
         }
-        let poster = BannerPoster { [weak self] in self?.openActivity() }
+        let book = live.core.approvals
+        let poster = BannerPoster(
+            clicked: { [weak self] session in self?.openActivity(session: session) },
+            approvals: { await book.current },
+            answer: { [weak self] id, session, allow in self?.answer(approvalID: id, session: session, allow: allow) })
         bannerPoster = poster
         Task {
             await live.core.banners.connect(show: { await poster.show($0) }, remove: { poster.remove($0) })
@@ -279,9 +283,9 @@ final class AppModel {
 
     func clearHistory() { Task { await historyStore?.clear() } }
 
-    /// A click on a banner: the Activity window, on the brief.
-    func openActivity() {
-        activityPage = .brief
+    /// A click on a banner: the Activity window, on the banner's session.
+    func openActivity(session: String? = nil) {
+        activityPage = session.map { .session($0) } ?? .brief
         activityRequests += 1
     }
 
@@ -387,6 +391,13 @@ final class AppModel {
         guard let stack else { return }
         approvals.removeAll { $0.id == approval.id }
         Task { await stack.loop.click(approval.id, allow: allow) }
+    }
+
+    /// Allow or Deny pressed on a banner: answers that one prompt the same way.
+    /// A prompt already answered or gone is left alone.
+    func answer(approvalID id: String, session: String, allow: Bool) {
+        guard let a = BannerApproval.target(id: id, session: session, open: approvals) else { return }
+        answer(a, allow: allow)
     }
 
     /// Drops the rows of prompts whose hook is gone (killed without saying so).
