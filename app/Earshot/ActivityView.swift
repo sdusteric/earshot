@@ -10,9 +10,12 @@ struct ActivityView: View {
     @State private var since: Date?
     @State private var search = ""
     @State private var confirmClear = false
+    @State private var switching = false
+    @FocusState private var searchFocused: Bool
     /// The Open group is long and rarely needed: collapsed until you open it.
     @AppStorage("activityOpenExpanded") private var openExpanded = false
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// When you last looked away from this window; the first time, the start of today's history.
     private var lastLooked: Date? {
@@ -32,6 +35,15 @@ struct ActivityView: View {
         }
         .preferredColorScheme(.dark)
         .searchable(text: $search, placement: .sidebar, prompt: "Search what was said")
+        .searchFocused($searchFocused)
+        .sheet(isPresented: $switching) {
+            QuickSwitcher(sessions: ActivityNavigation.sidebarOrder(sessions),
+                          name: { SessionStyle.title(model.displayName($0)) },
+                          other: { s in [s.title, s.project, model.liveSession(s.id)?.cwd].compactMap { $0 } }) { id in
+                go(.session(id))
+            }
+        }
+        .focusedSceneValue(\.activityNav, nav)
         .toolbar {
             if model.activityPage == .history {
                 ToolbarItem {
@@ -82,6 +94,14 @@ struct ActivityView: View {
                 .tag(ActivityPage.brief)
                 Label("Today's History", systemImage: "clock").tag(ActivityPage.history)
             }
+            if sessions.isEmpty {
+                Section("Sessions") {
+                    Text("No Claude Code sessions are open.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .selectionDisabled()
+                }
+            }
             let names = Dictionary(grouping: sessions, by: { NameMatch.normalize(model.displayName($0.id)) })
             ForEach(groups) { g in
                 let rows = ForEach(g.sessions) { s in
@@ -100,6 +120,24 @@ struct ActivityView: View {
             }
         }
         .listStyle(.sidebar)
+        // A session that changes groups (Working to Needs You) moves there rather than jumping.
+        .animation(ActivityMotion.sidebar(reduceMotion), value: ActivityNavigation.layoutKey(sessions))
+    }
+
+    // MARK: Keyboard
+
+    /// The Go menu's actions, while this window is key.
+    private var nav: ActivityNav {
+        ActivityNav(numbered: ActivityNavigation.numbered(sessions).map { .init(id: $0.id, name: SessionStyle.title(model.displayName($0.id))) },
+                    go: { go($0) },
+                    openSwitcher: { switching = true },
+                    focusSearch: { searchFocused = true })
+    }
+
+    /// Opens a page; a search in progress would hide it, so it ends.
+    private func go(_ page: ActivityPage) {
+        search = ""
+        model.activityPage = page
     }
 
     /// A session picked from the menu bar may sit in the collapsed Open group: open it, so the selection shows.
@@ -113,7 +151,7 @@ struct ActivityView: View {
 
     @ViewBuilder private func detail(now: Date) -> some View {
         if !search.trimmingCharacters(in: .whitespaces).isEmpty {
-            HistoryPage(search: search, now: now)
+            HistoryPage(search: search, now: now) { search = "" }
         } else {
             switch model.activityPage {
             case .brief:
@@ -138,34 +176,15 @@ struct ActivityView: View {
 
 }
 
-/// The sidebar's groups, in the order you'd act on them.
+/// The sidebar's groups, in the order you'd act on them (see ActivityGroup).
 struct SessionGroup: Identifiable {
-    enum Kind: Int, CaseIterable {
-        case needsYou, trouble, working, finished, open
-        var title: String {
-            switch self {
-            case .needsYou: "Needs You"
-            case .trouble: "Stuck or Failed"
-            case .working: "Working"
-            case .finished: "Finished"
-            case .open: "Open"
-            }
-        }
-    }
+    typealias Kind = ActivityGroup
 
     let kind: Kind
     let sessions: [SessionInfo]
     var id: Int { kind.rawValue }
 
-    static func kind(_ state: SessionState) -> Kind {
-        switch state {
-        case .needs, .reply: .needsYou
-        case .stuck, .failed: .trouble
-        case .working: .working
-        case .done: .finished
-        case .open, .closed: .open
-        }
-    }
+    static func kind(_ state: SessionState) -> Kind { ActivityGroup(state) }
 
     static func split(_ sessions: [SessionInfo]) -> [SessionGroup] {
         Kind.allCases.compactMap { k in

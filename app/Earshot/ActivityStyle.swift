@@ -25,6 +25,44 @@ enum ActivityPalette {
     }
 }
 
+/// The Activity window's motion. It moves only when a session's state moves:
+/// a session changing groups, something arriving that waits on you or
+/// leaving once answered, a new line in a session. With Reduce Motion each
+/// becomes a crossfade.
+enum ActivityMotion {
+    /// A session moving between groups, and the layout settling around it.
+    static func move(_ reduce: Bool) -> Animation {
+        reduce ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3)
+    }
+
+    /// The sidebar's rows: the system list slides rows it inserts, so with
+    /// Reduce Motion it doesn't animate at all.
+    static func sidebar(_ reduce: Bool) -> Animation? {
+        reduce ? nil : .smooth(duration: 0.3)
+    }
+
+    /// A waiting card or pending box: it settles in from just above, and on
+    /// its way out (answered) shrinks a little as it fades, a bit faster.
+    static func card(_ reduce: Bool) -> AnyTransition {
+        if reduce { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: -8)).combined(with: .scale(scale: 0.98, anchor: .top)),
+            removal: .opacity.combined(with: .scale(scale: 0.97)).animation(.easeOut(duration: 0.2)))
+    }
+
+    /// A new line at the end of a session's conversation rises into place.
+    static func line(_ reduce: Bool) -> AnyTransition {
+        if reduce { return .opacity }
+        return .asymmetric(insertion: .opacity.combined(with: .offset(y: 14)),
+                           removal: .opacity.animation(.easeOut(duration: 0.2)))
+    }
+
+    /// A row that comes or goes in a list of rows, such as While You Were Away.
+    static func row(_ reduce: Bool) -> AnyTransition {
+        reduce ? .opacity : .opacity.combined(with: .offset(y: 6))
+    }
+}
+
 /// Earshot's newest line, typing itself in as it is said.
 struct NowStrip: View {
     let entry: HistoryEntry?

@@ -10,6 +10,9 @@ struct SessionView: View {
     @Environment(AppModel.self) private var model
     @State private var recent: SessionTranscript.Recent?
     @State private var loaded = false
+    /// The first read fills the page at once; only lines that come after it move in.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draft = ""
     @State private var sending = false
     @State private var outcome: String?
@@ -33,6 +36,11 @@ struct SessionView: View {
                 loaded = true
                 try? await Task.sleep(for: .seconds(4))
             }
+        }
+        .task(id: loaded) {
+            guard loaded, !settled else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            settled = true
         }
     }
 
@@ -97,12 +105,22 @@ struct SessionView: View {
     @ViewBuilder private var conversation: some View {
         let items = self.items
         if loaded, items.isEmpty, waitingApprovals.isEmpty {
-            ContentUnavailableView {
-                Label("Nothing to show yet", systemImage: "text.bubble")
-            } description: {
-                Text(recent == nil
-                     ? "Earshot couldn't read this session's conversation. Its own window has everything."
-                     : "This session hasn't said anything yet. Send it a prompt below.")
+            Group {
+                if recent == nil {
+                    ContentUnavailableView {
+                        Label("Can't read this conversation", systemImage: "doc.questionmark")
+                    } description: {
+                        Text("Earshot found no transcript for this session. Its own window has everything.")
+                    } actions: {
+                        Button(isBackground ? "Open in Terminal" : "Show in \(hostName)") { terminalNote = model.openInTerminal(session.id) }
+                    }
+                } else {
+                    ContentUnavailableView {
+                        Label("Nothing to show yet", systemImage: "text.bubble")
+                    } description: {
+                        Text("This session hasn't said anything yet. Send it a prompt below.")
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -110,23 +128,38 @@ struct SessionView: View {
                 ScrollView {
                     // At most 30 turns: a plain stack, so rows that hold grids and code measure right.
                     VStack(alignment: .leading, spacing: 14) {
+                        if loaded, recent == nil, !items.isEmpty {
+                            Label("Earshot can't read this session's transcript, so only what Earshot said shows here.",
+                                  systemImage: "doc.questionmark")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
                         ForEach(items) { item in
                             if item.id == firstNote {
                                 Text("Progress Notes").font(.headline).padding(.bottom, -4)
                             }
                             row(item)
+                                .transition(ActivityMotion.line(reduceMotion))
                         }
                         pending.id("end")
                     }
+                    .animation(settled ? ActivityMotion.move(reduceMotion) : nil, value: conversationKey)
                     .padding(.horizontal, 28)
                     .padding(.vertical, 20)
                     .frame(maxWidth: 860, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .defaultScrollAnchor(.bottom)
-                .onChange(of: items.count) { proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: items.count) {
+                    withAnimation(settled ? ActivityMotion.move(reduceMotion) : nil) { proxy.scrollTo("end", anchor: .bottom) }
+                }
             }
         }
+    }
+
+    /// What the conversation holds, in order: a new line, prompt or question changes it.
+    private var conversationKey: [String] {
+        items.map(\.id) + waitingApprovals.map { "a:\($0.id)" } + [recent?.asked?.question ?? ""]
     }
 
     /// A background job's notes read as one log under one heading.
@@ -184,10 +217,13 @@ struct SessionView: View {
                     Text("\(SessionStyle.title(a.name)) wants to \(a.what).").fontWeight(.medium)
                     HStack(spacing: 8) {
                         Button("Deny") { model.answer(a, allow: false) }
-                        Button("Allow") { model.answer(a, allow: true) }.keyboardShortcut(.defaultAction)
+                        Button("Allow") { model.answer(a, allow: true) }
+                            // Return allows only when it can mean one prompt.
+                            .keyboardShortcut(waitingApprovals.count == 1 ? .defaultAction : nil)
                     }
                 }
                 .modifier(PendingBox())
+                .transition(ActivityMotion.card(reduceMotion))
             }
             if let asked = recent?.asked {
                 VStack(alignment: .leading, spacing: 8) {
@@ -202,6 +238,7 @@ struct SessionView: View {
                     }
                 }
                 .modifier(PendingBox())
+                .transition(ActivityMotion.card(reduceMotion))
             }
         }
     }
@@ -394,6 +431,8 @@ private struct PendingBox: ViewModifier {
 struct HistoryPage: View {
     let search: String
     let now: Date
+    /// Ends the search, when this page shows one.
+    var clearSearch: (() -> Void)?
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -402,11 +441,19 @@ struct HistoryPage: View {
             ContentUnavailableView {
                 Label("History is off", systemImage: "clock.badge.xmark")
             } description: {
-                Text("Earshot isn't keeping what it says or hears. Turn history on in Settings, General.")
+                Text("Earshot isn't keeping what it says or hears, so there is nothing to show or search.")
+            } actions: {
+                Button("Turn On History") { model.turnOnHistory() }
             }
         } else if items.isEmpty {
             if !search.isEmpty {
-                ContentUnavailableView.search(text: search)
+                ContentUnavailableView {
+                    Label("No results for \u{201C}\(search.trimmingCharacters(in: .whitespaces))\u{201D}", systemImage: "magnifyingglass")
+                } description: {
+                    Text("Search looks through today's lines and what you asked. Try a session's name or another word.")
+                } actions: {
+                    if let clearSearch { Button("Clear Search", action: clearSearch) }
+                }
             } else {
                 ContentUnavailableView {
                     Label("Nothing yet today", systemImage: "waveform")
@@ -438,5 +485,12 @@ struct HistoryPage: View {
                 || (e.reply?.localizedCaseInsensitiveContains(q) ?? false)
                 || (e.sessionName?.localizedCaseInsensitiveContains(q) ?? false)
         }
+    }
+}
+
+extension AppModel {
+    /// History back on, kept for 24 hours: the default, as Settings, General sets it.
+    func turnOnHistory() {
+        save { $0.set("EARSHOT_HISTORY", nil) }
     }
 }
