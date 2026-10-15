@@ -382,6 +382,43 @@ actor CountingSpeaker: LineSpeaker {
         return try? String(contentsOfFile: path, encoding: .utf8)
     }
 
+    // MARK: Captions
+
+    /// The orb shows what was heard as the history keeps it: the plain words, without the wake phrase.
+    @Test func whatWasHeardIsShownAsTheHistoryKeepsIt() async {
+        let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
+        let r = await rig([agent("b", "blog", pid: 11)], history: history)
+        let heard = Collected<String>()
+        let lines = await r.loop.heardLines()
+        Task { for await t in lines { await heard.add(t) } }
+        r.heard.yield(.init(text: "Hey Earshot, tell blog to deploy.", trigger: .wake, endedAt: .now,
+                            plain: "Hey Earshot, tell blob to deploy."))
+        #expect(await eventually { await heard.items == ["tell blob to deploy."] })
+        #expect(await history.entries.map(\.text) == (await heard.items))
+    }
+
+    /// Words in an approval window that are not a yes or no are neither kept nor shown.
+    @Test func wordsNotMeantForEarshotAreNotShown() async {
+        let r = await rig([agent("s1", "billing-service")])
+        await r.book.apply(approval())
+        let heard = Collected<String>()
+        let lines = await r.loop.heardLines()
+        Task { for await t in lines { await heard.add(t) } }
+        r.heard.yield(said("I think the build is fine.", .followUp(.approval(id: "1-1-1"))))
+        r.heard.yield(said("Banana."))
+        #expect(await eventually { await heard.items == ["Banana."] })
+    }
+
+    /// Shown even when the history keeps nothing, since nothing shown is stored.
+    @Test func whatWasHeardIsShownWithoutAHistory() async {
+        let r = await rig([agent("b", "blog")])
+        let heard = Collected<String>()
+        let lines = await r.loop.heardLines()
+        Task { for await t in lines { await heard.add(t) } }
+        r.heard.yield(said("Banana."))
+        #expect(await eventually { await heard.items == ["Banana."] })
+    }
+
     @Test func aClickOnAllowWritesAllowOnce() async {
         let history = HistoryStore(url: URL(fileURLWithPath: "/nonexistent/history.jsonl"), keep: { .session })
         let r = await rig([agent("s1", "billing-service")], history: history)

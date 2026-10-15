@@ -192,6 +192,71 @@ actor FakeTransport: SessionTransport {
         #expect(await eventually { await said.items == ["Blog didn't pick it up."] })   // one miss, not two
     }
 
+    /// Receipts say what became of a send, for the line under a reply field.
+    @Test func aReceiptSaysTheSessionStartedWorking() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        let before = Date()
+        _ = await d.send(typed: "run the tests", toSession: "a")
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        let r = await got.items.first
+        #expect(r?.result == .started)
+        #expect(r?.session == "a")
+        #expect((r?.sent ?? .distantPast) >= before)
+        #expect(r?.line == "Billing service started working.")
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func aMissedReceiptIsSaidAndSent() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "run the tests", toSession: "a")
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .missed)
+        #expect(await got.items.first?.line == "Billing service didn't pick it up.")
+        #expect(await said.items == ["Billing service didn't pick it up."])
+    }
+
+    @Test func aSessionThatClosedHasAReceiptToo() async {
+        let (d, runner, _) = make([agent("a", "billing-service", pid: 10)], poll: .milliseconds(50))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setAgents([])
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .closed)
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func noAnswerFromClaudeLeavesTheReceiptUnknown() async {
+        let (d, runner, _) = make([agent("a", "billing-service")], poll: .milliseconds(50))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setFail(true)
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .unknown)
+        #expect(await got.items.first?.line == nil)
+    }
+
+    /// A queued send has no receipt: the session is busy or waits on you.
+    @Test func aQueuedSendHasNoReceipt() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "x", toSession: "a").line == "Queued, billing service is busy.")
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await got.items.isEmpty)
+    }
+
     @Test func afterTwoMissesTheSocketIsSkippedAndTheBrokenLineIsSaidOnce() async {
         let (d, _, _) = make([agent("a", "billing-service")])
         _ = await d.run(.send(target: "billing", prompt: "1"))

@@ -68,6 +68,7 @@ public actor VoiceLoop: ListenObserver {
     public private(set) var thinking = false
     private var thinkingConts: [UUID: AsyncStream<Bool>.Continuation] = [:]
     private var thinkingToken = UUID()
+    private var heardConts: [UUID: AsyncStream<String>.Continuation] = [:]
     /// A command whose answer never comes still lets the orb go.
     static let thinkingLimit: Duration = .seconds(20)
 
@@ -141,15 +142,23 @@ public actor VoiceLoop: ListenObserver {
         }
     }
 
-    /// Saves what you said. An approval window keeps only a clear yes or no;
-    /// anything else there was not meant for Earshot.
-    private func record(_ u: Listener.Utterance) async {
-        guard let history else { return }
-        // What was heard, before session names were boosted into it.
+    /// What the history keeps of an utterance: the words as heard, before session
+    /// names were boosted into them, without the wake phrase. Nil when nothing is
+    /// kept: empty words, or anything but a clear yes or no in an approval window,
+    /// which was not meant for Earshot.
+    static func heardText(_ u: Listener.Utterance) -> String? {
         let said = u.plain ?? u.text
         let text = Listener.stripWake(said) ?? said
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        if case .followUp(.approval) = u.trigger, Grammar.windowAnswer(text) == nil { return }
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        if case .followUp(.approval) = u.trigger, Grammar.windowAnswer(text) == nil { return nil }
+        return text
+    }
+
+    /// Saves what you said, and shows it under the orb (see heardLines).
+    private func record(_ u: Listener.Utterance) async {
+        guard let text = Self.heardText(u) else { return }
+        heardConts.values.forEach { $0.yield(text) }
+        guard let history else { return }
         let e = HistoryEntry(kind: .heard, text: text)
         heardEntry = e.id
         await history.add(e)
@@ -332,6 +341,18 @@ public actor VoiceLoop: ListenObserver {
             await followUps.setSpeaking(nil)
         }
     }
+
+    /// What was heard of each command, as the history records it, the moment it
+    /// is handled: the orb's caption. Shown, never logged.
+    public func heardLines() -> AsyncStream<String> {
+        let (stream, cont) = AsyncStream<String>.makeStream()
+        let id = UUID()
+        heardConts[id] = cont
+        cont.onTermination = { [weak self] _ in Task { await self?.dropHeard(id) } }
+        return stream
+    }
+
+    private func dropHeard(_ id: UUID) { heardConts[id] = nil }
 
     /// Every change of `thinking`, starting with the current value.
     public func thinkingChanges() -> AsyncStream<Bool> {

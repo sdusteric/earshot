@@ -29,6 +29,39 @@ public actor Dispatcher {
         }
     }
 
+    /// What became of a prompt sent to an idle session, once watchReceipt knows.
+    public struct Receipt: Sendable, Equatable {
+        public enum Result: Sendable, Equatable {
+            /// It started working on the prompt (or stopped on a prompt of its own).
+            case started
+            /// Claude Code answered and the session stayed idle: it didn't pick it up.
+            case missed
+            /// The session closed after the send.
+            case closed
+            /// Claude Code never answered: no evidence either way.
+            case unknown
+        }
+        public let session: String
+        public let name: String
+        /// When the prompt was sent.
+        public let sent: Date
+        public let result: Result
+
+        public init(session: String, name: String, sent: Date, result: Result) {
+            self.session = session; self.name = name; self.sent = sent; self.result = result
+        }
+
+        /// The line under the reply field, or nil when there is nothing to add.
+        public var line: String? {
+            switch result {
+            case .started: "\(Dispatcher.upper(name)) started working."
+            case .missed: "\(Dispatcher.upper(name)) didn't pick it up."
+            case .closed: "\(Dispatcher.upper(name)) has closed."
+            case .unknown: nil
+            }
+        }
+    }
+
     public static let didntGetIt = "Sorry, I didn't get that."
 
     /// What Earshot says when it heard words but no command in them: the words,
@@ -60,6 +93,7 @@ public actor Dispatcher {
     /// The greeting's last opener, so two in a row don't start the same way.
     private var lastOpener = -1
     private let log = Logger(subsystem: "com.earshot.app", category: "dispatch")
+    private var receiptConts: [UUID: AsyncStream<Receipt>.Continuation] = [:]
 
     public init(directory: SessionDirectory, store: SessionStore, transport: any SessionTransport, runner: any ClaudeRunner,
                 approvals: ApprovalBook, say: @escaping @Sendable (String) async -> Void,
@@ -220,24 +254,43 @@ public actor Dispatcher {
         return r.status == 0 ? Outcome(line: "Sent to \(s.name).", spokeAbout: s.id) : Outcome(line: "Couldn't reach \(s.name).")
     }
 
+    /// Every receipt watchReceipt settles, for the line under a reply field.
+    /// Carries the session and its name, never the prompt.
+    public func receipts() -> AsyncStream<Receipt> {
+        let (stream, cont) = AsyncStream<Receipt>.makeStream()
+        let id = UUID()
+        receiptConts[id] = cont
+        cont.onTermination = { [weak self] _ in Task { await self?.dropReceipts(id) } }
+        return stream
+    }
+
+    private func dropReceipts(_ id: UUID) { receiptConts[id] = nil }
+
+    private func watchReceipt(_ s: LiveSession, sentAt: Date) async {
+        let result = await checkReceipt(s, sentAt: sentAt)
+        let r = Receipt(session: s.id, name: s.name, sent: sentAt, result: result)
+        receiptConts.values.forEach { $0.yield(r) }
+    }
+
     /// An idle session that got the prompt starts working: the plugin's
     /// status says so, or Claude Code lists it as busy or waiting at a poll.
     /// The plugin is silent while Earshot is muted, so Claude Code is asked too.
-    private func watchReceipt(_ s: LiveSession, sentAt: Date) async {
+    /// A miss is said here; the result goes to receipts().
+    private func checkReceipt(_ s: LiveSession, sentAt: Date) async -> Receipt.Result {
         let clock = ContinuousClock()
         let deadline = clock.now + receiptTimeout
         var nextPoll = clock.now + pollInterval
         var answered = false
         while clock.now < deadline {
-            if await received(s.id, after: sentAt) { misses = 0; return }
+            if await received(s.id, after: sentAt) { misses = 0; return .started }
             if clock.now >= nextPoll {
                 nextPoll = clock.now + pollInterval
                 await directory.refresh()
                 if await directory.lastRefreshSucceeded {
                     answered = true
                     // Gone from the list: the session closed. Not a miss, and nothing to say.
-                    guard let now = await directory.session(s.id) else { return }
-                    if now.busy || now.waiting { misses = 0; return }
+                    guard let now = await directory.session(s.id) else { return .closed }
+                    if now.busy || now.waiting { misses = 0; return .started }
                 }
             }
             try? await Task.sleep(for: .milliseconds(20))
@@ -245,12 +298,12 @@ public actor Dispatcher {
         await directory.refresh()
         if await directory.lastRefreshSucceeded {
             answered = true
-            guard let now = await directory.session(s.id) else { return }
-            if now.busy || now.waiting { misses = 0; return }
+            guard let now = await directory.session(s.id) else { return .closed }
+            if now.busy || now.waiting { misses = 0; return .started }
         }
-        if await received(s.id, after: sentAt) { misses = 0; return }
+        if await received(s.id, after: sentAt) { misses = 0; return .started }
         // Claude Code never answered: no evidence either way.
-        guard answered else { return }
+        guard answered else { return .unknown }
         misses += 1
         log.info("no receipt from a session (\(self.misses, privacy: .public) in a row)")
         if misses >= 2 {
@@ -258,11 +311,12 @@ public actor Dispatcher {
                 if brokenVersions.insert(version).inserted {
                     await say("Sending to sessions stopped working with this Claude Code version. Background sessions still work.")
                 }
-                return
+                return .missed
             }
             if !loggedNoVersion { loggedNoVersion = true; log.info("no Claude Code version, so sending is never marked broken") }
         }
         await say("\(Self.upper(s.name)) didn't pick it up.")
+        return .missed
     }
 
     private func received(_ id: String, after: Date) async -> Bool {
