@@ -92,6 +92,19 @@ struct FakeEngine: SpeechEngine {
         await engine.unload()
     }
 
+    /// A preview in another voice uses the model already loaded, and leaves it loaded
+    /// for the configured voice. Real model, so EARSHOT_TEST_KOKORO=1 only.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["EARSHOT_TEST_KOKORO"] == "1"))
+    func everyVoiceSharesOneLoad() async throws {
+        let model = KokoroModel()
+        let heart = KokoroEngine(voice: "af_heart", model: model), bella = KokoroEngine(voice: "af_bella", model: model)
+        try await heart.render("First line.", to: tempDir().appending(path: "h.wav"))
+        try await bella.render("Hi, I'm Bella.", to: tempDir().appending(path: "b.wav"))
+        try await heart.render("Back to the usual voice.", to: tempDir().appending(path: "h2.wav"))
+        #expect(await model.loads == 1)
+        await model.unload()
+    }
+
     @Test func sayRendersAFile() async throws {
         let url = tempDir().appending(path: "t.aiff")
         try await SayEngine(voice: nil).render("Test.", to: url)

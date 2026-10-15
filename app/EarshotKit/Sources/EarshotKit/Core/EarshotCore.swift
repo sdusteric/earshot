@@ -160,14 +160,19 @@ public final class EarshotCore: Sendable {
     }
 }
 
-/// Builds the engine chain from the config for each line, keeping one Kokoro
-/// engine per voice so the model stays loaded.
-public final class LiveSynth: Synthesizer, @unchecked Sendable {
+/// Builds the engine chain from the config for each line, on one Kokoro model
+/// that every voice shares, so it stays loaded.
+public final class LiveSynth: Synthesizer {
     private let config: @Sendable () -> EarshotConfig
-    private let lock = NSLock()
-    private var kokoro: KokoroEngine?
+    private let kokoro = KokoroModel()
 
     init(config: @escaping @Sendable () -> EarshotConfig) { self.config = config }
+
+    /// Whether any session is working: while one is, Kokoro stays loaded for its next line.
+    public func sessionsWorking(_ working: Bool) async {
+        let c = config()
+        await kokoro.keepLoaded(working && c.engine == .kokoro, voice: c.kokoroVoice)
+    }
 
     public func audio(for line: SpokenLine) async -> URL? {
         let c = config()
@@ -197,12 +202,5 @@ public final class LiveSynth: Synthesizer, @unchecked Sendable {
         "Hold the hotkey to answer it.", "That was too long for me. Try a shorter command.",
     ]
 
-    private func engine(voice: String) -> KokoroEngine {
-        lock.withLock {
-            if let kokoro, kokoro.voice == voice { return kokoro }
-            let fresh = KokoroEngine(voice: voice)
-            kokoro = fresh
-            return fresh
-        }
-    }
+    private func engine(voice: String) -> KokoroEngine { KokoroEngine(voice: voice, model: kokoro) }
 }

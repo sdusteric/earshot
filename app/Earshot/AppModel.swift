@@ -186,6 +186,8 @@ final class AppModel {
             await live.synth.prepare()
         }
         Task { for await list in await live.core.sessions.changes() { knownRaw = list; applyDismissals(); await listeningChanged() } }
+        // While a session works, Kokoro stays loaded, so the line that ends a long turn isn't a cold load.
+        Task { for await list in await live.core.sessions.changes() { await live.synth.sessionsWorking(list.contains { $0.state == .working }) } }
         Task { for await list in await live.core.approvals.changes() { approvals = list } }
         Task { for await s in await live.core.speech.stateChanges() { speechState = s; updateActivity() } }
         Task {
