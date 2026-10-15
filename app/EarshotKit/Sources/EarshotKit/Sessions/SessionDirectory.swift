@@ -21,6 +21,14 @@ public struct LiveSession: Sendable, Equatable, Identifiable {
     public var started: Date? = nil
 
     public var isBackground: Bool { kind == "background" }
+
+    /// What the name adds to the project: "milestones" in "Reflow
+    /// milestones". Empty when the name is the project alone or goes by age.
+    public var topic: String {
+        let n = NameMatch.normalize(name), p = NameMatch.normalize(project)
+        guard !p.isEmpty, n.hasPrefix(p + " ") else { return "" }
+        return String(n.dropFirst(p.count + 1))
+    }
 }
 
 public struct KnownProject: Sendable, Equatable {
@@ -138,7 +146,8 @@ public actor SessionDirectory {
         var merged: [LiveSession] = []
         for a in agents {
             let info = reported[a.sessionId]
-            let project = info?.project ?? projectName(a.cwd)
+            // From the folder, as the plugin works it out, except that home is "home".
+            let project = projectName(a.cwd)
             let agentTitle = a.name.flatMap { SpokenNames.isDefaultName($0, cwd: a.cwd) ? nil : $0 } ?? ""
             let title = info?.title.flatMap { $0.isEmpty ? nil : $0 } ?? agentTitle
             let label = title.isEmpty ? "" : await labeler.label(session: a.sessionId, title: title)
@@ -152,15 +161,18 @@ public actor SessionDirectory {
             let old = previous[id]
             let title = info.title ?? ""
             let label = title.isEmpty ? "" : await labeler.label(session: id, title: title)
-            merged.append(LiveSession(id: id, pid: old?.pid, kind: old?.kind ?? "unknown", cwd: old?.cwd ?? "", project: info.project ?? info.name,
+            let project = old?.project ?? SpokenNames.project(plugin: info.project ?? info.name)
+            merged.append(LiveSession(id: id, pid: old?.pid, kind: old?.kind ?? "unknown", cwd: old?.cwd ?? "", project: project,
                                       title: title, label: label, name: info.name, busy: info.state == .working,
                                       waiting: info.state == .needs, state: info.state,
                                       detail: info.detail, since: info.since, started: old?.started))
         }
-        let names = SpokenNames.names(merged.map {
+        // The store keeps each name while the session lives: a refresh never renames one.
+        let names = await store.nameSessions(merged.map {
             .init(id: $0.id, project: $0.project, title: $0.title, label: $0.label, started: $0.started)
-        })
-        for i in merged.indices { merged[i].name = names[merged[i].id] ?? merged[i].project }
+        }, complete: succeeded)
+        for i in merged.indices { merged[i].name = names[merged[i].id] ?? SpokenNames.capitalized(merged[i].project) }
+        if succeeded { await labeler.keep(Set(merged.map(\.id))) }
         list = merged
         lastRefreshSucceeded = succeeded
         if succeeded { refreshedAt = clock() }
@@ -192,7 +204,7 @@ public actor SessionDirectory {
         // "the second one invoices": any word that picks out one label.
         let words = Set(NameMatch.normalize(target).split(separator: " ").map(String.init))
         let hits = offered.filter { s in
-            [s.label, s.title].contains { name in
+            [s.label, s.title, s.topic].contains { name in
                 NameMatch.normalize(name).split(separator: " ").contains { w in
                     words.contains { NameMatch.score($0, String(w)) >= 0.8 }
                 }
@@ -223,36 +235,39 @@ public actor SessionDirectory {
     }
 
     private func match(_ target: String, in sessions: [LiveSession]) -> Match {
-        // "refund rounding in billing service"
+        // "refund rounding in billing service", "retries in reflow"
         let t = NameMatch.normalize(target)
         if let r = t.range(of: " in ") {
             let label = String(t[..<r.lowerBound]), project = String(t[r.upperBound...])
-            let hits = sessions.filter { NameMatch.score(project, $0.project) >= Self.threshold
-                && max(NameMatch.score(label, $0.label), NameMatch.score(label, $0.title)) >= Self.threshold }
+            let hits = sessions.filter { s in NameMatch.score(project, s.project) >= Self.threshold
+                && [s.label, s.title, s.topic].map { NameMatch.score(label, $0) }.max()! >= Self.threshold }
             if hits.count == 1 { return .one(hits[0]) }
         }
         // The name Earshot says a session by is unique, so saying it back picks that
-        // session, even when another session shares its folder ("reflow" and
-        // "Project status", both in reflow).
+        // session, even when another session shares its folder ("Reflow" and
+        // "Reflow milestones", both in reflow).
         let spoken = sessions.filter { !t.isEmpty && NameMatch.normalize($0.name) == t }
         if spoken.count == 1 { return .one(spoken[0]) }
-        // In order: the project, the label, the title, the spoken name.
-        for key in [\LiveSession.project, \.label, \.title, \.name] {
+        // In order: the project, the label, the title, the spoken name, the topic alone ("milestones").
+        for key in [\LiveSession.project, \.label, \.title, \.name, \.topic] {
             let exact = sessions.filter { NameMatch.normalize($0[keyPath: key]) == t && !t.isEmpty }
             if exact.count == 1 { return .one(exact[0]) }
             if exact.count > 1 { return .several(exact) }
         }
         // Then the closest names.
-        let scored = sessions.map { s in (s, [s.project, s.label, s.title, s.name].map { NameMatch.score(target, $0) }.max() ?? 0) }
+        let scored = sessions.map { s in
+            (s, [s.project, s.label, s.title, s.name, s.topic].map { NameMatch.score(target, $0) }.max() ?? 0)
+        }
         guard let best = scored.map(\.1).max(), best >= Self.threshold else { return .none }
         let top = scored.filter { $0.1 >= best - 0.02 }.map(\.0)
         return top.count == 1 ? .one(top[0]) : .several(top)
     }
 
-    /// Names to boost in transcription: projects and labels, at most 50.
+    /// Names to boost in transcription and to find in a command: the names
+    /// sessions go by, then projects and labels, at most 50.
     public func vocabulary() -> [String] {
         var seen = Set<String>(), out: [String] = []
-        for n in list.flatMap({ [$0.project, $0.label] }) + knownProjects().map(\.name) where !n.isEmpty {
+        for n in list.map(\.name) + list.flatMap({ [$0.project, $0.label] }) + knownProjects().map(\.name) where !n.isEmpty {
             if seen.insert(n.lowercased()).inserted { out.append(n) }
         }
         return Array(out.prefix(50))

@@ -86,7 +86,9 @@ public final class EarshotCore: Sendable {
         Task {
             for await message in stream {
                 switch message {
-                case .say(let s):
+                case .say(let said):
+                    // Said with the name Earshot gives the session, not the plugin's.
+                    let s = await sessions.renamed(said)
                     let line = SpokenLine(text: s.text, kind: s.kind, session: s.session, transcript: s.transcript, name: s.name)
                     await away.note(line)
                     if s.muted == true {
@@ -103,7 +105,8 @@ public final class EarshotCore: Sendable {
                         await speech.sessionAnswered(s.session)
                     }
                     if before != nil { await banners.sessionChanged(s.session, to: s.state) }
-                case .approval(let a):
+                case .approval(var a):
+                    if !a.isClosed, let name = await sessions.name(of: a.session) { a.name = name }
                     let taken = await approvals.apply(a)
                     await events.add(a.isClosed ? "approval closed (\(a.by ?? "?"))" : (taken ? "approval open" : "approval refused"))
                 }

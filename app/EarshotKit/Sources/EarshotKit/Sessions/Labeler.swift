@@ -28,12 +28,22 @@ public struct FoundationLabelModel: LabelModel {
 /// Labels for session titles, cached by session and title. A label the
 /// model made is written to the plugin's live file as line 3, so the
 /// plugin's alerts use it too.
+///
+/// A label is one more way to find a session by voice; a session's name does
+/// not depend on it (see SpokenNames.names). So `label` never waits on the
+/// model: it answers with the rule label at once, and asks the model in the
+/// background, once per session and title, one title at a time. The model's
+/// label is used from the next refresh on.
 public actor Labeler {
     private let model: (any LabelModel)?
     private let liveDir: String
-    /// How long the model may take before the rule label is used.
+    /// How long the model may take before the rule label is kept.
     private let timeout: Duration
     private var cache: [String: String] = [:]
+    /// Titles waiting for the model, oldest first.
+    private var queue: [(session: String, title: String)] = []
+    private var asked = Set<String>()
+    private var worker: Task<Void, Never>?
 
     public init(model: (any LabelModel)?, liveDir: String = ApprovalBook.defaultStateDir + "/live",
                 timeout: Duration = .seconds(3)) {
@@ -42,22 +52,56 @@ public actor Labeler {
         self.timeout = timeout
     }
 
-    public func label(session: String, title: String) async -> String {
-        let key = session + "\u{1f}" + title
+    static func key(_ session: String, _ title: String) -> String { session + "\u{1f}" + title }
+
+    public func label(session: String, title: String) -> String {
+        let key = Self.key(session, title)
         if let l = cache[key] { return l }
+        let rule = SpokenNames.ruleLabel(title)
         // Short means what the plugin would say in 3 words or fewer, so both name it the same way.
         let plain = SpokenNames.plain(title).split(separator: " ").joined(separator: " ")
-        var label: String
-        if SpokenNames.ruleLabel(title) == plain {
-            label = SpokenNames.ruleLabel(title)
-        } else if let model, let m = await bounded(timeout, String?.none, { await model.label(for: title) }), Self.usable(m) {
+        guard rule != plain, model != nil else {
+            cache[key] = rule
+            return rule
+        }
+        if asked.insert(key).inserted {
+            queue.append((session, title))
+            if worker == nil { worker = Task { await self.work() } }
+        }
+        return rule
+    }
+
+    /// Waits until the model has answered every title asked so far.
+    public func settle() async {
+        while let w = worker { await w.value }
+    }
+
+    /// Forgets the labels of sessions that closed, so the cache stays small.
+    public func keep(_ sessions: Set<String>) {
+        let alive: (String) -> Bool = { k in sessions.contains(String(k.prefix { $0 != "\u{1f}" })) }
+        cache = cache.filter { alive($0.key) }
+        asked = asked.filter(alive)
+        queue.removeAll { !sessions.contains($0.session) }
+    }
+
+    private func work() async {
+        while !queue.isEmpty {
+            let (session, title) = queue.removeFirst()
+            await ask(session: session, title: title)
+        }
+        worker = nil
+    }
+
+    private func ask(session: String, title: String) async {
+        guard let model else { return }
+        let key = Self.key(session, title)
+        var label = SpokenNames.ruleLabel(title)
+        if let m = await bounded(timeout, String?.none, { await model.label(for: title) }), Self.usable(m) {
             label = m.trimmingCharacters(in: .whitespacesAndNewlines)
             writeLiveLabel(session: session, title: title, label: label)
-        } else {
-            label = SpokenNames.ruleLabel(title)
         }
-        cache[key] = label
-        return label
+        // The session may have closed while the model thought.
+        if asked.contains(key) { cache[key] = label }
     }
 
     static func usable(_ s: String) -> Bool {
