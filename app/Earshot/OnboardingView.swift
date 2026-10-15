@@ -1,147 +1,321 @@
 import EarshotKit
 import SwiftUI
 
-/// First launch, in the spec's order: what Earshot does, the voice, the
-/// mic and the wake word, the hotkey, the speech models, lowering other
-/// audio, and a first command. Someone who finished an older onboarding
-/// sees only the listening steps, once.
+/// First launch: what Earshot is, the Claude Code plugin, how it stays quiet
+/// when you're busy, what listening needs, a first command, and Activity.
+/// Each permission is asked on the step that needs it, with its reason, and
+/// the rows are the same ones Settings shows. Someone who finished an older
+/// onboarding sees only the listening steps, once.
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("onboarded") private var onboarded = false
     @AppStorage("onboardingVersion") private var onboardingVersion = 0
     @State private var plan: [OnboardingStep] = []
     @State private var index = 0
+    /// When the Try It step appeared: a command heard after this is the try.
+    @State private var tryStart = Date.distantFuture
+    /// Earshot has talked during these steps, so macOS has asked about system audio already.
+    @State private var spoke = false
 
     private var steps: [OnboardingStep] { plan.isEmpty ? OnboardingStep.allCases : plan }
     private var step: OnboardingStep { steps[min(index, steps.count - 1)] }
     private var isLast: Bool { index >= steps.count - 1 }
-    private var upgrading: Bool { steps.first == .mic }
+    private var upgrading: Bool { steps.first == .listen }
+    private var keyName: String? { model.config.hotkey.keyName }
 
-    private var keyName: String? {
-        switch model.config.hotkey {
-        case .rightOption: "Right Option"
-        case .rightCommand: "Right Command"
-        case .off: nil
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.top, 28)
+                .padding(.horizontal, 40)
+                .padding(.bottom, 8)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            Divider()
+            footer
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+        }
+        .frame(width: 540, height: 560)
+        .onAppear {
+            if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
+        }
+        .onChange(of: index) {
+            if step == .tryIt { tryStart = Date() }
+            // Seen to the end: closing the window now counts as done.
+            if isLast { finish() }
+        }
+        .permissionRefresh(model)
+        .task { await model.checkPlugin(force: true) }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        VStack(spacing: 12) {
+            orb
+            if upgrading, index == 0 {
+                Text("New: Earshot can listen. Set it up in a few steps.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Text(title)
+                .font(.title2.weight(.semibold))
+                .multilineTextAlignment(.center)
+            Text(lead)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(2)
+                .frame(maxWidth: 440)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if upgrading, index == 0 {
-                Text("New: Earshot can listen. Set it up in a few steps.").foregroundStyle(.secondary)
+    /// The product's face, on every step, so it answers when Earshot talks or listens.
+    /// On Try It a click on it listens for one command, as in Activity.
+    private var orb: some View {
+        OrbView(size: 76, restingColor: .white, spinsWhenIdle: true)
+            .background(Circle().fill(.black))
+            .clipShape(.circle)
+            .overlay(Circle().stroke(ActivityPalette.tick, lineWidth: 1))
+            .contentShape(.circle)
+            .onTapGesture { if step == .tryIt { model.tapToTalk() } }
+            .help(step == .tryIt ? "Click and say a command" : "")
+            .accessibilityAddTraits(step == .tryIt ? .isButton : [])
+            .accessibilityHint(step == .tryIt ? "Listens for one command" : "")
+            .padding(.bottom, 6)
+    }
+
+    private var title: String {
+        switch step {
+        case .intro: "Earshot Speaks Up When Claude Code Needs You"
+        case .plugin: "Connect Claude Code"
+        case .quiet: "Quiet When You're Busy"
+        case .listen: "Talk Back"
+        case .tryIt: "Try It"
+        case .activity: "Catch Up in Activity"
+        }
+    }
+
+    private var lead: String {
+        switch step {
+        case .intro:
+            "It tells you when a session needs your OK, might be stuck, or finishes. Talk back to answer, send a prompt, or ask what everyone is doing."
+        case .plugin:
+            "Earshot hears your sessions through a small Claude Code plugin. Sessions that are already open pick it up when they restart."
+        case .quiet:
+            "During calls and in full screen apps, Earshot holds its lines and catches up after. A session that needs you can show a notification meanwhile."
+        case .listen:
+            if let key = keyName {
+                "Hold \(key), say what you want, and let go. Audio stays in memory on this Mac and is never saved or sent."
+            } else {
+                "Say \u{201C}Hey Earshot\u{201D}, or click the orb in Activity, and say what you want. Audio stays in memory on this Mac for a few seconds and is never saved or sent."
             }
-            switch step {
-            case .intro:
-                Text("Earshot reads Claude Code updates aloud, and takes commands by voice").font(.title2.bold())
-                Text("It tells you when a session needs your OK, might be stuck, or finishes. Say \u{201C}Hey Earshot\u{201D} or hold a key to send a session a prompt, ask what everyone is doing, stop a session, start one, or answer a permission prompt with yes or no.")
-            case .plugin:
-                Text("Connect to Claude Code").font(.title2.bold())
-                Text("Earshot hears about your sessions through a small Claude Code plugin. It tells Earshot when a session needs you, might be stuck, or finishes, and lets you answer permission prompts by voice.")
-                PluginStatusRow()
-                if model.notificationsUndecided {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("When Earshot can't speak, for example during a call, a session that needs you shows a notification.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 8)
-                        Button("Allow Notifications") { Task { await model.requestNotifications() } }
+        case .tryIt:
+            if let key = keyName {
+                "Hold \(key) and ask: \u{201C}What's everyone doing?\u{201D} Then let go."
+            } else if model.config.wakeWord {
+                "Say: \u{201C}Hey Earshot, what's everyone doing?\u{201D}"
+            } else {
+                "Click the orb and ask: \u{201C}What's everyone doing?\u{201D}"
+            }
+        case .activity:
+            "Activity shows who is waiting on you, with the answer right there, and what each session did while you were away."
+        }
+    }
+
+    // MARK: Steps
+
+    @ViewBuilder private var content: some View {
+        switch step {
+        case .intro: intro
+        case .plugin:
+            rows {
+                Section { PluginStatusRow() }
+            }
+        case .quiet:
+            rows {
+                Section {
+                    NotificationsPermissionRow()
+                    Toggle(isOn: Binding(get: { model.config.duckEnabled },
+                                         set: { on in model.save { $0.set("EARSHOT_DUCK", on ? nil : "off") } })) {
+                        Text("Lower other audio while Earshot talks")
+                        Text("Music and videos go down to \(Int(model.config.duckLevel * 100))%. macOS asks once to allow system audio recording; Earshot never records them.")
                     }
+                    LaunchAtLoginToggle()
                 }
-            case .voice:
-                Text("Voice").font(.title2.bold())
-                Text("Earshot speaks with \(model.config.engine == .kokoro ? "Kokoro, on this Mac" : model.config.engine == .elevenlabs ? "ElevenLabs" : "the Mac's own voice"). You can change it in Settings.")
-                Button("Play a Test Line") { model.playTestLine() }
-            case .mic:
-                Text("Microphone and wake word").font(.title2.bold())
-                Text("Earshot hears you on this Mac only. Audio is kept in memory for a few seconds and never saved or sent.")
-                if model.micAllowed {
-                    Label("The microphone is allowed.", systemImage: "checkmark.circle")
-                } else {
-                    if model.micDenied {
-                        Text("Earshot isn't allowed to use the mic. Turn it on in System Settings, Privacy & Security, Microphone.")
-                            .foregroundStyle(.secondary)
-                    }
-                    Button(AppModel.permissionAction(denied: model.micDenied, ask: "Allow the Microphone")) {
-                        Task { await model.requestMic() }
-                    }
+            }
+        case .listen:
+            rows {
+                Section {
+                    MicPermissionRow()
+                    SpeechModelsRow()
                 }
-                Toggle("Listen for \u{201C}Hey Earshot\u{201D} (the mic indicator stays on while it listens)",
-                       isOn: Binding(get: { model.config.wakeWord },
-                                     set: { on in model.save { $0.set("EARSHOT_WAKE", on ? "on" : "off") } }))
+                Section {
+                    Picker("Hold to talk", selection: Binding(get: { model.config.hotkey },
+                                                              set: { v in model.save { $0.set("EARSHOT_HOTKEY", v.rawValue) } })) {
+                        Text("Right Option").tag(EarshotConfig.Hotkey.rightOption)
+                        Text("Right Command").tag(EarshotConfig.Hotkey.rightCommand)
+                        Divider()
+                        Text("Off").tag(EarshotConfig.Hotkey.off)
+                    }
+                    if model.config.hotkey != .off { HotkeyPermissionRow() }
+                    Toggle(isOn: Binding(get: { model.config.wakeWord },
+                                         set: { on in model.save { $0.set("EARSHOT_WAKE", on ? "on" : "off") } })) {
+                        Text("Also listen for \u{201C}Hey Earshot\u{201D}")
+                        Text("The mic indicator stays on while Earshot listens for it.")
+                    }
                     .disabled(!model.micAllowed)
-            case .hotkey:
-                Text("Hold to talk").font(.title2.bold())
-                if let key = keyName {
-                    Text("Hold \(key), say the command, and let go. A quick tap or \(key) with another key does nothing. macOS asks to allow Input Monitoring so Earshot can see that key.")
-                    if model.hotkeyAllowed {
-                        Label("The hotkey is allowed.", systemImage: "checkmark.circle")
-                    } else {
-                        if model.hotkeyDenied {
-                            Text("Earshot isn't allowed to see the key. Turn it on in System Settings, Privacy & Security, Input Monitoring.")
-                                .foregroundStyle(.secondary)
-                        }
-                        Button(AppModel.permissionAction(denied: model.hotkeyDenied, ask: "Allow the Hotkey")) {
-                            model.requestHotkeyAccess()
-                        }
-                    }
-                } else {
-                    Text("The hold-to-talk hotkey is off. You can turn it on in Settings, under Listening.")
                 }
-            case .models:
-                Text("Speech models").font(.title2.bold())
-                Text("Listening needs about 1 GB of speech models, downloaded once. Earshot keeps speaking while they download.")
-                switch model.modelState {
-                case .ready: Label("The models are ready.", systemImage: "checkmark.circle")
-                case .downloading(let p):
-                    ProgressView(value: p) { Text("Downloading") } currentValueLabel: { Text(model.modelState.percent ?? "") }
-                case .missing: Button(ListenModelFiles.partial ? "Finish Download" : "Download") { model.downloadModels() }
-                case .failed: Button("Try Again") { model.downloadModels() }
-                }
-            case .ducking:
-                Text("Lower other audio").font(.title2.bold())
-                Text("While Earshot talks or listens, it can turn music and videos down to \(Int(model.config.duckLevel * 100))%. macOS will ask for permission to capture system audio. Earshot only plays other apps back quieter; it never records or saves their audio.")
-                Toggle("Lower other apps while Earshot talks",
-                       isOn: Binding(get: { model.config.duckEnabled },
-                                     set: { on in model.save { $0.set("EARSHOT_DUCK", on ? nil : "off") } }))
-                LaunchAtLoginToggle()
-            case .tryIt:
-                Text("Try it").font(.title2.bold())
-                if model.config.wakeWord {
-                    Text("Say: \u{201C}Hey Earshot, what's everyone doing?\u{201D}")
-                } else if let key = keyName {
-                    Text("Hold \(key) and say: \u{201C}What's everyone doing?\u{201D}")
-                } else {
-                    Text("Turn on the wake word or the hotkey in Settings, under Listening, to give Earshot a command.")
-                }
-                if let b = model.listenBlock, model.config.wakeWord { Text(model.blockLine(b)).foregroundStyle(.secondary) }
+            }
+        case .tryIt: tryIt
+        case .activity: activity
+        }
+    }
+
+    /// Setting rows in the grouped style Settings uses, on the window's own background.
+    private func rows<S: View>(@ViewBuilder _ sections: () -> S) -> some View {
+        Form { sections() }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, 12)
+    }
+
+    private var intro: some View {
+        VStack(spacing: 10) {
+            Button("Hear an Example") {
+                model.playTestLine("Billing service finished: the migration ran and all tests pass.")
+                spoke = true
+            }
+            .controlSize(.large)
+            if model.config.duckEnabled {
+                Text("The first time Earshot talks, macOS asks to allow system audio recording. Earshot uses it only to turn other audio down.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 400)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            HStack {
-                if index > 0 { Button("Back") { index -= 1 } }
-                Spacer()
-                Button(isLast ? "Done" : "Continue") {
-                    if !isLast {
-                        if step == .ducking, model.config.duckEnabled { model.playTestLine() }   // the first tap: macOS asks now
-                        index += 1
-                    } else {
-                        onboarded = true
-                        onboardingVersion = Onboarding.version
-                        dismissWindow(id: "onboarding")
-                    }
+            Text("Setup takes about a minute.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 16)
+        }
+        .padding(.top, 18)
+    }
+
+    private var tryIt: some View {
+        VStack(spacing: 10) {
+            tryStatus
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.updatesFrequently)
+            Spacer()
+            VStack(spacing: 4) {
+                Text("More to try, with a session's name").font(.headline)
+                Text("\u{201C}Tell billing to run the tests\u{201D}")
+                Text("\u{201C}Stop billing\u{201D}")
+                Text("\u{201C}Yes\u{201D}, when a session asks for permission")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            Spacer()
+            Text(tryFootnote)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 16)
+        }
+        .padding(.top, 18)
+    }
+
+    /// What happened to the try: listening, working, Earshot's answer, or why it can't hear you yet.
+    @ViewBuilder private var tryStatus: some View {
+        if let heard = model.history.last(where: { $0.kind == .heard && $0.date >= tryStart }) {
+            VStack(spacing: 6) {
+                Label("You said \u{201C}\(heard.text)\u{201D}", systemImage: "checkmark.circle.fill")
+                    .font(.headline)
+                if let reply = heard.reply { Text(reply).foregroundStyle(.secondary) }
+            }
+        } else if case .capturing = model.listenPhase {
+            Text("Listening\u{2026}").font(.headline)
+        } else if model.listenPhase == .transcribing || model.thinking {
+            Text("Working on it\u{2026}").font(.headline)
+        } else if let b = model.commandBlock {
+            Text(model.blockLine(b)).foregroundStyle(.secondary)
+        } else {
+            Text("Earshot answers out loud.").foregroundStyle(.secondary)
+        }
+    }
+
+    private var tryFootnote: String {
+        if keyName != nil, model.config.wakeWord {
+            "You can also say \u{201C}Hey Earshot\u{201D} first, or click the orb."
+        } else if keyName != nil {
+            "You can also click the orb. With no sessions open, Earshot says so."
+        } else {
+            "Turn on a hotkey in Settings, Listening, to talk without clicking."
+        }
+    }
+
+    private var activity: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Image(nsImage: MenuIcon.image(.idle))
+                    .renderingMode(.template)
+                    .accessibilityHidden(true)
+                Text("Earshot lives in the menu bar. Click its icon for your sessions, recent lines, and mute.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 420)
+            Spacer()
+        }
+        .padding(.top, 18)
+    }
+
+    // MARK: Footer
+
+    private var footer: some View {
+        HStack {
+            Text("\(index + 1) of \(steps.count)")
+                .font(.callout)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Step \(index + 1) of \(steps.count)")
+            Spacer()
+            if index > 0 { Button("Back") { index -= 1 } }
+            if isLast {
+                Button("Open Activity") {
+                    finish()
+                    dismissWindow(id: "onboarding")
+                    model.activityPage = .brief
+                    NSApp.activate()
+                    openWindow(id: "activity")
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button("Continue") {
+                    // macOS asks for system audio recording the first time Earshot talks: now, with the reason on screen.
+                    if step == .quiet, model.config.duckEnabled, !spoke { model.playTestLine(); spoke = true }
+                    index += 1
                 }
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(24)
-        .frame(width: 480, height: 320)
-        .onAppear {
-            if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
-        }
-        .permissionRefresh(model)
-        .task {
-            model.refreshNotifications()
-            await model.checkPlugin(force: true)
-        }
+        .controlSize(.large)
+    }
+
+    private func finish() {
+        onboarded = true
+        onboardingVersion = Onboarding.version
     }
 }

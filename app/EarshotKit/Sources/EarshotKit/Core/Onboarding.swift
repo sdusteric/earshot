@@ -1,6 +1,8 @@
-/// The first-launch steps, in the spec's order.
+/// The first-launch steps, in order: what Earshot is, the Claude Code plugin,
+/// how it stays out of the way (notifications, other audio, login), what
+/// listening needs (mic, hotkey, speech models), a first command, and Activity.
 public enum OnboardingStep: Int, Sendable, CaseIterable {
-    case intro, plugin, voice, mic, hotkey, models, ducking, tryIt
+    case intro, plugin, quiet, listen, tryIt, activity
 }
 
 public enum Onboarding {
@@ -11,7 +13,7 @@ public enum Onboarding {
     /// finished an older onboarding, nothing after that.
     public static func steps(onboarded: Bool, storedVersion: Int) -> [OnboardingStep] {
         if !onboarded { return OnboardingStep.allCases }
-        if storedVersion < version { return [.mic, .hotkey, .models, .tryIt] }
+        if storedVersion < version { return [.listen, .tryIt, .activity] }
         return []
     }
 }
