@@ -402,21 +402,30 @@ final class AppModel {
     func listeningChanged() async {
         guard let stack else { return }
         let c = configBox.value
-        micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        // Asked off the main thread: each answer is a round trip to tccd (15 ms was
+        // seen), and this runs on every session status.
+        let mic = await Task.detached { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }.value
+        if mic != micAllowed { micAllowed = mic }
         var i = listenInputs(c)
         core?.availability.canListen = ListenPolicy.canListen(i)
         // Locked, asleep or without the mic: no approval window or hotkey may open it.
         await stack.listener.setBlocked(ListenPolicy.commandBlock(i) != nil)
-        // At most once a minute: a failing `claude agents` is not cached by the directory.
-        if stack.claudePath != nil, lastDirectoryCheck.map({ Date().timeIntervalSince($0) >= 60 }) ?? true {
+        // At most once a minute (a failing `claude agents` is not cached by the directory),
+        // every 3 minutes in Low Power Mode, and not while locked or asleep: coming back
+        // changes the watch's state, which runs this again.
+        let w = watch.state
+        if stack.claudePath != nil,
+           Cadence.directoryRefreshDue(last: lastDirectoryCheck, locked: w.locked, asleep: w.asleep, lowPower: w.lowPower) {
             lastDirectoryCheck = Date()
-            refreshDirectory(stack)
+            refreshDirectory(stack, floor: Cadence.directoryRefresh(locked: w.locked, asleep: w.asleep, lowPower: w.lowPower) ?? 60)
         }
         let live = await stack.directory.sessions
         directorySessions = live.count
         if live != liveSessions { liveSessions = live }
         i = listenInputs(c)
-        listenBlock = ListenPolicy.wakeBlock(i)
+        // Set only on a change: setting the same value still redraws every view that reads it.
+        let block = ListenPolicy.wakeBlock(i)
+        if block != listenBlock { listenBlock = block }
         hotkeyTap?.setHotkey(c.hotkey)
         await stack.listener.setSensitivity(c.wakeSensitivity)
         // A new mic choice applies now, even while the wake word holds the mic open.
@@ -434,16 +443,16 @@ final class AppModel {
         if blocked != commandBlock { commandBlock = blocked }
         await stack.listener.setBlocked(blocked != nil)
         let fresh = ListenPolicy.wakeBlock(now)
-        listenBlock = fresh
+        if fresh != listenBlock { listenBlock = fresh }
         await stack.listener.setWakeArmed(fresh == nil && wakeLoaded)
         scheduleWakeUnload(blocked: fresh != nil)
     }
 
     /// Asks `claude agents` for the session list in a task of its own, so no caller of
     /// listeningChanged waits for it (it can take seconds). Applies the result when the count changed.
-    private func refreshDirectory(_ stack: ListenStack) {
+    private func refreshDirectory(_ stack: ListenStack, floor: TimeInterval) {
         Task {
-            await stack.directory.refresh(ifOlderThan: 60)
+            await stack.directory.refresh(ifOlderThan: floor)
             let live = await stack.directory.sessions
             if live != liveSessions { liveSessions = live }
             let count = live.count
