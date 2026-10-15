@@ -1,4 +1,7 @@
 # transcript	expected
+# An answer naming no session (answer|allow|) is scored as said in the approval window.
+# quiet: nothing is done and nothing is said. noanswer: said in the approval window, it answers nothing.
+# confirmSend counts as send: it is read back and sent on a yes.
 could billing service run the integration tests again	send|billing service
 have blog rebuild the RSS feed	send|blog
 I need finebrief to look at the failing build	send|finebrief
@@ -87,7 +90,7 @@ tell docs site no	answer|deny|docs site
 the weather is nice today	unknown
 what time is it	unknown
 play some music	unknown
-uh never mind	unknown
+uh never mind	quiet
 I was talking to someone else	unknown
 open safari	unknown
 remind me to call mom	unknown
@@ -99,3 +102,8 @@ what's two plus two	unknown
 turn off the lights	unknown
 that's all for now	unknown
 sorry wrong button	unknown
+let it go	noanswer
+let that go	noanswer
+let me think	noanswer
+hold on a second	noanswer
+wait what was that	noanswer

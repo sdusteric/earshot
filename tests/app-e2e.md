@@ -61,6 +61,7 @@ playback within 3 seconds (a speaker in standby).
 | Mic hog | Not run: needs a program that holds the mic open |
 | FluidListeningTests | 23 of 24. The wake spotter woke on "Good morning everyone, the build passed." (macOS `say` voice) at sensitivity 5, the default |
 | eval-parser | 65 of 100 (21 by the grammar). Bar 95%. Most misses are phrasings the grammar lacks that the on-device model answers as unknown ("let billing know...", "make billing stop", "absolutely not") |
+| eval-parser, after the fixes the same day | 103 of 105 (the 100 plus 5 window phrases that must answer nothing). Held out, never tuned on: 56 of 60 and 58 of 60. The eval warms the model while you would be talking (1 s, `EARSHOT_EVAL_TALK_MS`), as the app does; without that wait, on a busy Mac, warm-up counts against the 3 s limit and the score falls to about 85%. The hearing bench (240 synthetic clips) is level: 144 right before, 145 after, still 0 unsafe; two cut clips moved from "didn't get it" to a harmless read (a roll call, or staying quiet). A review found casual phrases that would send or stop ("make it so", "will the blog be done soon", "stop billing, it's about to delete..." read as a prompt); all were fixed and have tests |
 | eval-listener | Not run: needs recordings of your voice (`eval-listener.sh record`) |
 | send-integration | Not run: Claude Code needs this folder trusted first (run `claude` here once) |
 

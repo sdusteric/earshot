@@ -35,10 +35,13 @@ public enum Grammar {
 
         /// The rest after the first of these phrases that starts the words.
         func after(_ phrases: [String]) -> Words? {
-            for p in phrases.sorted(by: { $0.count > $1.count }) {
-                let pk = p.split(separator: " ").map(String.init)
-                if keys.starts(with: pk) { return slice(pk.count..<count) }
-            }
+            after(split: phrases.sorted(by: { $0.count > $1.count }).map { $0.split(separator: " ").map(String.init) })
+        }
+
+        /// The same, for phrases already split into words, longest first.
+        func after(split phrases: [[String]]) -> Words? {
+            guard let first = keys.first else { return nil }
+            for pk in phrases where pk.first == first && keys.starts(with: pk) { return slice(pk.count..<count) }
             return nil
         }
 
@@ -73,6 +76,15 @@ public enum Grammar {
                 return (slice(0..<(n.count + 1)), slice((n.count + 1)..<count))
             }
             return nil
+        }
+
+        /// Split after a known name, with an optional "the" before it and "session" or "one" after it.
+        func splitAtKnownSession(_ known: [String]) -> (Words, Words)? {
+            guard let (t, p) = splitAtKnown(known) else { return nil }
+            if let f = p.keys.first, ["session", "one"].contains(f) {
+                return (slice(0..<(t.count + 1)), p.slice(1..<p.count))
+            }
+            return (t, p)
         }
 
         func trimmingFillers() -> Words {
@@ -128,22 +140,24 @@ public enum Grammar {
     /// An answer is a yes or no word, then at most a few words from its tail
     /// ("okay, go ahead", "no, don't"). Any other word makes it no answer.
     static let yesWords: Set<String> = ["yes", "yeah", "yep", "yup", "sure", "okay", "ok", "allow", "approve", "approved",
-                                        "go", "do", "alright", "fine"]
+                                        "go", "do", "alright", "fine", "let", "absolutely", "definitely"]
     /// The yes words that count outside a window, where a short noise is often heard as "okay" or "yeah".
     static let plainYesWords: Set<String> = ["yes", "allow", "approve", "approved"]
     static let yesTail: Set<String> = ["go", "ahead", "do", "it", "for", "that", "that's", "please", "thing", "once",
                                        "thanks", "now", "sure", "yes", "yeah", "yep", "okay", "ok", "fine", "alright",
-                                       "right", "then", "allow", "approve"]
+                                       "right", "then", "allow", "approve", "let", "run", "with", "them", "ahead"]
     static let noWords: Set<String> = ["no", "nope", "nah", "not", "don't", "dont", "deny", "stop", "cancel"]
     static let noTail: Set<String> = ["don't", "dont", "do", "it", "that", "way", "thanks", "thank", "you", "please",
-                                      "not", "now", "yet", "stop", "deny", "no", "nope", "cancel"]
+                                      "not", "now", "yet", "stop", "deny", "no", "nope", "cancel", "let", "them", "for", "allow"]
 
     static let everyone: Set<String> = [
         "what's everyone doing", "what is everyone doing", "whats everyone doing", "what's everybody doing",
         "what is everybody doing", "what's everyone up to", "what's everybody up to", "roll call", "status",
         "status update", "give me a status update", "give me a status", "status report", "what's happening",
         "what's going on", "what is going on", "how's everything going", "how is everything going",
-        "how's everything", "what's the status", "everyone's status",
+        "how's everything", "what's the status", "everyone's status", "how's it all going", "how is it all going",
+        "catch me up", "fill me in", "what did i miss", "bring me up to speed", "any updates", "give me an update",
+        "give me the rundown", "give me a rundown",
         // What needs you: the roll call says those first.
         "who needs me", "what needs me", "does anything need me", "does anyone need me", "does anybody need me",
         "is anyone waiting on me", "is anything waiting on me", "is anybody waiting on me", "who's waiting on me",
@@ -167,6 +181,10 @@ public enum Grammar {
         "got it", "cool", "great", "perfect", "nice", "awesome", "all right", "alright", "good",
     ]
 
+    /// Said to the session Earshot last spoke about: go on with what it was doing.
+    static let continuePhrases: Set<String> = ["keep going", "carry on", "continue", "go on", "keep at it",
+                                               "keep working", "keep it going"]
+
     static let repeatPhrases: Set<String> = [
         "repeat that", "repeat it", "repeat", "repeat that please", "say that again", "say it again", "say again",
         "say that again please", "come again", "what did you say", "what was that", "sorry what was that",
@@ -186,6 +204,8 @@ public enum Grammar {
         ("how are", "going"), ("how are", "doing"),
         ("how's the", ""), ("how is the", ""), ("how's", ""), ("how is", ""), ("how are", ""), ("how you", ""),
         ("how's your", ""), ("how your", ""),
+        ("tell me what", "did"), ("tell me what", "is doing"), ("tell me what", "has done"), ("what did", "do"),
+        ("what has", "done"), ("has", "finished"), ("did", "finish"),
         ("", "status"),
     ]
 
@@ -225,6 +245,20 @@ public enum Grammar {
         }
     }
 
+    /// Words that only point at a session around its name ("the blog one", "the billing session").
+    static let nameTails: Set<String> = ["one", "thing", "request", "project", "folder", "job"]
+
+    /// A target as said, without what only points at it: "the blog one" is "the blog".
+    static func cleanTarget(_ w: Words) -> Words {
+        var t = Words(w.text)
+        while let l = t.keys.last, t.count > 1, nameTails.contains(l) || l == "please" { t = t.slice(0..<(t.count - 1)) }
+        // "earshot's request": the name without its 's.
+        if let l = t.said.last, l.lowercased().hasSuffix("'s") || l.lowercased().hasSuffix("\u{2019}s") {
+            t = Words((t.said.dropLast() + [String(l.dropLast(2))]).joined(separator: " "))
+        }
+        return t
+    }
+
     /// A name as words: lowercase, no leading "the", no trailing "session".
     static func nameWords(_ s: String) -> [String] {
         var w = Words(s).keys
@@ -245,8 +279,12 @@ public enum Grammar {
     static func yesOrNo(_ text: String, yes: Set<String>, no: Set<String>) -> Bool? {
         var w = Words(text)
         while let f = w.keys.first, ["um", "uh", "erm", "hmm", "oh", "well"].contains(f) { w = w.slice(1..<w.count) }
+        // "Absolutely not": the not answers.
+        if w.count >= 2, ["absolutely", "definitely", "certainly"].contains(w.keys[0]), w.keys[1] == "not" { w = w.slice(1..<w.count) }
         guard let first = w.keys.first, w.count <= 5 else { return nil }
         let tail = Set(w.keys.dropFirst())
+        // "Let it go", "let that go": drop it, not a yes.
+        if first == "let", tail.contains("go") { return nil }
         if yes.contains(first), tail.isSubset(of: yesTail) { return true }
         if no.contains(first), tail.isSubset(of: noTail) { return false }
         return nil
@@ -260,26 +298,45 @@ public enum Grammar {
         if windowAnswer(transcript) == true {
             return Words(transcript).keys.contains { $0 == "go" || $0 == "do" } ? .unknown : .quiet
         }
+        // Before fillers go: "OK for docs site" starts with its yes.
+        if let c = answer(Words(transcript), known: known) { return c }
         var w = Words(transcript).trimmingFillers()
         // "Earshot, ..." speaks to Earshot itself, not to a session called earshot.
         if w.keys.first == "earshot", w.said.first?.hasSuffix(",") == true { w = w.slice(1..<w.count).trimmingFillers() }
         guard !w.isEmpty else { return .unknown }
         if noOps.contains(w.key) { return .quiet }
         if repeatPhrases.contains(w.key) { return .repeatLast }
-        if let c = answer(w, known: known) ?? status(w, known: known) ?? stop(w, known: known) ?? start(w) ?? send(w, known: known) { return c }
+        if continuePhrases.contains(w.key) { return .send(target: nil, prompt: w.text) }
+        if let c = answer(w, known: known) ?? status(w, known: known) ?? stop(w, known: known) ?? start(w, known: known) ?? send(w, known: known) { return c }
         return nil
     }
 
     // MARK: - Shapes
 
     private static func answer(_ w: Words, known: [String]) -> Command? {
-        for (prefixes, allow) in [(["yes to", "yes for", "yes", "yeah", "approve", "allow", "go ahead for"], true),
-                                  (["no to", "no for", "no", "deny", "don't allow", "reject"], false)] {
+        for (prefixes, allow) in [(["yes to", "yes for", "yes", "yeah", "approve", "allow", "go ahead for", "go ahead with",
+                                    "ok for", "okay for", "yes go ahead with"], true),
+                                  (["no to", "no for", "no", "deny", "don't allow", "reject", "nope", "nah", "no not for",
+                                    "nope not for", "nah not for", "not for", "no not", "nope not", "nah not"], false)] {
             guard var rest = w.after(prefixes), !rest.isEmpty, rest.count <= 4, rest.keys.first != "and" else { continue }
             if rest.keys.first == "it" { rest = rest.slice(1..<rest.count) }
             if rest.isEmpty { return .answer(allow: allow, target: nil) }
-            guard looksKnown(rest.text, known: known) else { continue }
-            return .answer(allow: allow, target: rest.text)
+            let t = cleanTarget(rest)
+            guard looksKnown(t.text, known: known) else { continue }
+            return .answer(allow: allow, target: t.text)
+        }
+        // "Let billing do it", "don't let billing do that", "tell the blog no".
+        for (prefixes, allow) in [(["let"], true), (["don't let", "no don't let", "do not let", "no do not let"], false)] {
+            guard let rest = w.after(prefixes) else { continue }
+            for tail in ["do it", "do that", "go ahead", "run it", "have it"] {
+                if let t = rest.before([tail]), plainName(t, known: known) {
+                    return .answer(allow: allow, target: cleanTarget(t).text)
+                }
+            }
+        }
+        if let rest = w.after(["tell"]), let l = rest.keys.last, rest.count >= 2, ["yes", "no"].contains(l) {
+            let t = rest.slice(0..<(rest.count - 1))
+            if plainName(t, known: known) { return .answer(allow: l == "yes", target: cleanTarget(t).text) }
         }
         return nil
     }
@@ -299,7 +356,7 @@ public enum Grammar {
             guard !t.isEmpty, t.count <= 5 else { continue }
             if allSessions.contains(t.key) || pronouns.contains(t.key) { return .status(target: nil) }
             guard looksKnown(t.text, known: known) else { continue }
-            return .status(target: t.text)
+            return .status(target: cleanTarget(t).text)
         }
         return nil
     }
@@ -323,18 +380,50 @@ public enum Grammar {
                 switch p.key {
                 case "stop": return .stop(target: target, now: false)
                 case "stop now", "stop right now", "stop immediately", "stop at once": return .stop(target: target, now: true)
-                default: break
+                default:
+                    // "Tell blog to stop what it's doing": the whole session stops.
+                    if p.keys.first == "stop", p.count > 1, !CommandParser.stopsOneThing(p.keys) {
+                        return .stop(target: target.map { cleanTarget(Words($0)).text }, now: CommandParser.saysNow(p.text))
+                    }
                 }
             }
         }
-        guard var t = w.after(["stop", "halt", "pause"]), !t.isEmpty, t.count <= 6 else { return nil }
+        // "Billing service, stop what you're doing", the comma lost.
+        if let (name, p) = w.splitAtKnownSession(known), p.keys.first == "stop", !CommandParser.stopsOneThing(p.keys) {
+            return .stop(target: cleanTarget(name).text, now: CommandParser.saysNow(p.text))
+        }
+        // "End" stops a session it names. "Cancel billing" may mean its request, so cancel
+        // stops only what is plainly the session: "cancel what finebrief is doing", "the docs site session".
+        let verb = w.keys.first ?? ""
+        guard var t = w.after(["stop", "halt", "pause", "shut down", "kill", "cancel", "end"]), !t.isEmpty, t.count <= 6 else { return nil }
+        if t.keys.last == "please", t.count > 1 { t = t.slice(0..<(t.count - 1)) }
+        var plainlyTheSession = t.keys.last == "session"
+        // "what finebrief is doing", "everything on refund rounding": the session.
+        if let r = t.after(["what", "everything on", "everything in", "all the work on", "the work on", "work on"]), !r.isEmpty {
+            t = r
+            plainlyTheSession = true
+        }
+        if let r = t.before(["is doing", "'s doing", "is working on", "is up to", "doing"]), !r.isEmpty { t = r }
+
+        if verb == "cancel" {
+            guard !known.isEmpty, looksKnown(t.text, known: known), plainlyTheSession else { return nil }
+        }
+        // "Kill billing service logs" is about logs: these need a session's whole name.
+        if ["end", "kill"].contains(verb) || w.keys.starts(with: ["shut", "down"]) {
+            guard isExactName(cleanTarget(t).text, known: known) else { return nil }
+        }
         var now = false
         if let b = t.before(nowWords) { t = b; now = true }
+        // "billing for a sec": the session is the longest name it starts with.
+        if t.count > 1, !isExactName(t.text, known: known),
+           let n = (1..<t.count).reversed().first(where: { isExactName(t.slice(0..<$0).text, known: known) }) {
+            t = t.slice(0..<n)
+        }
         if t.isEmpty || ["it", "that", "this", "talking"].contains(t.key) { return .quiet }
         if everyoneWords.contains(t.key) { return .stopAll }
         if pronouns.contains(t.key) { return .stop(target: nil, now: now) }
         guard looksKnown(t.text, known: known) else { return nil }
-        return .stop(target: t.text, now: now)
+        return .stop(target: cleanTarget(t).text, now: now)
     }
 
     /// True when the words are a known name, or the start of one ("billing" for
@@ -351,18 +440,37 @@ public enum Grammar {
         }
     }
 
-    private static func start(_ w: Words) -> Command? {
-        let shapes = ["start a new session in", "start a new session for", "start a new session on",
-                      "start a session in", "start a session for", "start a session on", "start new session in",
-                      "open a new session in", "open a session in", "new session in", "new session for",
-                      "spin up a session in", "start claude in"]
-        guard let rest = w.after(shapes) else { return nil }
+    /// "start a new session in", "open claude in", "spin up a claude session for", ...
+    static let startShapes: [String] = {
+        let verbs = ["start", "open", "launch", "spin up", "create", "begin", "fire up", "kick off"]
+        let things = ["a session", "a new session", "new session", "claude", "a claude session", "a new claude session",
+                      "new claude session", "a new one", "a new claude"]
+        let preps = ["in", "for", "on"]
+        var out = verbs.flatMap { v in things.flatMap { t in preps.map { "\(v) \(t) \($0)" } } }
+        out += ["new session in", "new session for", "new claude session for", "new claude session in",
+                "begin work in", "start work in", "start working in"]
+        return out
+    }()
+    /// startShapes as words, longest first, split once.
+    static let startShapeWords: [[String]] = startShapes.sorted { $0.count > $1.count }.map { $0.split(separator: " ").map(String.init) }
+
+    private static func start(_ w: Words, known: [String]) -> Command? {
+        guard let rest = w.after(split: startShapeWords) else { return nil }
         guard !rest.isEmpty else { return .unknown }
-        if let (p, prompt) = rest.split(at: ["to", "and"]), !p.isEmpty {
-            let pr = prompt.trimmingPromptFillers()
+        // The project is a known name: what follows is the prompt ("on the refund bug").
+        if let (p, after) = rest.splitAtKnown(known) {
+            var pr = after
+            while let f = pr.keys.first, ["to", "and", "on", "for", "folder", "project", "then", "with"].contains(f) {
+                pr = pr.slice(1..<pr.count)
+            }
+            pr = pr.trimmingPromptFillers()
             return .start(project: p.text, prompt: pr.isEmpty ? nil : pr.text)
         }
-        return .start(project: rest.text, prompt: nil)
+        if let (p, prompt) = rest.split(at: ["to", "and"]), !p.isEmpty {
+            let pr = prompt.trimmingPromptFillers()
+            return .start(project: cleanTarget(p).text, prompt: pr.isEmpty ? nil : pr.text)
+        }
+        return .start(project: cleanTarget(rest).text, prompt: nil)
     }
 
     private static func send(_ w: Words, known: [String]) -> Command? {
@@ -377,6 +485,32 @@ public enum Grammar {
                 return make(target: rest.slice(0..<i), prompt: rest.slice(i..<rest.count), known: known)
             }
             return nil
+        }
+        // have billing P, make the blog P. With "it" these are too often not for a
+        // session at all ("make it so", "have it ready by five"): the model decides.
+        if let rest = w.after(["have", "make"]), rest.count >= 2, !pronouns.contains(rest.keys[0]) {
+            var t: Words?
+            if let (k, _) = rest.splitAtKnownSession(known) { t = k }
+            // The start of a name ("make billing stop" for billing service).
+            else if let n = (1...min(3, rest.count - 1)).reversed().first(where: { startsKnownName(rest.slice(0..<$0), known: known) }) {
+                t = rest.slice(0..<n)
+            }
+            if let t, let c = sendOrStop(target: t, prompt: rest.slice(t.count..<rest.count), known: known) { return c }
+        }
+        // let X know P
+        if let rest = w.after(["let"]), let (t, p) = rest.split(at: ["know"]), !t.isEmpty, looksKnown(t.text, known: known) {
+            return make(target: t, prompt: p, known: known)
+        }
+        // I want X to P, I need X to P
+        if let rest = w.after(["i want", "i need", "i'd like", "i would like"]), let (t, p) = rest.split(at: ["to"]),
+           !t.isEmpty, looksKnown(t.text, known: known) {
+            return sendOrStop(target: t, prompt: p, known: known)
+        }
+        // can X P, could the X session P: a known name right after. "Will" and "would"
+        // ask whether ("will the blog be done soon"), so they are left to the model.
+        if let rest = w.after(["can", "could"]), let (t, p) = rest.splitAtKnownSession(known),
+           !p.isEmpty, p.keys.first != "you" {
+            return sendOrStop(target: t, prompt: p, known: known)
         }
         // in X, P / on X: P / for X P (with a known name)
         if let rest = w.after(["in", "on", "for", "over in"]) {
@@ -412,10 +546,30 @@ public enum Grammar {
         return nil
     }
 
+    /// Only a session's name ("the blog", "billing"), with nothing else in it ("blog to say" is not).
+    static func plainName(_ w: Words, known: [String]) -> Bool {
+        let t = cleanTarget(w)
+        return !t.isEmpty && !t.keys.contains("to") && (isExactName(t.text, known: known) || startsKnownName(t, known: known))
+    }
+
     /// The words are one of the known names, whole (an optional "the" and "session" aside).
     static func isExactName(_ text: String, known: [String]) -> Bool {
         let t = nameWords(text)
         return !t.isEmpty && known.contains { nameWords($0) == t }
+    }
+
+    /// A prompt for a named session, unless it is about stopping or waiting: a stop
+    /// said this way ("make billing stop") is a stop, and the rest of those, and a
+    /// question about finishing ("be done", "finish"), go to the model.
+    private static func sendOrStop(target t: Words, prompt p: Words, known: [String]) -> Command? {
+        let target = cleanTarget(t).text
+        switch p.key {
+        case "stop", "stop working": return .stop(target: target, now: false)
+        case "stop now", "stop right now", "stop immediately": return .stop(target: target, now: true)
+        default: break
+        }
+        if let f = p.keys.first, ["stop", "pause", "halt", "wait", "be", "finish", "finished", "done", "hold"].contains(f) { return nil }
+        return p.isEmpty ? nil : make(target: t, prompt: p, known: known)
     }
 
     private static func make(target: Words, prompt: Words, known: [String]) -> Command? {
@@ -424,6 +578,6 @@ public enum Grammar {
         if named && !looksKnown(t.text, known: known) { return nil }
         let p = prompt.trimmingPromptFillers()
         guard !p.isBlankPrompt else { return .unknown }
-        return .send(target: named ? t.text : nil, prompt: p.text)
+        return .send(target: named ? cleanTarget(t).text : nil, prompt: p.text)
     }
 }

@@ -1,0 +1,63 @@
+# Second held-out set, written after tuning on parser-cases.tsv and once the first held-out set had been seen.
+# Never used to tune anything. An answer naming no session (answer|allow|) is scored as said in the approval window.
+# transcript	expected
+tell finebrief to add a loading spinner	send|finebrief
+ask the docs site to check the code samples	send|docs site
+have billing service write the migration notes	send|billing service
+blog, rename the draft to launch notes	send|blog
+get earshot to bump the plugin version	send|earshot
+could invoice export retry the failed rows	send|invoice export
+refund rounding should round half up instead	send|refund rounding
+tell the blog session to fix the image sizes	send|blog
+ask billing why the webhook failed	send|billing service
+please tell docs site to add a search box	send|docs site
+send earshot a note to rerun the evals	send|earshot
+I need finebrief to update the pricing page	send|finebrief
+tell it to try again	send|
+make it shorter	send|
+how is finebrief doing	status|finebrief
+what's the blog working on	status|blog
+status of billing service	status|billing service
+is the docs site finished	status|docs site
+what is invoice export up to	status|invoice export
+how are my sessions going	status|
+what needs me right now	status|
+anything new	status|
+who's waiting on me	status|
+what has earshot done so far	status|earshot
+stop the docs site	stop|docs site
+stop billing service immediately	stop|billing service
+tell finebrief to stop	stop|finebrief
+pause the blog	stop|blog
+halt invoice export now	stop|invoice export
+start a new session in finebrief	start|finebrief
+open a session in the blog and write a post about the release	start|blog
+start claude in docs site to fix the nav	start|docs site
+spin up a session for refund rounding	start|refund rounding
+yes	answer|allow|
+yeah do it	answer|allow|
+go ahead	answer|allow|
+okay sure	answer|allow|
+approve it	answer|allow|
+yes for billing	answer|allow|billing service
+allow the docs site	answer|allow|docs site
+approve finebrief	answer|allow|finebrief
+nope	answer|deny|
+no don't	answer|deny|
+deny	answer|deny|
+no for the blog	answer|deny|blog
+deny earshot	answer|deny|earshot
+don't allow billing	answer|deny|billing service
+thanks	quiet
+never mind	quiet
+say that again	repeat
+what's the capital of France	unknown
+order a pizza	unknown
+turn off the lights	unknown
+how tall is mount everest	unknown
+schedule a meeting for tomorrow	unknown
+text sarah I'm running late	unknown
+what's on my calendar	unknown
+tell me a joke	unknown
+open spotify	unknown
+book a flight to tokyo	unknown

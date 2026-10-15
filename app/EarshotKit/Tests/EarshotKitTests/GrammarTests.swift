@@ -130,13 +130,55 @@ import Testing
         ("How is billing service", .status(target: "billing service")),
         ("How you blog", .status(target: "blog")),
         ("How's your earshot", .status(target: "earshot")),
+        // More ways to say it (2026-10-15)
+        ("Keep going.", .send(target: nil, prompt: "Keep going")),
+        ("Let billing know the API key changed.", .send(target: "billing", prompt: "the API key changed")),
+        ("I want billing to undo the last change.", .send(target: "billing", prompt: "undo the last change")),
+        ("Can the refund rounding session add a test for zero?", .send(target: "the refund rounding session", prompt: "add a test for zero")),
+        ("Can you have it summarize what it did?", nil),
+        ("Make billing stop.", .stop(target: "billing", now: false)),
+        ("Tell me what earshot did.", .status(target: "earshot")),
+        ("Has billing finished?", .status(target: "billing")),
+        ("Catch me up.", .status(target: nil)),
+        ("How's it all going?", .status(target: nil)),
+        ("How is the refund rounding thing going?", .status(target: "the refund rounding")),
+        ("OK for blog.", .answer(allow: true, target: "blog")),
+        ("Go ahead with earshot.", .answer(allow: true, target: "earshot")),
+        ("Let billing do it.", .answer(allow: true, target: "billing")),
+        ("No, don't let billing do that.", .answer(allow: false, target: "billing")),
+        ("Nope, not for blog.", .answer(allow: false, target: "blog")),
+        ("Tell blog no.", .answer(allow: false, target: "blog")),
+        ("Approve the blog one.", .answer(allow: true, target: "the blog")),
+        ("Reject earshot's request.", .answer(allow: false, target: "earshot")),
+        ("Stop the blog now please.", .stop(target: "the blog", now: true)),
+        ("Shut down the earshot one.", .stop(target: "the earshot", now: false)),
+        ("Cancel what billing is doing.", .stop(target: "billing", now: false)),
+        ("End earshot.", .stop(target: "earshot", now: false)),
+        ("Tell blog to stop what it's doing.", .stop(target: "blog", now: false)),
+        ("Billing service stop what you're doing.", .stop(target: "Billing service", now: false)),
+        ("Open claude in blog and fix the readme.", .start(project: "blog", prompt: "fix the readme")),
+        ("Begin work in billing service on the refund bug.", .start(project: "billing service", prompt: "the refund bug")),
+        ("Launch a session in the blog to check links.", .start(project: "the blog", prompt: "check links")),
+        // Cancel alone, or with a name, may mean a request: never a stop
+        ("Cancel billing.", nil as Command?),
+        // Found in review: none of these may send or stop by the grammar
+        ("Make it stop.", nil),
+        ("Make it so.", nil),
+        ("Have it your way.", nil),
+        ("Have it ready by five.", nil),
+        ("Will the blog be done soon?", nil),
+        ("Can blog wait?", nil),
+        ("Can blog stop?", .stop(target: "blog", now: false)),
+        ("I need billing to stop immediately.", .stop(target: "billing", now: true)),
+        ("Kill billing service logs.", nil),
+        ("Tell blog to say no.", .send(target: "blog", prompt: "say no")),
         // Matched a shape, nothing to send
         ("Tell billing to", .unknown),
         ("Tell billing to um", .unknown),
         ("um", .unknown),
         ("", .unknown),
-    ] as [(String, Command)])
-    func phrasing(_ said: String, _ expected: Command) {
+    ] as [(String, Command?)])
+    func phrasing(_ said: String, _ expected: Command?) {
         #expect(Grammar.parse(said, known: Self.known) == expected)
     }
 

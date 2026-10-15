@@ -1,0 +1,64 @@
+# Held out: never used to tune the grammar, the tolerant reading or the model's instructions.
+# Score it after tuning on parser-cases.tsv, to see that the fixes carry over.
+# transcript	expected
+# An answer naming no session (answer|allow|) is scored as said in the approval window.
+tell billing to bump the version number	send|billing service
+could the blog session fix the typo in the header	send|blog
+have finebrief rerun the migration	send|finebrief
+ask earshot to write a changelog entry	send|earshot
+docs site should regenerate the sitemap	send|docs site
+let the refund rounding one know the fix is merged	send|refund rounding
+get invoice export to try the smaller batch size	send|invoice export
+I'd like billing to add logging around the retry	send|billing service
+blog please update the about page	send|blog
+tell it to commit and push	send|
+go ahead and merge it	send|
+have it explain the last error	send|
+can finebrief look into why the build is slow	send|finebrief
+please ask billing service to clean up the old branches	send|billing service
+what's billing up to	status|billing service
+where is finebrief at	status|finebrief
+any update from the blog	status|blog
+is earshot done yet	status|earshot
+what's going on	status|
+give me a quick rundown	status|
+did the docs site finish	status|docs site
+how far along is invoice export	status|invoice export
+is anything waiting on me	status|
+what are my sessions doing	status|
+check on refund rounding	status|refund rounding
+stop finebrief right now	stop|finebrief
+halt the billing service	stop|billing service
+tell blog to stop what it's doing	stop|blog
+cancel the docs site session	stop|docs site
+pause earshot	stop|earshot
+kill invoice export	stop|invoice export
+spin up a session in finebrief	start|finebrief
+start working in the blog folder	start|blog
+open a new session for docs site and update the readme	start|docs site
+launch claude in earshot	start|earshot
+start something in billing service to check the logs	start|billing service
+yes go ahead	answer|allow|
+yep do it	answer|allow|
+allow it	answer|allow|
+sure let finebrief run that	answer|allow|finebrief
+approve billing	answer|allow|billing service
+okay for the blog	answer|allow|blog
+no	answer|deny|
+don't do that	answer|deny|
+deny it	answer|deny|
+no not the docs site	answer|deny|docs site
+reject earshot's request	answer|deny|earshot
+nah block that	answer|deny|
+what time is it	unknown
+play some music	unknown
+turn up the volume	unknown
+what's the weather tomorrow	unknown
+set a timer for ten minutes	unknown
+open safari	unknown
+call my wife	unknown
+how do I center a div	unknown
+add milk to my shopping list	unknown
+send an email to my boss	unknown
+what's two plus two	unknown
+read my messages	unknown

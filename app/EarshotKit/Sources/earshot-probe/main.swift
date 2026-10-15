@@ -251,16 +251,47 @@ func listen(minutes: Double) async throws {
 func parseEval(_ url: URL) async throws {
     let sessions = ["billing service", "blog", "earshot", "finebrief", "refund rounding", "invoice export", "docs site"]
     let parser = CommandParser(model: FoundationCommandModel())
+    // EARSHOT_EVAL_RAW=1: for each miss, also what the model alone answered, before the checks on it.
+    let raw = ProcessInfo.processInfo.environment["EARSHOT_EVAL_RAW"] == "1" ? FoundationCommandModel() : nil
     var pass = 0, total = 0, grammar = 0
+    var timings: [Int] = []
+    let talkMs = Int(ProcessInfo.processInfo.environment["EARSHOT_EVAL_TALK_MS"] ?? "") ?? 1000
     for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where !line.hasPrefix("#") {
         let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2 else { continue }
         total += 1
         if Grammar.parse(parts[0], known: sessions) != nil { grammar += 1 }
-        let got = await parser.parse(parts[0], sessions: sessions)
-        if matches(got, parts[1]) { pass += 1 } else { print("MISS\t\(parts[0])\twant \(parts[1])\tgot \(got)") }
+        let got: Command
+        if parts[1] == "noanswer" {
+            // Said in the approval window, it must answer nothing ("let it go", "let me think").
+            got = Grammar.windowAnswer(parts[0]).map { .answer(allow: $0, target: nil) } ?? .quiet
+        } else if parts[1].hasPrefix("answer|"), parts[1].hasSuffix("|") {
+            // A yes or no naming no session is said in the approval window, where only a clear answer counts.
+            got = Grammar.windowAnswer(parts[0]).map { .answer(allow: $0, target: nil) } ?? .unknown
+        } else {
+            // As the app does when the hotkey or wake word fires: the model warms up while
+            // you talk. EARSHOT_EVAL_TALK_MS is how long that is (default 1000, under most commands).
+            await parser.prewarm(sessions: sessions)
+            try? await Task.sleep(for: .milliseconds(talkMs))
+            let t0 = ContinuousClock.now
+            got = await parser.parse(parts[0], sessions: sessions)
+            timings.append(ms(t0))
+        }
+        if matches(got, parts[1]) { pass += 1 } else {
+            var line = "MISS\t\(parts[0])\twant \(parts[1])\tgot \(got)"
+            if let raw {
+                line += "\tmodel \(String(describing: await raw.parse(parts[0], sessions: sessions)))"
+                await raw.prewarm(sessions: sessions)
+                line += "\twarm \(String(describing: await raw.parse(parts[0], sessions: sessions)))"
+            }
+            print(line)
+        }
     }
     print(String(format: "%d of %d (%.0f%%), %d by the grammar", pass, total, Double(pass) / Double(max(total, 1)) * 100, grammar))
+    if !timings.isEmpty {
+        let t = timings.sorted()
+        print("parse ms: median \(t[t.count / 2]), p90 \(t[t.count * 9 / 10]), max \(t.last!), over 3 s: \(t.filter { $0 >= 3000 }.count)")
+    }
     if total == 0 { print("FAIL: no cases"); exit(1) }
     if Double(pass) / Double(total) < 0.95 { print("FAIL: below the 95% bar"); exit(1) }
 }
@@ -274,12 +305,15 @@ func matches(_ c: Command, _ want: String) -> Bool {
     }
     switch (c, w.first ?? "") {
     case (.send(let t, _), "send"): return same(t, w.count > 1 ? w[1] : nil)
+    // Read back and sent on a yes: understood, with one more step.
+    case (.confirmSend(let t, _), "send"): return same(t, w.count > 1 ? w[1] : nil)
     case (.status(let t), "status"): return same(t, w.count > 1 ? w[1] : nil)
     case (.stop(let t, _), "stop"): return same(t, w.count > 1 ? w[1] : nil)
     case (.start(let p, _), "start"): return same(p, w.count > 1 ? w[1] : nil)
     case (.answer(let allow, let t), "answer"):
         return (allow ? "allow" : "deny") == (w.count > 1 ? w[1] : "") && same(t, w.count > 2 ? w[2] : nil)
     case (.unknown, "unknown"): return true
+    case (.quiet, "quiet"), (.greet, "greet"), (.stopAll, "stopall"), (.repeatLast, "repeat"), (.quiet, "noanswer"): return true
     default: return false
     }
 }

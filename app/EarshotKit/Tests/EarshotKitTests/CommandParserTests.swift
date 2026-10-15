@@ -137,6 +137,75 @@ actor SlowCommandModel: CommandModel {
         #expect(prompt.lowercased().contains("integration tests"))
     }
 
+    // 2026-10-15: the model names a session in full and rewords; what it may and may not do then.
+    @Test func aSessionNamedInPartBacksTheModelsFullName() async {
+        let p = CommandParser(model: FakeModel(answer: .send(target: "billing service", prompt: "speed up the query")))
+        #expect(await p.parse("see if billing can speed up the query", sessions: ["billing service", "blog"])
+                == .send(target: "billing service", prompt: "speed up the query"))
+    }
+
+    @Test func aRewordedPromptToANamedSessionGoesAsYourWords() async {
+        let heard = "billing needs to hear that the API key we use changed today"
+        let p = CommandParser(model: FakeModel(answer: .send(target: "billing service", prompt: "tell it the API key changed")))
+        #expect(await p.parse(heard, sessions: ["billing service"]) == .send(target: "billing service", prompt: heard))
+    }
+
+    @Test func aSessionYouNeverNamedIsDroppedOnlyWhenYouNamedNone() async {
+        let invented = FakeModel(answer: .send(target: "blog", prompt: "run the tests again"))
+        #expect(await CommandParser(model: invented).parse("run the tests again", sessions: ["blog"])
+                == .send(target: nil, prompt: "run the tests again"))
+        // Named another: nothing goes.
+        #expect(await CommandParser(model: invented).parse("maybe billing could run the tests again", sessions: ["blog", "billing"])
+                == .unknown)
+    }
+
+    @Test func aStatusAboutASessionYouNeverNamedIsTheRollCall() async {
+        let p = CommandParser(model: FakeModel(answer: .status(target: "billing service")))
+        #expect(await p.parse("is anybody stuck", sessions: ["billing service"]) == .status(target: nil))
+    }
+
+    @Test func aStopIsRightAwayOnlyWhenYouSaidSo() async {
+        let p = CommandParser(model: FakeModel(answer: .stop(target: "billing", now: true)))
+        #expect(await p.parse("shut billing off for me", sessions: ["billing"]) == .stop(target: "billing", now: false))
+        #expect(await p.parse("shut billing off right away", sessions: ["billing"]) == .stop(target: "billing", now: true))
+    }
+
+    @Test func aStopFollowedByWhyIsStillAStop() async {
+        let p = CommandParser(model: FakeModel(answer: .stop(target: "billing", now: false)))
+        #expect(await p.parse("stop billing, it's about to delete the database", sessions: ["billing"])
+                == .stop(target: "billing", now: false))
+        #expect(await p.parse("pause billing for a sec", sessions: ["billing"]) == .stop(target: "billing", now: false))
+        let now = CommandParser(model: FakeModel(answer: .stop(target: "billing", now: true)))
+        #expect(await now.parse("please stop billing right now before it deletes everything", sessions: ["billing"])
+                == .stop(target: "billing", now: true))
+    }
+
+    @Test func aWordInsideANameDoesNotNameIt() async {
+        let p = CommandParser(model: FakeModel(answer: .send(target: "finebrief", prompt: "ship it")))
+        // By sound it may be asked about first (confirmSend), never sent straight.
+        #expect(await p.parse("fine, ship it", sessions: ["finebrief"]) != .send(target: "finebrief", prompt: "ship it"))
+        let s = CommandParser(model: FakeModel(answer: .send(target: "billing service", prompt: "restart the service")))
+        #expect(await s.parse("restart the service", sessions: ["billing service"]) == .unknown)
+    }
+
+    @Test func letItGoIsNoAnswer() {
+        #expect(Grammar.windowAnswer("let it go") == nil)
+        #expect(Grammar.windowAnswer("let that go") == nil)
+        #expect(Grammar.windowAnswer("let it run") == true)
+    }
+
+    @Test func stoppingOneThingIsAPrompt() async {
+        let heard = "tell whoever is on billing to stop logging so much"
+        let p = CommandParser(model: FakeModel(answer: .stop(target: "billing", now: false)))
+        #expect(await p.parse(heard, sessions: ["billing"]) == .send(target: "billing", prompt: heard))
+    }
+
+    @Test func aPlaceholderTargetIsNoTarget() {
+        #expect(CommandParser.clean("unknown") == nil)
+        #expect(CommandParser.clean(" ") == nil)
+        #expect(CommandParser.clean("blog") == "blog")
+    }
+
     // Round 1 (M1): the model may only use words the user said.
     @Test func modelWordsMustBeHeard() async {
         let heard = "could billing run the integration tests again"
@@ -196,7 +265,7 @@ actor SlowCommandModel: CommandModel {
     @Test func aSlowModelGivesUpAfterItsLimit() async {
         let p = CommandParser(model: SlowCommandModel(), timeout: .milliseconds(50))
         let start = ContinuousClock.now
-        #expect(await p.parse("Could billing maybe run the tests.", sessions: ["billing"]) == .unknown)
+        #expect(await p.parse("Maybe billing could run the tests.", sessions: ["billing"]) == .unknown)
         #expect(ContinuousClock.now - start < .seconds(1))
     }
 }
