@@ -409,7 +409,10 @@ private struct AwayRow: View {
         let hush = session.state == .working && quiet >= 10 * 60 ? " Quiet for \(ActivityTime.spoken(quiet))." : ""
         return switch session.state {
         case .done: "Finished."
-        case .working: (started.map { "Working, \(ActivityTime.spoken(Date().timeIntervalSince($0))) in." } ?? "Working.") + hush
+        case .working: (started.map { t -> String in
+            let worked = Date().timeIntervalSince(t)
+            return worked < 60 ? "Working, just started." : "Working, \(ActivityTime.spoken(worked)) in."
+        } ?? "Working.") + hush
         case .stuck: "Might be stuck."
         case .failed: "Hit an error."
         default: ""
