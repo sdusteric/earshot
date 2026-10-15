@@ -5,10 +5,17 @@ import Testing
 
 @Suite struct FluidListeningTests {
     @Test func sensitivityMapsAroundTheDefaultThreshold() {
-        #expect(CtcWakeSpotter.threshold(5) == -15)
-        #expect(CtcWakeSpotter.threshold(1) == -11)    // stricter
-        #expect(CtcWakeSpotter.threshold(10) == -20)   // looser
-        #expect(CtcWakeSpotter.threshold(99) == -20)
+        #expect(CtcWakeSpotter.threshold(5) == -6)
+        #expect(CtcWakeSpotter.threshold(1) == -5)     // stricter
+        #expect(CtcWakeSpotter.threshold(10) == -7.25) // looser
+        #expect(CtcWakeSpotter.threshold(99) == -7.25)
+        // FluidAudio relaxes by 1 per token past 3; that is taken back.
+        #expect(CtcWakeSpotter.minScore(5, tokens: 6) == -3)
+        #expect(CtcWakeSpotter.minScore(5, tokens: 2) == -6)
+        // The model gets a clip padded with zeros to its full 15 s.
+        #expect(CtcShared.fullLength([1, 2]).count == 240_000)
+        #expect(CtcShared.fullLength([1, 2]).suffix(3) == [0, 0, 0])
+        #expect(CtcShared.fullLength([Float](repeating: 1, count: 250_000)).count == 250_000)
     }
 
     static var modelsOn: Bool { ProcessInfo.processInfo.environment["EARSHOT_TEST_MODELS"] == "1" }

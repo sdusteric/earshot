@@ -203,6 +203,15 @@ actor CtcShared {
     func models(for holder: Holder) async throws -> CtcModels { try await model.acquire(holder.rawValue) }
     func release(_ holder: Holder) async { await model.release(holder.rawValue) }
 
+    /// The clip with zeros out to the model's full input (15 s). FluidAudio 0.17.7 copies a
+    /// shorter clip into a buffer it never clears, so the rest was whatever memory held,
+    /// often NaN, and the model's output stopped depending on the audio: every sentence
+    /// scored the same and woke Earshot (FluidAudio issue #991, fixed upstream in PR #1003).
+    static func fullLength(_ samples: [Float]) -> [Float] {
+        let n = ASRConstants.maxModelSamples
+        return samples.count >= n ? samples : samples + [Float](repeating: 0, count: n - samples.count)
+    }
+
     func tokens(_ text: String) async throws -> [Int] {
         if let t = phraseTokens[text] { return t }
         let tokenizer = try await CtcTokenizer.load(from: CtcModels.defaultCacheDirectory(for: .ctc110m))
@@ -247,9 +256,21 @@ public actor CtcWakeSpotter: WakeSpotter {
         log.info("unloaded the wake word model")
     }
 
-    /// Sensitivity 5 is FluidAudio's default spotter threshold (-15). Each
-    /// step moves it by 1: higher wakes more easily.
-    public static func threshold(_ sensitivity: Int) -> Float { -10 - Float(min(max(sensitivity, 1), 10)) }
+    /// The lowest score that wakes, as the phrase is finally judged. Sensitivity 5 is
+    /// -6.0; each step moves it by 0.25, higher waking more easily (5.0 at 1, 7.25 at 10).
+    /// Measured once the model read the audio (see CtcShared.fullLength), on six macOS
+    /// voices: "Hey Earshot" scored -4.5 to -7.3, other sentences up to -5.1 ("Hey there,
+    /// nice shot"). A wake whose words don't start with the phrase is dropped
+    /// (Listener.stripWake), so a false wake costs a chime, not a command.
+    /// To be tuned on real voices with scripts/eval-listener.sh.
+    public static func threshold(_ sensitivity: Int) -> Float { -6.0 - 0.25 * Float(min(max(sensitivity, 1), 10) - 5) }
+
+    /// FluidAudio lowers the score a phrase needs by 1 for each token past 3 ("hey
+    /// earshot" has 6), so the threshold is raised by as much to mean what it says.
+    static func minScore(_ sensitivity: Int, tokens: Int) -> Float {
+        let extra = max(0, tokens - ContextBiasingConstants.baselineTokenCountForThreshold)
+        return threshold(sensitivity) + Float(extra) * ContextBiasingConstants.thresholdRelaxationPerToken
+    }
 
     public func heardWake(_ samples: [Float], sensitivity: Int) async -> Bool {
         guard await flight.isLoaded, let (spotter, vocab) = try? await flight.get() else { return false }
@@ -257,8 +278,8 @@ public actor CtcWakeSpotter: WakeSpotter {
             // `minScore` is the base threshold: FluidAudio relaxes it for each
             // token a phrase has beyond its baseline, and returns only the
             // detections that pass the relaxed threshold. Any detection is a wake.
-            let r = try await spotter.spotKeywordsWithLogProbs(audioSamples: samples, customVocabulary: vocab,
-                                                               minScore: Self.threshold(sensitivity))
+            let r = try await spotter.spotKeywordsWithLogProbs(audioSamples: CtcShared.fullLength(samples), customVocabulary: vocab,
+                                                               minScore: Self.minScore(sensitivity, tokens: vocab.terms.first?.ctcTokenIds?.count ?? 0))
             if !r.detections.isEmpty { log.info("wake") }
             return !r.detections.isEmpty
         } catch {
@@ -334,7 +355,8 @@ public actor ParakeetTranscriber: Transcriber {
             log.error("the name boost didn't load; using the words as heard")
             return (result.text, nil)
         }
-        guard let boosted = await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text,
+        guard let boosted = await session.rescore(text: result.text, tokenTimings: timings,
+                                                  audioSamples: CtcShared.fullLength(samples))?.text,
               boosted != result.text,
               Self.keepsBoost(plain: result.text, boosted: boosted, vocabulary: vocabulary) else { return (result.text, nil) }
         return (boosted, result.text)
