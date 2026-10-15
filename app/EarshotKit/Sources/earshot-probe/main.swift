@@ -253,22 +253,32 @@ func parseEval(_ url: URL) async throws {
     let parser = CommandParser(model: FoundationCommandModel())
     // EARSHOT_EVAL_RAW=1: for each miss, also what the model alone answered, before the checks on it.
     let raw = ProcessInfo.processInfo.environment["EARSHOT_EVAL_RAW"] == "1" ? FoundationCommandModel() : nil
-    var pass = 0, total = 0, grammar = 0
+    var pass = 0, total = 0
+    // Which stage decided each case, and how many of those it got right: the grammar,
+    // the tolerant reading, the model (as CommandParser.parse runs them with one
+    // hearing), or the approval window, where only Grammar.windowAnswer runs.
+    let stages = ["grammar", "tolerant", "model", "window"]
+    var decided: [String: Int] = [:], right: [String: Int] = [:]
     var timings: [Int] = []
     let talkMs = Int(ProcessInfo.processInfo.environment["EARSHOT_EVAL_TALK_MS"] ?? "") ?? 1000
     for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") where !line.hasPrefix("#") {
         let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2 else { continue }
         total += 1
-        if Grammar.parse(parts[0], known: sessions) != nil { grammar += 1 }
         let got: Command
+        let stage: String
         if parts[1] == "noanswer" {
             // Said in the approval window, it must answer nothing ("let it go", "let me think").
+            stage = "window"
             got = Grammar.windowAnswer(parts[0]).map { .answer(allow: $0, target: nil) } ?? .quiet
         } else if parts[1].hasPrefix("answer|"), parts[1].hasSuffix("|") {
             // A yes or no naming no session is said in the approval window, where only a clear answer counts.
+            stage = "window"
             got = Grammar.windowAnswer(parts[0]).map { .answer(allow: $0, target: nil) } ?? .unknown
         } else {
+            // With one hearing the grammar's answer is final, .unknown and .quiet included.
+            stage = Grammar.parse(parts[0], known: sessions) != nil ? "grammar"
+                : Tolerant.parse(parts[0], known: sessions, gated: false) != nil ? "tolerant" : "model"
             // As the app does when the hotkey or wake word fires: the model warms up while
             // you talk. EARSHOT_EVAL_TALK_MS is how long that is (default 1000, under most commands).
             await parser.prewarm(sessions: sessions)
@@ -277,8 +287,9 @@ func parseEval(_ url: URL) async throws {
             got = await parser.parse(parts[0], sessions: sessions)
             timings.append(ms(t0))
         }
-        if matches(got, parts[1]) { pass += 1 } else {
-            var line = "MISS\t\(parts[0])\twant \(parts[1])\tgot \(got)"
+        decided[stage, default: 0] += 1
+        if matches(got, parts[1]) { pass += 1; right[stage, default: 0] += 1 } else {
+            var line = "MISS\t\(parts[0])\twant \(parts[1])\tgot \(got) (\(stage))"
             if let raw {
                 line += "\tmodel \(String(describing: await raw.parse(parts[0], sessions: sessions)))"
                 await raw.prewarm(sessions: sessions)
@@ -287,7 +298,9 @@ func parseEval(_ url: URL) async throws {
             print(line)
         }
     }
-    print(String(format: "%d of %d (%.0f%%), %d by the grammar", pass, total, Double(pass) / Double(max(total, 1)) * 100, grammar))
+    print(String(format: "%d of %d (%.0f%%)", pass, total, Double(pass) / Double(max(total, 1)) * 100))
+    print("right by stage: " + stages.filter { decided[$0] != nil }
+        .map { "\($0) \(right[$0] ?? 0) of \(decided[$0]!)" }.joined(separator: ", "))
     if !timings.isEmpty {
         let t = timings.sorted()
         print("parse ms: median \(t[t.count / 2]), p90 \(t[t.count * 9 / 10]), max \(t.last!), over 3 s: \(t.filter { $0 >= 3000 }.count)")
