@@ -660,6 +660,24 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await !input.isOpen)
     }
 
+    /// A transcriber that never answers can't leave Earshot listening, holding its
+    /// lines back: the capture ends unheard after the limit.
+    @Test func aHungTranscriberEndsTheCaptureUnheard() async {
+        let t = ScriptTranscriber(holdFirst: true)
+        var timing = Listener.Timing.forTests
+        timing.transcribeLimit = .milliseconds(100)
+        let l = await make(timing, transcriber: t)
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events.contains("began") })
+        await input.push([1, 1])
+        await l.hotkeyUp()
+        #expect(await eventually { await observer.events == ["began", "ended"] })
+        #expect(await observer.heard == [false])
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played.last == .closed)
+        await t.release()
+    }
+
     @Test func aWakeAloneThenACallDoesNotKeepListening() async {
         let t = ScriptTranscriber(holdFirst: true)
         let l = await make(transcriber: t)

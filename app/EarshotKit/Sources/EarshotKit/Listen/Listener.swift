@@ -66,6 +66,10 @@ public actor Listener {
         /// After the transcript, how much longer the second hearing may take.
         /// It runs alongside and is usually done first; a late one is left out.
         public var secondGrace: Duration
+        /// The longest a transcription may take, the model's first load included. One
+        /// that hangs past it ends the capture unheard, so Earshot isn't left listening
+        /// with its lines held back.
+        public var transcribeLimit: Duration = .seconds(30)
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
@@ -670,11 +674,11 @@ public actor Listener {
                 Task { [vocabulary] in await s.hear(clip, names: vocabulary) }
             }
             defer { heardToo?.cancel() }
-            do {
-                (text, plain) = try await transcriber.transcribeBoth(clip, vocabulary: vocabulary)
+            if let r = await transcription({ [transcriber, vocabulary] in
+                try await transcriber.transcribeBoth(clip, vocabulary: vocabulary)
+            }) {
+                (text, plain) = r
                 plain = plain?.trimmingCharacters(in: .whitespacesAndNewlines)
-            } catch {
-                log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
             }
             if let heardToo, !text.isEmpty {
                 other = await bounded(timing.secondGrace, nil) { await heardToo.value }
@@ -721,6 +725,22 @@ public actor Listener {
         settlePhase()
     }
 
+    /// A transcription's result, or nil when it failed or ran past `timing.transcribeLimit`.
+    /// A late one is left to finish on its own; a first load it was waiting on is kept.
+    private func transcription<T: Sendable>(_ run: @escaping @Sendable () async throws -> T) async -> T? {
+        let result = await bounded(timing.transcribeLimit, Result<T, any Error>?.none) {
+            do { return .success(try await run()) } catch { return .failure(error) }
+        }
+        switch result {
+        case .success(let r)?: return r
+        case .failure(let error)?:
+            log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
+        case nil:
+            log.error("transcription took longer than \(self.timing.transcribeLimit, privacy: .public)")
+        }
+        return nil
+    }
+
     /// For debugging recognition only: with EARSHOT_KEEP_AUDIO set to a folder in
     /// the environment the app was launched with, each command's audio is written
     /// there as a 16 kHz WAV. Unset (always, in normal use), nothing is written,
@@ -753,10 +773,7 @@ public actor Listener {
         var heard = true
         if c.trigger == .wake, !c.commandPhase {
             phase = .transcribing
-            var text = ""
-            do { text = try await transcriber.transcribe(head, vocabulary: []) } catch {
-                log.error("transcription failed: \(error.localizedDescription, privacy: .public)")
-            }
+            let text = await transcription { [transcriber] in try await transcriber.transcribe(head, vocabulary: []) } ?? ""
             if repeatsOwnLine(text) || Self.stripWake(text) == nil {
                 falseWakes += 1
                 heard = false
