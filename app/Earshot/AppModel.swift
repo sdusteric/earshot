@@ -37,6 +37,8 @@ final class AppModel {
     var micApp: String?
     /// macOS hasn't asked about Earshot's notifications yet.
     var notificationsUndecided = false
+    /// The two above have been read once, so a permission row can trust them.
+    var notificationsChecked = false
     var modelState: ListenModels.State = ListenModelFiles.present ? .ready : .missing
     var micAllowed = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     /// You answered the mic prompt with no (or a profile blocks it): only System Settings can change it.
@@ -348,6 +350,7 @@ final class AppModel {
         Task {
             notificationsDenied = await BannerPoster.denied()
             notificationsUndecided = await BannerPoster.undecided()
+            notificationsChecked = true
         }
     }
 
@@ -357,6 +360,20 @@ final class AppModel {
         await BannerPoster.ask()
         notificationsDenied = await BannerPoster.denied()
         notificationsUndecided = await BannerPoster.undecided()
+        notificationsChecked = true
+    }
+
+    /// The notifications button: the macOS prompt the first time, then
+    /// Earshot's page in System Settings, Notifications, since macOS asks only once.
+    func allowNotifications() {
+        guard notificationsDenied else {
+            Task { await requestNotifications() }
+            return
+        }
+        let id = Bundle.main.bundleIdentifier ?? ""
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// A line Earshot started saying. Replies to what you said are saved with
