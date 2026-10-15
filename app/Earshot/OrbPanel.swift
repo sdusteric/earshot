@@ -33,7 +33,8 @@ import SwiftUI
         glass.appearance = NSAppearance(named: .darkAqua)
         glass.cornerRadius = Self.size / 2
         if #available(macOS 27, *) { glass.effectIsInteractive = true }
-        let hosting = OrbHostingView(rootView: AnyView(OrbView().environment(model)))
+        // Out of sight (the orb is off in Settings, or the panel faded out), it stops drawing.
+        let hosting = OrbHostingView(rootView: AnyView(OrbView().environment(model).tracksWindowPresence()))
         hosting.onReset = { [weak self] in self?.resetPosition() }
         glass.contentView = hosting
         panel.contentView = glass
@@ -218,13 +219,17 @@ struct OrbView: View {
     var spinsWhenIdle = false
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowPresence) private var presence
     @State private var sphere = ParticleSphere()
 
     var body: some View {
         let mode = OrbMode(model)
         let color = mode == nil ? (restingColor ?? model.config.orbColor) : model.config.orbColor
-        // Idle, a slow turn needs far fewer frames.
-        TimelineView(.animation(minimumInterval: mode == nil ? 1.0 / 30 : nil, paused: mode == nil && !spinsWhenIdle)) { timeline in
+        // Idle, a slow turn needs far fewer frames. Active, 60 a second is smooth and
+        // half the work of a 120 Hz display's rate. Out of sight, none: SwiftUI keeps a
+        // timeline running in a covered, minimized or hidden window.
+        let paused = Cadence.orbPaused(active: mode != nil, spinsWhenIdle: spinsWhenIdle, visible: presence.visible)
+        TimelineView(.animation(minimumInterval: mode == nil ? 1.0 / 30 : 1.0 / 60, paused: paused)) { timeline in
             Canvas { gc, size in
                 let target: Float = switch mode {
                 case .listening: model.micLevel?.value ?? 0

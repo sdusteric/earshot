@@ -51,7 +51,8 @@ struct EarshotApp: App {
         .menuBarExtraStyle(.window)
 
         Window("Activity", id: "activity") {
-            ActivityView().environment(model)
+            // The orb and the session page pause while the window is out of sight.
+            ActivityView().environment(model).tracksWindowPresence()
         }
         .defaultSize(width: 1180, height: 760)
 
