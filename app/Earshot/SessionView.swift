@@ -13,6 +13,7 @@ struct SessionView: View {
     @State private var draft = ""
     @State private var sending = false
     @State private var outcome: String?
+    @State private var sentAt: Date?
     @State private var terminalNote: String?
     @FocusState private var typing: Bool
 
@@ -223,7 +224,10 @@ struct SessionView: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
                     .keyboardShortcut(.return, modifiers: .command)
             }
-            Text(outcome ?? hint).font(.caption).foregroundStyle(.secondary)
+            Text(receipt ?? outcome ?? hint).font(.caption).foregroundStyle(.secondary)
+                .onChange(of: receipt) { _, line in
+                    if let line { AccessibilityNotification.Announcement(line).post() }
+                }
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 14)
@@ -238,6 +242,7 @@ struct SessionView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !sending else { return }
         sending = true
+        sentAt = Date()
         Task {
             let line = await model.send(text, toSession: session.id)
             sending = false
@@ -245,6 +250,9 @@ struct SessionView: View {
             if line.hasPrefix("Sent") || line.hasPrefix("Queued") { draft = "" }
         }
     }
+
+    /// What became of the last send, once Earshot knows ("Blog started working.").
+    private var receipt: String? { model.receiptLine(for: session.id, since: sentAt) }
 }
 
 /// A turn of the conversation: who, when, and the words.

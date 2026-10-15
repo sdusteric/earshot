@@ -33,6 +33,11 @@ final class AppModel {
     /// What the floating orb's caption shows: listening, what was heard (as the
     /// history keeps it), or the line Earshot is saying. Never logged.
     var caption: OrbCaption?
+    /// What became of the last prompt sent to each session (see Dispatcher.watchReceipt).
+    var receipts: [String: Dispatcher.Receipt] = [:]
+    /// Sessions answered from a waiting card a moment ago, by when: the brief
+    /// keeps the card up until it can say what became of the answer.
+    var answered: [String: Date] = [:]
     var listenBlock: ListenBlock?
     /// Why a command can't be heard now (the hotkey, Talk, the orb), or nil.
     var commandBlock: ListenBlock?
@@ -191,6 +196,13 @@ final class AppModel {
                 }
             }
             Task { for await text in await stack.loop.heardLines() { caption = OrbCaption(kind: .heard, text: text) } }
+            Task {
+                for await r in await stack.dispatcher.receipts() {
+                    receipts[r.session] = r
+                    // The card has said what became of the answer: let it go shortly.
+                    if let at = answered[r.session], r.sent >= at { releaseCard(r.session, at, after: .seconds(4)) }
+                }
+            }
             Task { for await t in await stack.loop.thinkingChanges() { thinking = t; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
             // A session opened while the plugin is silent arms the wake word within a minute.
@@ -338,9 +350,31 @@ final class AppModel {
 
     /// What you typed in the session view, sent to that session. Returns the
     /// line Earshot would have said ("Sent to blog.", "Queued, blog is busy.").
-    func send(_ text: String, toSession id: String) async -> String {
+    /// What became of it arrives later in `receipts`. `answering` is a waiting
+    /// card's answer: the brief keeps that card up until the receipt.
+    func send(_ text: String, toSession id: String, answering: Bool = false) async -> String {
         guard let stack else { return "Earshot is still starting." }
-        return await stack.dispatcher.send(typed: text, toSession: id).line ?? ""
+        let at = Date()
+        if answering { answered[id] = at }
+        let line = await stack.dispatcher.send(typed: text, toSession: id).line ?? ""
+        // Only "Sent to" has a receipt coming, and not always (a background
+        // session resumes without one): keep the card 10 seconds at most.
+        if answering { releaseCard(id, at, after: line.hasPrefix("Sent") ? .seconds(10) : .zero) }
+        return line
+    }
+
+    private func releaseCard(_ id: String, _ at: Date, after delay: Duration) {
+        Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, self.answered[id] == at else { return }
+            self.answered[id] = nil
+        }
+    }
+
+    /// The receipt for a send made at or after `since`, when it has a line to show.
+    func receiptLine(for id: String, since: Date?) -> String? {
+        guard let since, let r = receipts[id], r.sent >= since else { return nil }
+        return r.line
     }
 
     /// The app a session's window is in ("Terminal", "Otty"), for button titles.
