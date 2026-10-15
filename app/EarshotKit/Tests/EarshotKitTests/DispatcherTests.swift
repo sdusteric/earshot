@@ -252,7 +252,7 @@ actor FakeTransport: SessionTransport {
         let got = Collected<Dispatcher.Receipt>()
         let stream = await d.receipts()
         Task { for await r in stream { await got.add(r) } }
-        #expect(await d.send(typed: "x", toSession: "a").line == "Queued, billing service is busy.")
+        #expect(await d.send(typed: "x", toSession: "a").line == "Queued, Billing service is busy.")
         try? await Task.sleep(for: .milliseconds(400))
         #expect(await got.items.isEmpty)
     }
