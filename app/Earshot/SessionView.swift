@@ -13,6 +13,9 @@ struct SessionView: View {
     /// The first read fills the page at once; only lines that come after it move in.
     @State private var settled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The session whose transcript `recent` holds.
+    @State private var loadedID: String?
+    @Environment(\.windowPresence) private var presence
     @State private var draft = ""
     @State private var sending = false
     @State private var outcome: String?
@@ -28,13 +31,18 @@ struct SessionView: View {
             Rectangle().fill(ActivityPalette.track).frame(height: 1)
             composer
         }
-        .task(id: session.id) {
-            // The transcript grows while the session works; read its tail again every few seconds.
+        .task(id: Poll(session: session.id, window: presence)) {
+            // The transcript grows while the session works; read its tail again every few
+            // seconds while you look, less often behind another app, and not out of sight.
+            // Coming back restarts this task, so the page reads at once.
             while !Task.isCancelled {
+                if loadedID == session.id, Cadence.transcriptPoll(presence) == nil { return }
                 let r = await model.transcript(for: session.id)
                 if r != recent { recent = r }
                 loaded = true
-                try? await Task.sleep(for: .seconds(4))
+                loadedID = session.id
+                guard let wait = Cadence.transcriptPoll(presence) else { return }
+                try? await Task.sleep(for: wait)
             }
         }
         .task(id: loaded) {
@@ -42,6 +50,11 @@ struct SessionView: View {
             try? await Task.sleep(for: .milliseconds(300))
             settled = true
         }
+    }
+
+    private struct Poll: Equatable {
+        let session: String
+        let window: Cadence.Window
     }
 
     // MARK: Header

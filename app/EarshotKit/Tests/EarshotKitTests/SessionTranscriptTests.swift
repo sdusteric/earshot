@@ -119,4 +119,12 @@ struct SessionTranscriptTests {
         #expect(r?.turns.last?.text == "prompt 50")
         #expect((r?.turns.count ?? 0) > 3)
     }
+
+    @Test func timestampsReadWithAndWithoutFractions() {
+        let ms = SessionTranscript.date("2026-10-14T07:07:45.553Z")
+        let whole = SessionTranscript.date("2026-10-14T07:07:45Z")
+        #expect(whole == Date(timeIntervalSince1970: 1_791_961_665))
+        #expect(ms.map { $0.timeIntervalSince1970 - 1_791_961_665 }.map { abs($0 - 0.553) < 0.001 } == true)
+        #expect(SessionTranscript.date("yesterday") == nil)
+    }
 }

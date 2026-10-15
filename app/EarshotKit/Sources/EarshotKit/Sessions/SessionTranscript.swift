@@ -222,9 +222,12 @@ public enum SessionTranscript {
         return text.prefix(1).uppercased() + text.dropFirst()
     }
 
-    private static func date(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    /// Format styles are values, so one pair serves every read (a new
+    /// ISO8601DateFormatter per line cost more than the JSON).
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let whole = Date.ISO8601FormatStyle()
+
+    static func date(_ s: String) -> Date? {
+        (try? fractional.parse(s)) ?? (try? whole.parse(s))
     }
 }
