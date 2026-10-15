@@ -50,12 +50,12 @@ struct DayTimeline: View {
         return width * CGFloat(1 - back / Self.day)
     }
 
-    /// Lines within 6 points of each other draw as one dot; the newest stands for them.
+    /// Lines within 14 points of each other draw as one dot; the newest stands for them.
     private func place(width: CGFloat) -> [Placed] {
         var out: [Placed] = []
         for e in entries.sorted(by: { $0.date > $1.date }) {
             let px = min(max(x(e.date, width: width), 6), width - 6)
-            if let i = out.firstIndex(where: { abs($0.x - px) < 6 }) { out[i].count += 1 } else {
+            if let i = out.firstIndex(where: { abs($0.x - px) < 14 }) { out[i].count += 1 } else {
                 out.append(Placed(entry: e, x: px, count: 1))
             }
         }
@@ -99,7 +99,7 @@ struct DayTimeline: View {
         while now.timeIntervalSince(t) < Self.day {
             let hour = cal.component(.hour, from: t)
             if hour % 6 == 0, now.timeIntervalSince(t) > 3 * 3600 {
-                let text = Text(t.formatted(f)).font(.caption2.monospacedDigit()).foregroundColor(Color(white: 0.45))
+                let text = Text(t.formatted(f)).font(.caption2.monospacedDigit()).foregroundColor(Color(white: 0.56))
                 gc.draw(text, at: CGPoint(x: x(t, width: w), y: y), anchor: .center)
             }
             t = t.addingTimeInterval(-3600)
@@ -116,7 +116,7 @@ struct DayTimeline: View {
         let w: CGFloat = 260
         return VStack(alignment: .leading, spacing: 3) {
             Text(text).font(.callout).lineLimit(3)
-            Text(meta).font(.caption).foregroundStyle(.tertiary)
+            Text(meta).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

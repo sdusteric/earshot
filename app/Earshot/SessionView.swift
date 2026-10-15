@@ -45,7 +45,7 @@ struct SessionView: View {
                 .foregroundStyle(SessionGroup.kind(session.state) == .needsYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .lineLimit(1)
             if let folder {
-                Text(folder).font(.callout).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
+                Text(folder).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
             }
             Spacer(minLength: 12)
             if let terminalNote { Text(terminalNote).font(.callout).foregroundStyle(.secondary).lineLimit(1) }
@@ -60,9 +60,7 @@ struct SessionView: View {
 
     private var live: LiveSession? { model.liveSession(session.id) }
     private var isBackground: Bool { live?.isBackground ?? false }
-    private var hostName: String {
-        live?.pid.flatMap { TerminalHost.hostApp(of: $0)?.localizedName } ?? "Terminal"
-    }
+    private var hostName: String { model.hostName(session.id) }
     private var folder: String? {
         guard let cwd = live?.cwd, !cwd.isEmpty else { return nil }
         return (cwd as NSString).abbreviatingWithTildeInPath
@@ -109,8 +107,14 @@ struct SessionView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(items) { item in row(item) }
+                    // At most 30 turns: a plain stack, so rows that hold grids and code measure right.
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(items) { item in
+                            if item.id == firstNote {
+                                Text("Progress Notes").font(.headline).padding(.bottom, -4)
+                            }
+                            row(item)
+                        }
                         pending.id("end")
                     }
                     .padding(.horizontal, 28)
@@ -124,6 +128,11 @@ struct SessionView: View {
         }
     }
 
+    /// A background job's notes read as one log under one heading.
+    private var firstNote: String? {
+        recent?.turns.first { $0.role == .note }?.id
+    }
+
     @ViewBuilder private func row(_ item: Item) -> some View {
         switch item {
         case .turn(let t):
@@ -133,11 +142,20 @@ struct SessionView: View {
             case .claude:
                 Turn(who: "Claude", color: .secondary, text: t.text, at: t.at)
             case .note:
-                Turn(who: "Status", color: .secondary, text: t.text, at: t.at)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(t.at.map { $0.formatted(date: .omitted, time: .shortened) } ?? "")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 72, alignment: .leading)
+                    Text(t.text).font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: Turn.measure, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, -4)
             case .work:
                 Label(t.text, systemImage: "hammer")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .padding(.leading, 2)
             }
         case .earshot(let e):
@@ -173,10 +191,14 @@ struct SessionView: View {
             if let asked = recent?.asked {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(asked.question).fontWeight(.medium).fixedSize(horizontal: false, vertical: true)
-                    if !asked.options.isEmpty {
-                        Text(asked.options.joined(separator: "  ·  ")).font(.callout).foregroundStyle(.secondary)
+                    if asked.options.isEmpty {
+                        Text("Type your answer below and Earshot sends it to \(SessionStyle.title(model.displayName(session.id))).")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        // Choices wait on a picker in the session's own window; typed words would queue behind it.
+                        Text("Options: " + asked.options.joined(separator: "  ·  ")).font(.callout).foregroundStyle(.secondary)
+                        Button("Pick an Answer in \(hostName)") { terminalNote = model.openInTerminal(session.id) }
                     }
-                    Button("Answer in \(isBackground ? "Terminal" : hostName)") { terminalNote = model.openInTerminal(session.id) }
                 }
                 .modifier(PendingBox())
             }
@@ -201,7 +223,7 @@ struct SessionView: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
                     .keyboardShortcut(.return, modifiers: .command)
             }
-            Text(outcome ?? hint).font(.caption).foregroundStyle(.tertiary)
+            Text(outcome ?? hint).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 14)
@@ -236,7 +258,7 @@ private struct Turn: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(who).font(.caption.weight(.semibold)).foregroundStyle(color)
-                if let at { Text(at, format: .dateTime.hour().minute()).font(.caption).foregroundStyle(.tertiary) }
+                if let at { Text(at, format: .dateTime.hour().minute()).font(.caption).foregroundStyle(.secondary) }
             }
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(Self.blocks(text).enumerated()), id: \.offset) { _, block in
@@ -251,21 +273,29 @@ private struct Turn: View {
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(ActivityPalette.raised, in: .rect(cornerRadius: 8))
+                    case .table(let rows):
+                        TableBlock(rows: rows)
                     case .text(let t):
                         Text(Self.styled(t)).font(.body).lineSpacing(2)
                     }
                 }
             }
+            .frame(maxWidth: Self.measure, alignment: .leading)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
     }
 
+    /// About 75 characters of body text: past this, long lines get hard to read.
+    static let measure: CGFloat = 600
+
     enum Block: Equatable {
         case heading(String)
-        /// Fenced code and tables: kept as typed, in a fixed-width face.
+        /// Fenced code: kept as typed, in a fixed-width face.
         case code(String)
+        /// A markdown table: its rows of cells, the header first.
+        case table([[String]])
         case text(String)
     }
 
@@ -273,10 +303,11 @@ private struct Turn: View {
     /// kept fixed-width, and the paragraphs between them.
     static func blocks(_ s: String) -> [Block] {
         var out: [Block] = []
-        var para: [String] = [], code: [String] = []
+        var para: [String] = [], code: [String] = [], table: [[String]] = []
         var fenced = false
         func flushPara() { if !para.isEmpty { out.append(.text(para.joined(separator: "\n"))); para = [] } }
         func flushCode() { if !code.isEmpty { out.append(.code(code.joined(separator: "\n"))); code = [] } }
+        func flushTable() { if !table.isEmpty { out.append(.table(table)); table = [] } }
         for line in s.components(separatedBy: "\n") {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("```") {
@@ -288,10 +319,15 @@ private struct Turn: View {
             if t.hasPrefix("|") {
                 flushPara()
                 // The |---|---| rule under a table's header says nothing on its own.
-                if !t.allSatisfy({ "|-: ".contains($0) }) { code.append(t) }
+                if !t.allSatisfy({ "|-: ".contains($0) }) {
+                    var cells = t.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+                    if cells.first == "" { cells.removeFirst() }
+                    if cells.last == "" { cells.removeLast() }
+                    table.append(cells)
+                }
                 continue
             }
-            flushCode()
+            flushTable()
             if t.hasPrefix("#"), let space = t.firstIndex(of: " "), t[..<space].allSatisfy({ $0 == "#" }) {
                 flushPara()
                 out.append(.heading(String(t[space...]).trimmingCharacters(in: .whitespaces)))
@@ -301,7 +337,7 @@ private struct Turn: View {
                 para.append(line)
             }
         }
-        flushCode(); flushPara()
+        flushTable(); flushCode(); flushPara()
         return out
     }
 
@@ -309,6 +345,29 @@ private struct Turn: View {
     static func styled(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+    }
+}
+
+/// A markdown table as a grid: the header row in semibold, cells with their inline markdown.
+private struct TableBlock: View {
+    let rows: [[String]]
+
+    var body: some View {
+        let width = rows.map(\.count).max() ?? 0
+        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                GridRow {
+                    ForEach(0..<width, id: \.self) { c in
+                        Text(Turn.styled(c < row.count ? row[c] : ""))
+                            .font(i == 0 ? .callout.weight(.semibold) : .callout)
+                            .foregroundStyle(i == 0 ? .primary : .secondary)
+                    }
+                }
+                if i == 0 { Divider().overlay(ActivityPalette.track) }
+            }
+        }
+        .padding(12)
+        .background(ActivityPalette.raised, in: .rect(cornerRadius: 8))
     }
 }
 

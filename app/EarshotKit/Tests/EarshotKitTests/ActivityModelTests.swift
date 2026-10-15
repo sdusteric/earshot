@@ -38,7 +38,8 @@ import Testing
         let roster = ActivitySessions(known: [.init(id: "f", name: "finebrief", state: .working)],
                                       live: [.init(id: "w", name: "wedding", busy: false, waiting: true),
                                              .init(id: "f", name: "finebrief", busy: true, waiting: false)], history: [])
-        #expect(roster.recap == "Wedding needs you. Finebrief is still working.")
+        #expect(roster.recap == "Wedding needs you.")
+        #expect(roster.spokenRecap == "Wedding needs you. One session is working.")
         let both = ActivitySessions(known: [.init(id: "b", name: "blog", state: .needs), .init(id: "f", name: "finebrief", state: .done)],
                                     live: [.init(id: "w", name: "wedding", busy: false, waiting: true)], history: [])
         #expect(both.recap == "Blog needs you. Wedding needs you. Finebrief finished.")
@@ -86,11 +87,10 @@ import Testing
             .init(id: "t", name: "tests", busy: true, waiting: false),
         ], history: [])
         let lines = roster.recapLines
-        #expect(lines.count == 3)
-        #expect(Set(lines.prefix(2).map(\.id)) == ["q", "s"])
-        #expect(["p", "t"].contains(lines[2].id))
-        #expect(lines.first { $0.id == "q" }?.sentence == "Queue needs you.")
-        #expect(lines[2].sentence.hasSuffix(" is working."))
+        #expect(lines.map(\.id) == ["q", "s"])
+        #expect(lines.first?.sentence == "Queue needs you.")
+        #expect(roster.workingCount == 2)
+        #expect(roster.spokenRecap == "Queue needs you. Search needs you. 2 sessions are working.")
     }
 
     @Test func theRecapSaysWhenNothingIsOpenOrNothingNeedsYou() {

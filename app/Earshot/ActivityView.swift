@@ -10,6 +10,8 @@ struct ActivityView: View {
     @State private var since: Date?
     @State private var search = ""
     @State private var confirmClear = false
+    /// The Open group is long and rarely needed: collapsed until you open it.
+    @AppStorage("activityOpenExpanded") private var openExpanded = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     /// When you last looked away from this window; the first time, the start of today's history.
@@ -44,7 +46,9 @@ struct ActivityView: View {
         } message: {
             Text("Everything Earshot said and heard is removed from this Mac.")
         }
-        .navigationTitle(title)
+        .toolbarBackground(ActivityPalette.ground, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+        .navigationTitle("Activity")
         .frame(minWidth: 900, minHeight: 600)
         .onAppear { since = lastLooked }
         .onDisappear { lastSeenStamp = Date().timeIntervalSince1970 }
@@ -75,12 +79,20 @@ struct ActivityView: View {
                 .tag(ActivityPage.brief)
                 Label("Today's History", systemImage: "clock").tag(ActivityPage.history)
             }
+            let names = Dictionary(grouping: sessions, by: { NameMatch.normalize(model.displayName($0.id)) })
             ForEach(groups) { g in
-                Section(g.kind.title) {
-                    ForEach(g.sessions) { s in
-                        SessionSidebarRow(session: s, name: model.displayName(s.id), last: model.lastLine(for: s.id))
-                            .tag(ActivityPage.session(s.id))
+                let rows = ForEach(g.sessions) { s in
+                    SessionSidebarRow(session: s, name: model.displayName(s.id), last: model.lastLine(for: s.id),
+                                      started: (names[NameMatch.normalize(model.displayName(s.id))]?.count ?? 0) > 1
+                                          ? model.liveSession(s.id)?.started : nil)
+                        .tag(ActivityPage.session(s.id))
+                }
+                if g.kind == .open {
+                    Section(isExpanded: $openExpanded) { rows } header: {
+                        Text("\(g.kind.title) \u{00B7} \(g.sessions.count)")
                     }
+                } else {
+                    Section(g.kind.title) { rows }
                 }
             }
         }
@@ -114,13 +126,6 @@ struct ActivityView: View {
         }
     }
 
-    private var title: String {
-        switch model.activityPage {
-        case .brief: "Since You Left"
-        case .history: "Today's History"
-        case .session(let id): SessionStyle.title(model.displayName(id))
-        }
-    }
 }
 
 /// The sidebar's groups, in the order you'd act on them.
@@ -166,6 +171,8 @@ private struct SessionSidebarRow: View {
     let session: SessionInfo
     let name: String
     let last: HistoryEntry?
+    /// When another session has the same name: when this one started, to tell them apart.
+    var started: Date?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -175,7 +182,7 @@ private struct SessionSidebarRow: View {
                     Text(SessionStyle.title(name)).fontWeight(.medium).lineLimit(1)
                     Spacer(minLength: 4)
                     if let when {
-                        Text(ActivityTime.short(when)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                        Text(ActivityTime.short(when)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
                 if let second {
@@ -190,6 +197,8 @@ private struct SessionSidebarRow: View {
 
     /// The last line about it, else Claude Code's title when it says more than the name.
     private var second: String? {
+        let start = started.map { "Started \($0.formatted(date: .omitted, time: .shortened))" }
+        if let start { return [start, last?.text].compactMap { $0 }.joined(separator: " \u{00B7} ") }
         if let last { return last.text }
         guard let t = session.title, !t.isEmpty, NameMatch.normalize(t) != NameMatch.normalize(name) else { return nil }
         return t

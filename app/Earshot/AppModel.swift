@@ -330,6 +330,12 @@ final class AppModel {
         return await stack.dispatcher.send(typed: text, toSession: id).line ?? ""
     }
 
+    /// The app a session's window is in ("Terminal", "Otty"), for button titles.
+    func hostName(_ id: String) -> String {
+        guard let s = liveSession(id), !s.isBackground, let pid = s.pid else { return "Terminal" }
+        return TerminalHost.hostApp(of: pid)?.localizedName ?? "Terminal"
+    }
+
     /// Brings the session's own window forward. Returns a line when that fails.
     func openInTerminal(_ id: String) -> String? {
         guard let s = liveSession(id) else { return "Claude Code doesn't list this session any more." }

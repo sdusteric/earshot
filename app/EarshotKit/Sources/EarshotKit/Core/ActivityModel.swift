@@ -56,9 +56,11 @@ public struct ActivitySessions: Sendable {
             ?? "session"
     }
 
-    /// The sessions the recap speaks about, in its order, at most three.
+    /// The sessions the recap speaks about, in its order, at most three: who
+    /// needs you, then who is stuck or failed, then who finished. Working
+    /// sessions are a count, not a name (see `workingCount`).
     public var recapLines: [RecapLine] {
-        let order: [SessionState] = [.needs, .reply, .stuck, .failed, .done, .working]
+        let order: [SessionState] = [.needs, .reply, .stuck, .failed, .done]
         let fromPlugin = known
             .filter { order.contains($0.state) }
             .sorted { (order.firstIndex(of: $0.state) ?? 9) < (order.firstIndex(of: $1.state) ?? 9) }
@@ -69,8 +71,7 @@ public struct ActivitySessions: Sendable {
                 case .reply: "is waiting on your answer."
                 case .stuck: "might be stuck."
                 case .failed: "hit an error."
-                case .done: "finished."
-                default: "is still working."
+                default: "finished."
                 }
                 return RecapLine(id: s.id, sentence: "\(n) \(verb)")
             }
@@ -88,14 +89,26 @@ public struct ActivitySessions: Sendable {
             return Array((Array(needs) + waitingOnly + rest.dropFirst(needs.count)).prefix(3))
         }
         // The plugin hasn't reported yet: what Claude Code itself says.
-        return live
-            .filter { $0.waiting || $0.busy }
-            .sorted { ($0.waiting ? 0 : 1) < ($1.waiting ? 0 : 1) }
-            .prefix(3)
-            .map { s in RecapLine(id: s.id, sentence: "\(Self.title(displayName(s.id))) \(s.waiting ? "needs you." : "is working.")") }
+        return Array(waitingOnly.prefix(3))
     }
 
-    /// Who needs you first, then who is stuck, finished, or working: one short sentence each.
+    /// Sessions working now, by the plugin's account, else Claude Code's.
+    public var workingCount: Int {
+        let knownIDs = Set(known.map(\.id))
+        let ids = Set(known.filter { $0.state == .working }.map(\.id))
+            .union(live.filter { $0.busy && !knownIDs.contains($0.id) }.map(\.id))
+        return ids.count
+    }
+
+    /// The recap and, after it, how many sessions are working: what Say the Recap says.
+    public var spokenRecap: String {
+        let n = workingCount
+        guard n > 0 else { return recap }
+        let count = n == 1 ? "One session is working." : "\(n) sessions are working."
+        return recapLines.isEmpty ? count : "\(recap) \(count)"
+    }
+
+    /// Who needs you first, then who is stuck or finished: one short sentence each.
     public var recap: String {
         let parts = recapLines.map(\.sentence)
         if !parts.isEmpty { return parts.joined(separator: " ") }

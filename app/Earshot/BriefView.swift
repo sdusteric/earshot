@@ -45,6 +45,7 @@ struct BriefView: View {
     }
 
     private var masthead: some View {
+        let roster = self.roster
         let recap = roster.recap
         return HStack(alignment: .center, spacing: 22) {
             OrbView(size: 96, restingColor: .white, spinsWhenIdle: true)
@@ -65,7 +66,7 @@ struct BriefView: View {
                 Text(subline).font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 8) {
                     Button("Talk") { model.tapToTalk() }
-                    Button("Say the Recap") { model.playTestLine(recap) }
+                    Button("Say the Recap") { model.playTestLine(roster.spokenRecap) }
                         .disabled(sessions.isEmpty)
                     if let b = model.commandBlock {
                         // Talk can't be heard now: say why next to it, not only with the closed chime.
@@ -177,7 +178,7 @@ private struct WaitingCard<Actions: View>: View {
                 Text(SessionStyle.title(name)).font(.title3.weight(.semibold))
                 Text(state).foregroundStyle(.orange).lineLimit(2)
                 Spacer(minLength: 8)
-                if let since, Date().timeIntervalSince(since) >= 60 { Text("waiting \(ActivityTime.spoken(Date().timeIntervalSince(since)))").font(.callout).foregroundStyle(.tertiary) }
+                if let since, Date().timeIntervalSince(since) >= 60 { Text("waiting \(ActivityTime.spoken(Date().timeIntervalSince(since)))").font(.callout).foregroundStyle(.secondary) }
                 Button("Open Session") { model.activityPage = .session(session) }
                     .buttonStyle(.link)
                     .padding(.leading, 6)
@@ -199,6 +200,8 @@ private struct QuestionCard: View {
     @Environment(AppModel.self) private var model
     @State private var asked: AskedQuestion?
     @State private var note: String?
+    @State private var draft = ""
+    @State private var sending = false
 
     var body: some View {
         WaitingCard(name: model.displayName(session.id), state: SessionStyle.describe(session),
@@ -207,19 +210,46 @@ private struct QuestionCard: View {
                 if let asked {
                     Text(asked.question).font(.body).fixedSize(horizontal: false, vertical: true)
                     if !asked.options.isEmpty {
-                        Text(asked.options.joined(separator: "  ·  ")).font(.callout).foregroundStyle(.secondary)
+                        Text("Options: " + asked.options.joined(separator: "  ·  ")).font(.callout).foregroundStyle(.secondary)
                     }
                 } else if let last {
                     Text(last.text).font(.body).foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
-                    Button("Reply\u{2026}") { model.activityPage = .session(session.id) }
-                    Button(asked == nil ? "Open in Terminal" : "Answer in Terminal") { note = model.openInTerminal(session.id) }
+                if picker {
+                    // A question with choices waits on a picker in the session's own window;
+                    // typed words would queue behind it rather than answer it.
+                    HStack(spacing: 8) {
+                        Button("Pick an Answer in \(model.hostName(session.id))") { note = model.openInTerminal(session.id) }
+                        if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        TextField("Answer \(SessionStyle.title(model.displayName(session.id)))", text: $draft)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(send)
+                        Button("Send", action: send)
+                            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || sending)
+                        Button("Open in \(model.hostName(session.id))") { note = model.openInTerminal(session.id) }
+                    }
                     if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
                 }
             }
         }
         .task(id: session.id) { asked = await model.transcript(for: session.id)?.asked }
+    }
+
+    private var picker: Bool { !(asked?.options.isEmpty ?? true) }
+
+    private func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !sending else { return }
+        sending = true
+        Task {
+            let line = await model.send(text, toSession: session.id)
+            sending = false
+            note = line
+            if line.hasPrefix("Sent") || line.hasPrefix("Queued") { draft = "" }
+        }
     }
 }
 
@@ -229,18 +259,20 @@ private struct AwayRow: View {
     let name: String
     let last: HistoryEntry?
     let open: () -> Void
+    @Environment(AppModel.self) private var model
     @State private var hovering = false
+    @State private var latest: SessionTurn?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Circle().fill(SessionStyle.color(session.state)).frame(width: 8, height: 8).accessibilityHidden(true)
             Text(SessionStyle.title(name)).fontWeight(.semibold).frame(width: 150, alignment: .leading).lineLimit(1)
-            (Text(lead).foregroundStyle(.primary) + Text(last.map { " " + $0.text } ?? "").foregroundStyle(.secondary))
+            (Text(lead).foregroundStyle(.primary) + Text(detail.map { " " + $0 } ?? "").foregroundStyle(.secondary))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text((last?.date ?? session.updated).formatted(date: .omitted, time: .shortened))
+            Text(when.formatted(date: .omitted, time: .shortened))
                 .font(.callout.monospacedDigit())
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 8)
@@ -251,12 +283,28 @@ private struct AwayRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens this session")
+        .task(id: session.id) {
+            latest = await model.transcript(for: session.id)?.turns.last { $0.role != .you }
+        }
+    }
+
+    /// The newer of Earshot's last line about it and the session's own last turn.
+    private var detail: String? {
+        if let latest, let at = latest.at, at > (last?.date ?? .distantPast) {
+            return latest.text.split(separator: "\n").first.map(String.init)
+        }
+        return last?.text
+    }
+
+    private var when: Date {
+        max(last?.date ?? session.updated, latest?.at ?? .distantPast)
     }
 
     private var lead: String {
-        switch session.state {
+        let started = session.since == .distantPast ? nil : session.since
+        return switch session.state {
         case .done: "Finished."
-        case .working: "Working."
+        case .working: started.map { "Working, \(ActivityTime.spoken(Date().timeIntervalSince($0))) in." } ?? "Working."
         case .stuck: "Might be stuck."
         case .failed: "Hit an error."
         default: ""
