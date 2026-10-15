@@ -50,7 +50,10 @@ struct ActivityView: View {
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .navigationTitle("Activity")
         .frame(minWidth: 900, minHeight: 600)
-        .onAppear { since = lastLooked }
+        .onAppear { since = lastLooked; revealSelection() }
+        .onChange(of: model.activityPage) { revealSelection() }
+        // The session list can arrive after the window opens.
+        .onChange(of: sessions.map(\.id)) { revealSelection() }
         .onDisappear { lastSeenStamp = Date().timeIntervalSince1970 }
         .onChange(of: controlActiveState) { old, state in
             // Looking away marks the moment; coming back, the brief covers what came since.
@@ -97,6 +100,13 @@ struct ActivityView: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// A session picked from the menu bar may sit in the collapsed Open group: open it, so the selection shows.
+    private func revealSelection() {
+        guard case .session(let id) = model.activityPage, let s = sessions.first(where: { $0.id == id }),
+              SessionGroup.kind(s.state) == .open else { return }
+        openExpanded = true
     }
 
     // MARK: Detail

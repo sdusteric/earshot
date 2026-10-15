@@ -288,7 +288,7 @@ private struct Turn: View {
     }
 
     /// About 75 characters of body text: past this, long lines get hard to read.
-    static let measure: CGFloat = 600
+    static let measure: CGFloat = 520
 
     enum Block: Equatable {
         case heading(String)

@@ -100,10 +100,12 @@ struct SessionTranscriptTests {
         try #"{"state":"blocked","needs":"provide a test invitation code"}"#.write(to: dir.appending(path: "state.json"), atomically: true, encoding: .utf8)
         try ([#"{"at":"2026-07-01T01:22:05.251Z","state":"working","detail":"building the RSVP flow"}"#,
               #"{"at":"2026-07-01T01:23:05.251Z","state":"working","detail":"building the RSVP flow"}"#,
+              #"{"at":"2026-07-01T01:24:05.251Z","state":"working","detail":"checking the rsv"}"#,
+              #"{"at":"2026-07-01T01:24:06.251Z","state":"working","detail":"checking the rsvp"}"#,
               #"{"at":"2026-07-01T01:25:45.631Z","state":"blocked","detail":"prod deployed"}"#].joined(separator: "\n"))
             .write(to: dir.appending(path: "timeline.jsonl"), atomically: true, encoding: .utf8)
         let r = SessionTranscript.job(sessionID: "2bc20c28-fe31-4c8d-be2f-cddffee12b94", home: home)
-        #expect(r?.turns.map(\.text) == ["building the RSVP flow", "prod deployed"])
+        #expect(r?.turns.map(\.text) == ["building the RSVP flow", "checking the rsvp", "prod deployed"])
         #expect(r?.asked == AskedQuestion(question: "Provide a test invitation code", options: []))
         #expect(SessionTranscript.job(sessionID: "ffffffff-0000", home: home) == nil)
     }

@@ -262,6 +262,8 @@ private struct AwayRow: View {
     @Environment(AppModel.self) private var model
     @State private var hovering = false
     @State private var latest: SessionTurn?
+    /// Your last prompt to it: a working session has worked since then.
+    @State private var asked: Date?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -284,7 +286,10 @@ private struct AwayRow: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens this session")
         .task(id: session.id) {
-            latest = await model.transcript(for: session.id)?.turns.last { $0.role != .you }
+            let turns = await model.transcript(for: session.id)?.turns ?? []
+            latest = turns.last { $0.role != .you }
+            // An old prompt says nothing about the work now (another prompt may have come by voice).
+            asked = turns.last { $0.role == .you }?.at.flatMap { Date().timeIntervalSince($0) < 6 * 3600 ? $0 : nil }
         }
     }
 
@@ -301,7 +306,8 @@ private struct AwayRow: View {
     }
 
     private var lead: String {
-        let started = session.since == .distantPast ? nil : session.since
+        // The plugin's account of when it started working, else your last prompt to it.
+        let started = session.since == .distantPast ? asked : session.since
         return switch session.state {
         case .done: "Finished."
         case .working: started.map { "Working, \(ActivityTime.spoken(Date().timeIntervalSince($0))) in." } ?? "Working."

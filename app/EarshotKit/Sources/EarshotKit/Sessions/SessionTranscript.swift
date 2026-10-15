@@ -150,6 +150,8 @@ public enum SessionTranscript {
             guard let o = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                   let detail = (o["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !detail.isEmpty, turns.last?.text != detail else { continue }
+            // A note the next one repeats and finishes ("...the original rsv", then "...rsvp") is dropped.
+            if let prev = turns.last, detail.hasPrefix(prev.text) { turns.removeLast() }
             turns.append(SessionTurn(id: "job-\(i)", role: .note, text: detail, at: (o["at"] as? String).flatMap(date)))
         }
         var asked: AskedQuestion?
