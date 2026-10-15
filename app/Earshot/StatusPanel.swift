@@ -179,21 +179,24 @@ struct StatusPanel: View {
         // Return allows the one prompt only when no answer field could be taking it.
         let returnAllows = layout.approvals.count == 1 && layout.questions.isEmpty
         return VStack(alignment: .leading, spacing: 8) {
+            // The title lines up with the other sections; only the cards are inset.
             SectionTitle(title: "Waiting on You", trailing: "\(count)", trailingColor: .orange)
-            ForEach(layout.approvals) { a in
-                ApprovalCard(approval: a, returnAllows: returnAllows) { show(.session(a.session)) }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(layout.approvals) { a in
+                    ApprovalCard(approval: a, returnAllows: returnAllows) { show(.session(a.session)) }
+                }
+                ForEach(layout.questions) { s in
+                    QuestionCard(session: s, last: model.lastLine(for: s.id)) { show(.session(s.id)) }
+                }
+                if layout.moreWaiting > 0 {
+                    Button("\(layout.moreWaiting) more waiting in Activity") { show(.brief) }
+                        .buttonStyle(.link)
+                        .font(.callout)
+                        .padding(.horizontal, 2)
+                }
             }
-            ForEach(layout.questions) { s in
-                QuestionCard(session: s, last: model.lastLine(for: s.id)) { show(.session(s.id)) }
-            }
-            if layout.moreWaiting > 0 {
-                Button("\(layout.moreWaiting) more waiting in Activity") { show(.brief) }
-                    .buttonStyle(.link)
-                    .font(.callout)
-                    .padding(.horizontal, 6)
-            }
+            .padding(.horizontal, 12)
         }
-        .padding(.horizontal, 12)
         .padding(.bottom, 12)
     }
 
