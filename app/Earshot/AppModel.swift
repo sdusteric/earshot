@@ -30,6 +30,9 @@ final class AppModel {
     var listenPhase: Listener.Phase = .off
     /// Earshot is working out its answer to what you said (see VoiceLoop.thinking).
     var thinking = false
+    /// What the floating orb's caption shows: listening, what was heard (as the
+    /// history keeps it), or the line Earshot is saying. Never logged.
+    var caption: OrbCaption?
     var listenBlock: ListenBlock?
     /// Why a command can't be heard now (the hotkey, Talk, the orb), or nil.
     var commandBlock: ListenBlock?
@@ -114,7 +117,10 @@ final class AppModel {
         Task { for await list in await history.changes() { self.history = list } }
         Task {
             for await e in await live.core.speech.lineEvents() {
-                if case .started(let line) = e { await record(line) }
+                if case .started(let line) = e {
+                    caption = OrbCaption(kind: .saying, text: line.text)
+                    await record(line)
+                }
             }
         }
         core = live.core
@@ -177,7 +183,14 @@ final class AppModel {
                     await listeningChanged()
                 }
             }
-            Task { for await p in await stack.listener.phaseChanges() { listenPhase = p; updateActivity() } }
+            Task {
+                for await p in await stack.listener.phaseChanges() {
+                    if case .capturing = p, listenPhase != p { caption = .listening }
+                    listenPhase = p
+                    updateActivity()
+                }
+            }
+            Task { for await text in await stack.loop.heardLines() { caption = OrbCaption(kind: .heard, text: text) } }
             Task { for await t in await stack.loop.thinkingChanges() { thinking = t; updateActivity() } }
             Task { for await _ in watch.changes() { await listeningChanged() } }
             // A session opened while the plugin is silent arms the wake word within a minute.
