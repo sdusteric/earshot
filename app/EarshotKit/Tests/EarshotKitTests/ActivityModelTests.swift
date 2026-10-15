@@ -100,7 +100,7 @@ import Testing
         #expect(quiet.recap == "Nothing needs you right now.")
     }
 
-    @Test func eachSessionHasOneNameAndThePluginsComesFirst() {
+    @Test func eachSessionHasOneNameAndTheLiveNameBeatsAnOldLine() {
         let history = [
             HistoryEntry(kind: .said, text: "one", session: "s1", sessionName: "old billing"),
             HistoryEntry(kind: .said, text: "two", session: "s1", sessionName: "bill"),
@@ -115,12 +115,15 @@ import Testing
         let withPlugin = ActivitySessions(known: [.init(id: "s1", name: "billing", state: .needs)], live: live, history: history)
         #expect(withPlugin.displayName("s1") == "billing")
         #expect(withPlugin.recapLines.first?.sentence == "Billing needs you.")
-        #expect(withPlugin.displayName("s2") == "search")
+        #expect(withPlugin.displayName("s2") == "search-svc")
         #expect(withPlugin.displayName("s3") == "tests")
         #expect(withPlugin.displayName("s9") == "session")
 
         let noPlugin = ActivitySessions(known: [], live: live, history: history)
-        #expect(noPlugin.displayName("s1") == "bill")
+        #expect(noPlugin.displayName("s1") == "billing-svc")
+        // A closed session keeps the name its last line used.
+        let closed = ActivitySessions(known: [], live: [], history: history)
+        #expect(closed.displayName("s1") == "bill")
     }
 
     @Test func titlesCapitalizeTheFirstLetterOnly() {
