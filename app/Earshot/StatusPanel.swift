@@ -7,8 +7,9 @@ enum ActivityPage: Hashable {
     case session(String)
 }
 
-/// The panel under the menu bar icon: what Earshot is doing, the sessions
-/// with whoever needs you first, the last few things said, and quick controls.
+/// The panel under the menu bar icon, on the same dark ground as Activity:
+/// what waits on you first, with its answer right there, then the sessions,
+/// the last few things said, and quick controls.
 struct StatusPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
@@ -16,23 +17,31 @@ struct StatusPanel: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        // The plugin's sessions, plus the ones only `claude agents` lists (all of them without the plugin).
+        let ranked = SessionInfo.panelList(known: model.sessions, live: model.liveSessions)
+        let layout = PanelLayout(ranked: ranked, approvals: model.approvals,
+                                 maxWaiting: Self.shownWaiting, maxSessions: Self.shownSessions)
         VStack(alignment: .leading, spacing: 0) {
             header
-            if !model.approvals.isEmpty {
-                ApprovalRows()
-                    .font(.callout)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
-            }
             notices
-            Divider()
-            sessionsSection
-            Divider()
-            recentSection
-            Divider()
+            if layout.isWaiting {
+                PanelRule()
+                waitingSection(layout)
+            }
+            if !layout.sessions.isEmpty || !layout.isWaiting {
+                PanelRule()
+                sessionsSection(layout, total: ranked.count)
+            }
+            PanelRule()
+            recentSection(lines: layout.isWaiting ? 2 : 4)
+            PanelRule()
             footer
         }
         .frame(width: 360)
+        .background(ActivityPalette.ground)
+        // Always dark, like Activity and the orb (see DESIGN.md, Menu bar panel).
+        .environment(\.colorScheme, .dark)
+        .preferredColorScheme(.dark)
         .onAppear {
             model.refreshPermissions()   // secure input or a permission may have changed
             model.refreshApprovals()
@@ -58,21 +67,37 @@ struct StatusPanel: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
+            talkButton
             muteMenu
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .accessibilityElement(children: .combine)
     }
 
+    /// The orb's colors: blue listening, violet working, amber speaking or holding lines.
     private var stateColor: Color {
-        switch model.menuIcon {
-        case .muted: .secondary
-        case .active: .accentColor
-        case .holding: .orange
-        case .idle, .ready: .primary
+        if model.mutedUntil != nil { return .secondary }
+        if let mode = OrbMode(model) {
+            let c = mode.rgb(model.config.orbColor)
+            return Color(red: c.x, green: c.y, blue: c.z)
         }
+        return model.speechState == .holding ? ActivityPalette.voice : .primary
+    }
+
+    private var talkButton: some View {
+        Button {
+            let heard = model.commandBlock == nil
+            model.tapToTalk()
+            if heard { dismiss() }   // out of the way of the orb
+        } label: {
+            Image(systemName: "mic")
+        }
+        .buttonStyle(.borderless)
+        .help(model.commandBlock.map { model.blockLine($0) } ?? "Say one command")
+        .accessibilityLabel("Talk")
+        .accessibilityHint("Listens for one command")
     }
 
     private var muteMenu: some View {
@@ -144,39 +169,60 @@ struct StatusPanel: View {
         }
     }
 
+    // MARK: Waiting on you
+
+    /// Waiting cards past this go to Activity, so the panel fits on a laptop screen.
+    static let shownWaiting = 3
+
+    private func waitingSection(_ layout: PanelLayout) -> some View {
+        let count = layout.approvals.count + layout.questions.count + layout.moreWaiting
+        // Return allows the one prompt only when no answer field could be taking it.
+        let returnAllows = layout.approvals.count == 1 && layout.questions.isEmpty
+        return VStack(alignment: .leading, spacing: 8) {
+            SectionTitle(title: "Waiting on You", trailing: "\(count)", trailingColor: .orange)
+            ForEach(layout.approvals) { a in
+                ApprovalCard(approval: a, returnAllows: returnAllows) { show(.session(a.session)) }
+            }
+            ForEach(layout.questions) { s in
+                QuestionCard(session: s, last: model.lastLine(for: s.id)) { show(.session(s.id)) }
+            }
+            if layout.moreWaiting > 0 {
+                Button("\(layout.moreWaiting) more waiting in Activity") { show(.brief) }
+                    .buttonStyle(.link)
+                    .font(.callout)
+                    .padding(.horizontal, 6)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
+    }
+
     // MARK: Sessions
 
     /// More than this and the panel runs off the screen.
     static let shownSessions = 5
 
-    private var sessionsSection: some View {
-        // The plugin's sessions, plus the ones only `claude agents` lists (all of them without the plugin).
-        let sessions = SessionInfo.panelList(known: model.sessions, live: model.liveSessions)
-        return VStack(alignment: .leading, spacing: 4) {
-            SectionTitle(title: "Sessions", trailing: sessions.isEmpty ? nil : "\(sessions.count)")
-            if sessions.isEmpty {
-                Text(model.pluginStatus.isConnected || model.pluginStatus == .checking
-                     ? "No Claude Code sessions. Start one and Earshot tells you when it needs you or finishes."
-                     : "No Claude Code sessions found. Connect the Earshot plugin so Earshot can tell you when a session needs you or finishes.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
+    private func sessionsSection(_ layout: PanelLayout, total: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "Sessions", trailing: total == 0 ? nil : "\(total)")
+            if total == 0 {
+                EmptyLine(text: model.pluginStatus.isConnected || model.pluginStatus == .checking
+                          ? "No Claude Code sessions. Start one and Earshot tells you when it needs you or finishes."
+                          : "No Claude Code sessions found. Connect the Earshot plugin so Earshot can tell you when a session needs you or finishes.")
             } else {
                 // The list is ranked, so the first few are what needs you and what's working.
-                ForEach(sessions.prefix(Self.shownSessions)) { s in
-                    SessionRow(session: s, last: model.lastLine(for: s.id)) {
+                ForEach(layout.sessions) { s in
+                    SessionRow(session: s, name: model.displayName(s.id), last: model.lastLine(for: s.id)) {
                         show(.session(s.id))
                     } replay: { entry in
                         model.replay(entry)
                     }
                 }
-                if sessions.count > Self.shownSessions {
-                    Button("\(sessions.count - Self.shownSessions) more in Activity") { show(.brief) }
+                if layout.moreSessions > 0 {
+                    Button("\(layout.moreSessions) more in Activity") { show(.brief) }
                         .buttonStyle(.link)
                         .font(.callout)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, 14)
                         .padding(.top, 2)
                 }
                 Spacer().frame(height: 6)
@@ -186,10 +232,11 @@ struct StatusPanel: View {
 
     // MARK: Recent
 
-    private var recentSection: some View {
+    /// The last few lines, fewer while something waits on you, so the panel fits.
+    private func recentSection(lines: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             SectionTitle(title: "Recent", trailing: nil)
-            let recent = Array(model.history.suffix(4).reversed())
+            let recent = Array(model.history.suffix(lines).reversed())
             if model.config.history == .off {
                 EmptyLine(text: "History is off. Turn it on in Settings, General.")
             } else if recent.isEmpty {
@@ -242,18 +289,25 @@ struct StatusPanel: View {
     }
 }
 
+/// A 1pt Track rule between the panel's sections.
+private struct PanelRule: View {
+    var body: some View { Rectangle().fill(ActivityPalette.track).frame(height: 1) }
+}
+
 private struct SectionTitle: View {
     let title: String
     let trailing: String?
+    var trailingColor: Color = .secondary
     var body: some View {
         HStack {
             Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
-            if let trailing { Text(trailing).font(.subheadline).foregroundStyle(.tertiary).monospacedDigit() }
+            if let trailing { Text(trailing).font(.subheadline).foregroundStyle(trailingColor).monospacedDigit() }
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 2)
+        .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -284,33 +338,140 @@ private struct Notice: View {
     }
 }
 
-/// Permission prompts waiting on you, each with Allow and Deny. A click answers
-/// it the way a spoken yes or no does. With one prompt, Return allows it.
-struct ApprovalRows: View {
+// MARK: Waiting cards
+
+/// Something waiting on you, in the panel: Raised, a 12pt radius and a 1pt
+/// orange border, like the waiting cards in Activity. The top line names the
+/// session and how long it has waited.
+private struct WaitingCard<Content: View>: View {
+    let name: String
+    let since: Date?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Circle().fill(.orange).frame(width: 8, height: 8).accessibilityHidden(true)
+                Text(SessionStyle.title(name)).font(.body.weight(.semibold)).lineLimit(1)
+                Spacer(minLength: 6)
+                if let since, Date().timeIntervalSince(since) >= 60 {
+                    Text(ActivityTime.short(since))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help("Waiting \(ActivityTime.spoken(Date().timeIntervalSince(since)))")
+                }
+            }
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ActivityPalette.raised, in: .rect(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A permission prompt: what it wants, then Deny and Allow. A click answers it
+/// the way a spoken yes or no does.
+private struct ApprovalCard: View {
+    let approval: OpenApproval
+    /// Return allows this prompt: only when it is the one thing waiting.
+    let returnAllows: Bool
+    let open: () -> Void
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let open = model.approvals
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(open) { a in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "hand.raised").foregroundStyle(.orange).accessibilityHidden(true)
-                    Text(a.line).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
-                    Button("Deny") { model.answer(a, allow: false) }
-                    Button("Allow") { model.answer(a, allow: true) }
-                        .keyboardShortcut(open.count == 1 ? .defaultAction : nil)
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(a.line)
+        WaitingCard(name: approval.name, since: approval.opened) {
+            Text(approval.what.isEmpty ? "Wants your OK" : "Wants \(approval.what)")
+                .font(.callout)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Open Session", action: open).buttonStyle(.link).font(.callout)
+                Spacer(minLength: 6)
+                Button("Deny") { model.answer(approval, allow: false) }
+                Button("Allow") { model.answer(approval, allow: true) }
+                    .keyboardShortcut(returnAllows ? .defaultAction : nil)
             }
+        }
+        .accessibilityLabel(approval.line)
+    }
+}
+
+/// A session waiting on your answer: the question when its transcript has one
+/// open, else what Earshot last said, then a one-line answer field. A question
+/// with choices lists them and sends you to its window, since a typed prompt
+/// cannot pick one there.
+private struct QuestionCard: View {
+    let session: SessionInfo
+    let last: HistoryEntry?
+    let open: () -> Void
+    @Environment(AppModel.self) private var model
+    @State private var asked: AskedQuestion?
+    @State private var note: String?
+    @State private var draft = ""
+    @State private var sending = false
+
+    var body: some View {
+        let name = model.displayName(session.id)
+        WaitingCard(name: name, since: session.since == .distantPast ? session.updated : session.since) {
+            if let asked {
+                Text(asked.question).font(.callout).lineLimit(4).fixedSize(horizontal: false, vertical: true)
+                if !asked.options.isEmpty {
+                    Text(asked.options.joined(separator: "  \u{00B7}  "))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if let last {
+                Text(last.text).font(.callout).foregroundStyle(.secondary).lineLimit(3)
+            } else {
+                Text(SessionStyle.title(SessionStyle.describe(session)))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if picker {
+                HStack(spacing: 8) {
+                    Button("Open Session", action: open).buttonStyle(.link).font(.callout)
+                    Spacer(minLength: 6)
+                    Button("Pick an Answer in \(model.hostName(session.id))") { note = model.openInTerminal(session.id) }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    TextField("Answer \(SessionStyle.title(name))", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(send)
+                    Button("Send", action: send)
+                        .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || sending)
+                }
+                Button("Open Session", action: open).buttonStyle(.link).font(.callout)
+            }
+            if let note { Text(note).font(.callout).foregroundStyle(.secondary).lineLimit(2) }
+        }
+        .task(id: session.id) { asked = await model.transcript(for: session.id)?.asked }
+    }
+
+    private var picker: Bool { !(asked?.options.isEmpty ?? true) }
+
+    private func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !sending else { return }
+        sending = true
+        Task {
+            let line = await model.send(text, toSession: session.id)
+            sending = false
+            note = line
+            if line.hasPrefix("Sent") || line.hasPrefix("Queued") { draft = "" }
         }
     }
 }
 
-/// A session: its state, and the last thing Earshot said about it.
+/// A session: its state, and the last thing Earshot said about it. A click
+/// opens its page in Activity.
 private struct SessionRow: View {
     let session: SessionInfo
+    let name: String
     let last: HistoryEntry?
     let open: () -> Void
     let replay: (HistoryEntry) -> Void
@@ -325,7 +486,7 @@ private struct SessionRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(SessionStyle.title(session.name)).font(.body.weight(.medium)).lineLimit(1)
+                    Text(SessionStyle.title(name)).font(.body.weight(.medium)).lineLimit(1)
                     Spacer(minLength: 6)
                     Text(SessionStyle.describe(session))
                         .font(.callout)
@@ -340,13 +501,13 @@ private struct SessionRow: View {
                 Button { replay(last) } label: { Image(systemName: "play.circle") }
                     .buttonStyle(.borderless)
                     .help("Say it again")
-                    .accessibilityLabel("Say \(session.name)'s last line again")
+                    .accessibilityLabel("Say \(name)'s last line again")
                     .padding(.top, 1)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(hovering ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 6))
+        .background(hovering ? Color.primary.opacity(0.05) : .clear, in: .rect(cornerRadius: 6))
         .padding(.horizontal, 6)
         .contentShape(.rect)
         .onHover { hovering = $0 }
@@ -354,6 +515,7 @@ private struct SessionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens this session")
+        .accessibilityAction(.default, open)
     }
 }
 
@@ -392,7 +554,7 @@ struct HistoryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: entry.kind == .heard ? "person.wave.2" : "waveform")
-                .foregroundStyle(entry.kind == .heard ? AnyShapeStyle(.tint) : entry.asksYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .foregroundStyle(entry.kind == .heard ? AnyShapeStyle(ActivityPalette.you) : entry.asksYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .frame(width: 18)
                 .padding(.top, 1)
                 .accessibilityHidden(true)
@@ -411,8 +573,8 @@ struct HistoryRow: View {
                     if let name = entry.sessionName { Text(SessionStyle.title(name)) }
                     Text(entry.date, format: .dateTime.hour().minute())
                 }
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             Button(action: replay) { Image(systemName: "play.circle") }
