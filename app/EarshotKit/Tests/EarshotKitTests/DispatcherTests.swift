@@ -45,14 +45,14 @@ actor FakeTransport: SessionTransport {
     @Test func sendsToTheNamedSession() async {
         let (d, _, _) = make([agent("a", "billing-service", pid: 10), agent("b", "blog", pid: 11)])
         let o = await d.run(.send(target: "billing service", prompt: "run the tests"))
-        #expect(o.line == "Sent to billing service.")
+        #expect(o.line == "Sent to Billing service.")
         #expect(o.spokeAbout == "a")
         #expect(await transport.sent == [.init(pid: 10, session: "a", text: "run the tests", priority: .next)])
     }
 
     @Test func aBusySessionIsQueued() async {
         let (d, _, _) = make([agent("a", "billing-service", status: "busy")])
-        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Queued, billing service is busy.")
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Queued, Billing service is busy.")
     }
 
     @Test func aSessionOnAPromptSaysItStillWaits() async {
@@ -63,7 +63,7 @@ actor FakeTransport: SessionTransport {
 
     @Test func noTargetWithOneSessionUsesIt() async {
         let (d, _, _) = make([agent("b", "blog")])
-        #expect(await d.run(.send(target: nil, prompt: "deploy")).line == "Sent to blog.")
+        #expect(await d.run(.send(target: nil, prompt: "deploy")).line == "Sent to Blog.")
     }
 
     @Test func noTargetWithSeveralAsks() async {
@@ -81,7 +81,7 @@ actor FakeTransport: SessionTransport {
         #expect(o.line == "Billing service has two: Fix refund rounding and Invoice export. Which one?")
         guard let p = o.pending else { Issue.record("no question"); return }
         let r = await d.reply("invoices", to: p)
-        #expect(r.line == "Sent to the Invoice export session.")
+        #expect(r.line == "Sent to Billing service invoice.")
         #expect(await transport.sent.map(\.pid) == [11])
     }
 
@@ -89,9 +89,9 @@ actor FakeTransport: SessionTransport {
         let (d, _, _) = make([agent("a", "blog", pid: 10, startedAt: 1_790_000_200_000),
                               agent("b", "blog", pid: 11, startedAt: 1_790_000_100_000)])
         let o = await d.run(.send(target: "blog", prompt: "deploy"))
-        #expect(o.line == "Blog has two: the older blog session and the newer blog session. Which one?")
+        #expect(o.line == "Blog has two: Older blog and Newer blog. Which one?")
         guard let p = o.pending else { Issue.record("no question"); return }
-        #expect(await d.reply("The newer one.", to: p).line == "Sent to the newer blog session.")
+        #expect(await d.reply("The newer one.", to: p).line == "Sent to Newer blog.")
         #expect(await transport.sent.map(\.pid) == [10])
     }
 
@@ -129,14 +129,14 @@ actor FakeTransport: SessionTransport {
         _ = await d.run(.send(target: "billing", prompt: "y"))
         #expect(await eventually { await said.items.count == 2 })
         #expect(await said.items.last == "Sending to sessions stopped working with this Claude Code version. Background sessions still work.")
-        #expect(await d.run(.send(target: "billing", prompt: "z")).line == "Sending to billing service doesn't work with this Claude Code version yet.")
-        #expect(await d.run(.send(target: "wedding", prompt: "w")).line == "Sent to wedding.")
+        #expect(await d.run(.send(target: "billing", prompt: "z")).line == "Sending to Billing service doesn't work with this Claude Code version yet.")
+        #expect(await d.run(.send(target: "wedding", prompt: "w")).line == "Sent to Wedding.")
         #expect(await runner.argLists.contains(["--resume", "g", "--bg", "w"]))
     }
 
     @Test func aBackgroundSessionWithoutAProcessResumes() async {
         let (d, runner, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)])
-        #expect(await d.run(.send(target: "wedding", prompt: "keep going")).line == "Sent to wedding.")
+        #expect(await d.run(.send(target: "wedding", prompt: "keep going")).line == "Sent to Wedding.")
         #expect(await runner.argLists.contains(["--resume", "g", "--bg", "keep going"]))
         #expect(await transport.sent.isEmpty)
     }
@@ -209,13 +209,13 @@ actor FakeTransport: SessionTransport {
         _ = await d.run(.send(target: "billing", prompt: "1"))
         _ = await d.run(.send(target: "billing", prompt: "2"))
         #expect(await eventually { await said.items.count == 2 })
-        #expect(await d.run(.stop(target: "blog", now: false)).line == "Sending to blog doesn't work with this Claude Code version yet.")
+        #expect(await d.run(.stop(target: "blog", now: false)).line == "Sending to Blog doesn't work with this Claude Code version yet.")
     }
 
     @Test func aSessionWaitingOnYourAnswerIsIdleForSendAndStop() async {
         await store.apply(.init(session: "a", state: .reply, detail: "asked something", name: "billing service"))
         let (d, _, _) = make([agent("a", "billing-service")])
-        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Sent to billing service.")
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Sent to Billing service.")
         #expect(await d.run(.stop(target: "billing", now: false)).line == "Billing service isn't doing anything.")
     }
 
@@ -272,10 +272,10 @@ actor FakeTransport: SessionTransport {
         let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy"), agent("b", "blog", pid: 11, status: "busy"),
                               agent("c", "docs", pid: 12)])
         let o = await d.run(.stopAll)
-        #expect(o.line == "Stop billing service and blog?")
+        #expect(o.line == "Stop Billing service and Blog?")
         #expect(await transport.sent.isEmpty)
         guard let p = o.pending else { Issue.record("no question"); return }
-        #expect(await d.reply("Yes.", to: p).line == "Billing service and blog will stop after their current step.")
+        #expect(await d.reply("Yes.", to: p).line == "Billing service and Blog will stop after their current step.")
         #expect(await transport.sent.map(\.pid) == [10, 11])
         #expect(await transport.sent.allSatisfy { $0.text == Dispatcher.stopText })
     }
@@ -283,7 +283,7 @@ actor FakeTransport: SessionTransport {
     @Test func stopAllWithoutAYesStopsNothing() async {
         let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy")])
         let o = await d.run(.stopAll)
-        #expect(o.line == "Stop billing service?")
+        #expect(o.line == "Stop Billing service?")
         guard let p = o.pending else { Issue.record("no question"); return }
         #expect(await d.reply("No.", to: p).line == "Okay, I didn't stop anything.")
         #expect(await d.reply("What's the weather", to: p).line == "Okay, I didn't stop anything.")
@@ -303,18 +303,18 @@ actor FakeTransport: SessionTransport {
     @Test func anUnclearSendIsReadBackThenSentOnAYes() async {
         let (d, _, _) = make([agent("a", "earshot", pid: 10), agent("b", "blog", pid: 11)])
         let o = await d.run(.confirmSend(target: "earshot", prompt: "what else should we do"))
-        #expect(o.line == "Send to earshot: what else should we do?")
+        #expect(o.line == "Send to Earshot: what else should we do?")
         #expect(await transport.sent.isEmpty)
         guard let p = o.pending else { Issue.record("no question"); return }
         #expect(p == .confirmSend(session: "a", prompt: "what else should we do"))
-        #expect(await d.reply("Yes.", to: p).line == "Sent to earshot.")
+        #expect(await d.reply("Yes.", to: p).line == "Sent to Earshot.")
         #expect(await transport.sent == [.init(pid: 10, session: "a", text: "what else should we do", priority: .next)])
     }
 
     /// A reply typed in the session view goes to that session by its ID.
     @Test func aTypedReplyGoesToThatSession() async {
         let (d, _, _) = make([agent("a", "blog", pid: 10), agent("b", "docs", pid: 11)])
-        #expect(await d.send(typed: "  run the tests ", toSession: "b").line == "Sent to docs.")
+        #expect(await d.send(typed: "  run the tests ", toSession: "b").line == "Sent to Docs.")
         #expect(await transport.sent == [.init(pid: 11, session: "b", text: "run the tests", priority: .next)])
         #expect(await d.send(typed: "   ", toSession: "b").line == "")
         #expect(await d.send(typed: "hi", toSession: "gone").line == "That session has closed.")
@@ -357,7 +357,7 @@ actor FakeTransport: SessionTransport {
 
     @Test func stopNowOnABackgroundSessionRunsClaudeStop() async {
         let (d, runner, _) = make([agent("g", "wedding", pid: 20, kind: "background", status: "busy")])
-        #expect(await d.run(.stop(target: "wedding", now: true)).line == "Stopped wedding.")
+        #expect(await d.run(.stop(target: "wedding", now: true)).line == "Stopped Wedding.")
         #expect(await runner.argLists.contains(["stop", "g"]))
         #expect(await transport.sent.isEmpty)
     }

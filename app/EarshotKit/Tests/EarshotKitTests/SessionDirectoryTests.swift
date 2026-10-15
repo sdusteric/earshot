@@ -58,7 +58,137 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
                                       agent("b", "billing-service", name: "Invoice export"),
                                       agent("c", "blog", name: "blog-83")])
         let names = await d.sessions.map(\.name).sorted()
-        #expect(names == ["blog", "the Fix refund rounding session", "the Invoice export session"])
+        #expect(names == ["Billing service invoice", "Billing service refund", "Blog"])
+    }
+
+    /// Two sessions in one folder, as the user had them: "Reflow" and "Reflow" before.
+    @Test func sessionsInOneFolderAreToldApartAndFoundByVoice() async {
+        let (d, _) = await directory([agent("a", "reflow", name: "reflow-d5", startedAt: 1_790_000_000_000),
+                                      agent("b", "reflow", name: "Project status and milestones", startedAt: 1_790_000_100_000),
+                                      agent("c", "finebrief", name: "finebrief-5e"), agent("d", "finebrief", name: "What's next"),
+                                      agent("e", "finebrief", name: "Launch and onboarding UX")])
+        let names = Dictionary(uniqueKeysWithValues: await d.sessions.map { ($0.id, $0.name) })
+        #expect(names == ["a": "Reflow", "b": "Reflow milestones", "c": "Finebrief", "d": "Finebrief what's next",
+                          "e": "Finebrief launch"])
+        for (said, id) in [("reflow", "a"), ("Reflow milestones", "b"), ("the reflow milestones session", "b"),
+                           ("milestones", "b"), ("milestones in reflow", "b"), ("reflow mile stones", "b"),
+                           ("finebrief what's next", "d"), ("fine brief launch", "e"), ("launch", "e"),
+                           ("project status", "b"), ("finebrief", "c")] {
+            guard case .one(let s) = await d.resolve(said) else { Issue.record("no single match for \(said)"); continue }
+            #expect(s.id == id, "\(said)")
+        }
+        // Asked "which one?", a topic word picks one.
+        guard case .one(let s) = await d.resolve("the launch one", among: ["c", "d", "e"]) else { Issue.record("among"); return }
+        #expect(s.id == "e")
+    }
+
+    /// The real sessions, as `claude agents --json` listed them.
+    static let realAgents = [
+        agent("wedding", "wedding", name: "Create guest confirmation email with event details", kind: "background", startedAt: 1),
+        agent("blog-83", "blog", name: "blog-83", startedAt: 2), agent("reflow-d5", "reflow", name: "reflow-d5", startedAt: 3),
+        agent("finebrief-5e", "finebrief", name: "finebrief-5e", startedAt: 4),
+        agent("roadmap", "earshot", name: "Plugin/Mac app product roadmap", startedAt: 5),
+        agent("next", "finebrief", name: "What's next", startedAt: 6),
+        agent("status", "reflow", name: "Project status and milestones", startedAt: 7),
+        agent("launch", "finebrief", name: "Launch and onboarding UX", startedAt: 8),
+        agent("links", "blog", name: "Showcase site links page", startedAt: 9),
+        agent("overlap", "earshot", name: "Session overlap check", startedAt: 10),
+        agent("icon", "earshot", name: "Notification icon", startedAt: 11),
+    ]
+
+    /// Commands said to the new names, clean and as a gated mic garbles them,
+    /// through the grammar, the tolerant reading and the directory, as the voice loop runs them.
+    /// One at a time, as TolerantTests: the tolerant reading takes every core for a moment.
+    @Test(.serialized, arguments: [
+        ("How's reflow milestones doing?", false, "status"), ("Reflow milestones.", false, "status"),
+        ("How is reflow doing?", false, "reflow-d5"), ("Tell finebrief launch to run the tests.", false, "launch"),
+        ("Earshot overlap, run the tests.", false, "overlap"), ("What's earshot notification working on?", false, "icon"),
+        ("Stop blog showcase.", false, "links"), ("Yes to earshot plugin.", false, "roadmap"),
+        ("How's finebrief what's next going?", false, "next"), ("Check on wedding.", false, "wedding"),
+        ("Tell the blog to deploy.", false, "blog-83"),
+        // Gated or garbled.
+        ("Reflow mile stones going.", true, "status"), ("Fine brief launch doing.", true, "launch"),
+        ("Earshot over lap doing.", true, "overlap"), ("Blog show case working on.", true, "links"),
+    ] as [(String, Bool, String)])
+    func spokenCommandsFindTheNewNames(_ said: String, _ gated: Bool, _ id: String) async {
+        let (d, _) = await directory(Self.realAgents)
+        let c = await CommandParser(model: nil).parse(said, sessions: await d.vocabulary(), gated: gated)
+        let target: String?
+        switch c {
+        case .status(let t), .stop(let t, _), .send(let t, _), .answer(_, let t): target = t
+        case .confirmSend(let t, _): target = t
+        default: target = nil
+        }
+        guard let target else { Issue.record("\(said): \(c)"); return }
+        guard case .one(let s) = await d.resolve(target) else { Issue.record("\(said): no single session for \(target)"); return }
+        #expect(s.id == id, "\(said)")
+    }
+
+    /// The home folder is "Home", said and matched.
+    @Test func theHomeFolderIsHome() async {
+        await store.apply(.init(session: "h", state: .working, name: "your home folder", project: "your home folder"))
+        #expect(await store.name(of: "h") == "Home")
+        let d = SessionDirectory(runner: FakeRunner([AgentEntry(sessionId: "h", pid: 1, cwd: NSHomeDirectory(), kind: "interactive",
+                                                               name: nil, status: "idle", startedAt: nil)]),
+                                 store: store, labeler: labeler, claudeJSON: "/nonexistent")
+        await d.refresh()
+        #expect(await d.session("h")?.name == "Home")
+        #expect(await d.session("h")?.project == "home")
+        guard case .one(let s) = await d.resolve("home") else { Issue.record("home"); return }
+        #expect(s.id == "h")
+    }
+
+    /// A refresh never renames a session: not a newcomer in its folder, not a new title.
+    @Test func namesStayAcrossRefreshes() async {
+        let (d, runner) = await directory([agent("a", "reflow", name: "reflow-d5")])
+        #expect(await d.session("a")?.name == "Reflow")
+        await runner.setAgents([agent("a", "reflow", name: "reflow-d5"), agent("b", "reflow", name: "Retry queue")])
+        await d.refresh()
+        #expect(await d.session("a")?.name == "Reflow")
+        #expect(await d.session("b")?.name == "Reflow retry")
+        await runner.setAgents([agent("a", "reflow", name: "Docs"), agent("b", "reflow", name: "Retry backoff")])
+        for _ in 0..<3 { await d.refresh() }
+        #expect(await d.session("a")?.name == "Reflow")
+        #expect(await d.session("b")?.name == "Reflow retry")
+        // A failed check keeps every name, even of sessions it could not list.
+        await runner.setFail(true)
+        await d.refresh()
+        await runner.setFail(false)
+        await d.refresh()
+        #expect(await d.session("a")?.name == "Reflow")
+        // A session that closed gives its name up.
+        await runner.setAgents([agent("b", "reflow", name: "Retry backoff")])
+        await d.refresh()
+        #expect(await d.session("b")?.name == "Reflow retry")
+        #expect(await store.name(of: "a") == nil)
+    }
+
+    /// A session the plugin reports before `claude agents` lists it is named at
+    /// once, beside the others, and keeps that name when it is listed.
+    @Test func aSessionThePluginReportsFirstKeepsItsName() async {
+        let (d, runner) = await directory([agent("a", "blog", name: "Showcase site links page")])
+        #expect(await d.session("a")?.name == "Blog")
+        await store.apply(.init(session: "b", state: .working, name: "the RSS feed session", project: "blog", title: "RSS feed"))
+        #expect(await store.name(of: "b") == "Blog RSS")
+        #expect(await store.sessions.first { $0.id == "b" }?.name == "Blog RSS")
+        await runner.setAgents([agent("a", "blog", name: "Showcase site links page"), agent("b", "blog", name: "RSS feed")])
+        await d.refresh()
+        #expect(await d.session("b")?.name == "Blog RSS")
+        #expect(await d.session("a")?.name == "Blog")
+    }
+
+    /// The plugin's lines and approvals are said with the store's name.
+    @Test func thePluginsLinesUseTheName() async {
+        let (_, _) = await directory([agent("a", "reflow", name: "reflow-d5"), agent("b", "reflow", name: "Project status")])
+        await store.apply(.init(session: "b", state: .working, name: "the Project status session", project: "reflow"))
+        let beat = await store.renamed(.init(text: "Still on Project status, about 9 minutes in.", kind: .beat, session: "b"))
+        #expect(beat.text == "Still on Reflow project status, about 9 minutes in.")
+        #expect(beat.name == "Reflow project status")
+        let need = await store.renamed(.init(text: "Hey, reflow needs your OK to run git push.", kind: .need, session: "a",
+                                             name: "reflow"))
+        #expect(need.text == "Hey, Reflow needs your OK to run git push.")
+        let unknown = AppMessage.Say(text: "Hey, blog needs you.", kind: .need, session: "zz", name: "blog")
+        #expect(await store.renamed(unknown) == unknown)
     }
 
     @Test func aReplyStateIsNotWaitingInTheFallbackList() async {
@@ -146,9 +276,11 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
     /// Two untitled sessions in blog: named by age, and picked by name, order or age.
     @Test func untitledTwinsCanBeTold() async {
         let (d, _) = await directory([agent("a", "blog", startedAt: 1_790_000_200_000), agent("b", "blog", startedAt: 1_790_000_100_000)])
-        #expect(Set(await d.sessions.map(\.name)) == ["the newer blog session", "the older blog session"])
+        #expect(Set(await d.sessions.map(\.name)) == ["Newer blog", "Older blog"])
         guard case .one(let s) = await d.resolve("the older blog session") else { Issue.record("by name"); return }
         #expect(s.id == "b")
+        guard case .one(let n) = await d.resolve("newer blog") else { Issue.record("by name"); return }
+        #expect(n.id == "a")
         guard case .several = await d.resolve("blog") else { Issue.record("expected several"); return }
         // Offered oldest first, as "Which one?" says them.
         for (said, id) in [("The older one.", "b"), ("newer", "a"), ("The first one.", "b"), ("the second", "a"),
@@ -158,11 +290,15 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         }
     }
 
-    @Test func vocabularyHasProjectsAndLabels() async {
-        let (d, _) = await directory([agent("a", "finebrief", name: "Orchestrator agent for multi-session voice control")])
+    @Test func vocabularyHasNamesProjectsAndLabels() async {
+        let (d, _) = await directory([agent("a", "finebrief", name: "Orchestrator agent for multi-session voice control"),
+                                      agent("b", "blog"), agent("c", "blog", name: "RSS feed")])
         let v = await d.vocabulary()
-        #expect(v.contains("finebrief"))
+        #expect(v.contains("Finebrief"))
         #expect(v.contains("Orchestrator agent"))
+        #expect(v.contains("Blog RSS"))
+        #expect(v.filter { $0.lowercased() == "blog" }.count == 1)   // the name and the project, once
+        #expect(v.firstIndex(of: "Blog RSS")! < v.firstIndex(of: "Orchestrator agent")!)   // names first
     }
 
     @Test func knownProjectsComeFromClaudeJSONAndLiveSessions() async throws {

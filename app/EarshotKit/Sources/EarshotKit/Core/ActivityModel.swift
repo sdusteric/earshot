@@ -47,8 +47,9 @@ public struct ActivitySessions: Sendable {
 
     public static func title(_ name: String) -> String { name.prefix(1).uppercased() + name.dropFirst() }
 
-    /// One name per session everywhere in the window: the plugin's, then
-    /// the name today's lines used, then Claude Code's own label.
+    /// One name per session everywhere in the window: the name the session
+    /// store gives it (SessionStore, the same one lines are said with), then
+    /// the name today's lines used, then the name in `claude agents`' list.
     public func displayName(_ id: String) -> String {
         known.first { $0.id == id }?.name
             ?? history.last { $0.session == id && $0.sessionName != nil }?.sessionName

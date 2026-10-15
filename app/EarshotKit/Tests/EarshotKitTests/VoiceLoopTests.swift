@@ -98,7 +98,7 @@ actor CountingSpeaker: LineSpeaker {
         let r = await rig([agent("b", "blog", pid: 11)])
         let player = r.player
         r.heard.yield(said("Tell blog to deploy."))
-        #expect(await eventually { await player.played == ["Sent to blog."] })
+        #expect(await eventually { await player.played == ["Sent to Blog."] })
         #expect(await transport.sent.map(\.text) == ["deploy"])
     }
 
@@ -110,7 +110,7 @@ actor CountingSpeaker: LineSpeaker {
         await loop.captureEnded(heard: true)
         #expect(await loop.thinking)
         r.heard.yield(said("Tell blog to deploy."))
-        #expect(await eventually { await player.played == ["Sent to blog."] })
+        #expect(await eventually { await player.played == ["Sent to Blog."] })
         #expect(await eventually { await loop.thinking == false })
     }
 
@@ -134,13 +134,13 @@ actor CountingSpeaker: LineSpeaker {
         let r = await rig([agent("b", "blog", pid: 11)], history: history)
         let player = r.player
         r.heard.yield(said("Tell blog to deploy."))
-        #expect(await eventually { await player.played == ["Sent to blog."] })
+        #expect(await eventually { await player.played == ["Sent to Blog."] })
         let e = await history.entries
         #expect(e.count == 1)
         #expect(e.first?.kind == .heard)
         #expect(e.first?.text == "Tell blog to deploy.")
-        #expect(e.first?.reply == "Sent to blog.")
-        #expect(e.first?.sessionName == "blog")
+        #expect(e.first?.reply == "Sent to Blog.")
+        #expect(e.first?.sessionName == "Blog")
     }
 
     @Test func aCommandOverTheCapIsNotSent() async {
@@ -241,7 +241,7 @@ actor CountingSpeaker: LineSpeaker {
         let player = r.player
         r.heard.yield(said("What else should we do for blog?"))
         #expect(await eventually { await followUps.calls == [.reply] })
-        #expect(await player.played == ["Send to blog: What else should we do?"])
+        #expect(await player.played == ["Send to Blog: What else should we do?"])
         #expect(await transport.sent.isEmpty)
         r.heard.yield(said("Yes.", .followUp(.reply)))
         #expect(await eventually { await transport.sent.map(\.text) == ["What else should we do"] })
@@ -673,6 +673,6 @@ actor CountingSpeaker: LineSpeaker {
     @Test func theWakeWordRefreshesTheVocabulary() async {
         let r = await rig([agent("a", "finebrief")])
         await r.loop.captureBegan(.wake)
-        #expect(await eventually { await followUps.vocabulary.contains("finebrief") })
+        #expect(await eventually { await followUps.vocabulary.contains("Finebrief") })
     }
 }
