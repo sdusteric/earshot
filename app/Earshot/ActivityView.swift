@@ -15,6 +15,7 @@ struct ActivityView: View {
     /// The Open group is long and rarely needed: collapsed until you open it.
     @AppStorage("activityOpenExpanded") private var openExpanded = false
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// When you last looked away from this window; the first time, the start of today's history.
     private var lastLooked: Date? {
@@ -111,6 +112,8 @@ struct ActivityView: View {
             }
         }
         .listStyle(.sidebar)
+        // A session that changes groups (Working to Needs You) moves there rather than jumping.
+        .animation(ActivityMotion.sidebar(reduceMotion), value: ActivityNavigation.layoutKey(sessions))
     }
 
     // MARK: Keyboard

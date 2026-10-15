@@ -10,6 +10,12 @@ struct BriefView: View {
     let since: Date?
     let now: Date
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// What is waiting and what changed, in order: when it changes, the brief moves.
+    private var layoutKey: [String] {
+        model.approvals.map { "a:\($0.id)" } + waiting.map { "w:\($0.id)" } + changed.map { "c:\($0.id)" }
+    }
 
     var body: some View {
         ScrollView {
@@ -19,6 +25,9 @@ struct BriefView: View {
                 awaySection
                 askedSection
             }
+            // One move when a session changes hands: its card arrives (or leaves,
+            // answered) and the rows below settle, in the same beat.
+            .animation(ActivityMotion.move(reduceMotion), value: layoutKey)
             .padding(.horizontal, 36)
             .padding(.top, 28)
             .padding(.bottom, 24)
@@ -105,15 +114,19 @@ struct BriefView: View {
                                 .keyboardShortcut(approvals.count == 1 ? .defaultAction : nil)
                         }
                     }
+                    .transition(ActivityMotion.card(reduceMotion))
                 }
                 ForEach(others) { s in
                     QuestionCard(session: s, last: model.lastLine(for: s.id))
+                        .transition(ActivityMotion.card(reduceMotion))
                 }
             }
+            .transition(.opacity)
         } else if !sessions.isEmpty {
             Label("Nothing is waiting on you.", systemImage: "checkmark.circle")
                 .font(.body)
                 .foregroundStyle(.secondary)
+                .transition(.opacity)
         }
     }
 
@@ -135,10 +148,14 @@ struct BriefView: View {
                     .font(.headline)
                     .padding(.bottom, 8)
                 ForEach(changed) { s in
-                    AwayRow(session: s, name: model.displayName(s.id), last: model.lastLine(for: s.id)) { model.activityPage = .session(s.id) }
-                    if s.id != changed.last?.id { Divider().overlay(ActivityPalette.track) }
+                    VStack(spacing: 2) {
+                        AwayRow(session: s, name: model.displayName(s.id), last: model.lastLine(for: s.id)) { model.activityPage = .session(s.id) }
+                        if s.id != changed.last?.id { Divider().overlay(ActivityPalette.track) }
+                    }
+                    .transition(ActivityMotion.row(reduceMotion))
                 }
             }
+            .transition(.opacity)
         }
     }
 

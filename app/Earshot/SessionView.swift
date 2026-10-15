@@ -10,6 +10,9 @@ struct SessionView: View {
     @Environment(AppModel.self) private var model
     @State private var recent: SessionTranscript.Recent?
     @State private var loaded = false
+    /// The first read fills the page at once; only lines that come after it move in.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draft = ""
     @State private var sending = false
     @State private var outcome: String?
@@ -32,6 +35,11 @@ struct SessionView: View {
                 loaded = true
                 try? await Task.sleep(for: .seconds(4))
             }
+        }
+        .task(id: loaded) {
+            guard loaded, !settled else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            settled = true
         }
     }
 
@@ -114,18 +122,27 @@ struct SessionView: View {
                                 Text("Progress Notes").font(.headline).padding(.bottom, -4)
                             }
                             row(item)
+                                .transition(ActivityMotion.line(reduceMotion))
                         }
                         pending.id("end")
                     }
+                    .animation(settled ? ActivityMotion.move(reduceMotion) : nil, value: conversationKey)
                     .padding(.horizontal, 28)
                     .padding(.vertical, 20)
                     .frame(maxWidth: 860, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .defaultScrollAnchor(.bottom)
-                .onChange(of: items.count) { proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: items.count) {
+                    withAnimation(settled ? ActivityMotion.move(reduceMotion) : nil) { proxy.scrollTo("end", anchor: .bottom) }
+                }
             }
         }
+    }
+
+    /// What the conversation holds, in order: a new line, prompt or question changes it.
+    private var conversationKey: [String] {
+        items.map(\.id) + waitingApprovals.map { "a:\($0.id)" } + [recent?.asked?.question ?? ""]
     }
 
     /// A background job's notes read as one log under one heading.
@@ -189,6 +206,7 @@ struct SessionView: View {
                     }
                 }
                 .modifier(PendingBox())
+                .transition(ActivityMotion.card(reduceMotion))
             }
             if let asked = recent?.asked {
                 VStack(alignment: .leading, spacing: 8) {
@@ -203,6 +221,7 @@ struct SessionView: View {
                     }
                 }
                 .modifier(PendingBox())
+                .transition(ActivityMotion.card(reduceMotion))
             }
         }
     }
