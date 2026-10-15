@@ -179,3 +179,12 @@ import Testing
         #expect(Self.openDescriptors() <= before + 20)
     }
 }
+
+struct AgentStateTests {
+    @Test func aBlockedBackgroundSessionWaitsOnYou() {
+        #expect(AgentEntry(sessionId: "a", pid: nil, cwd: "/", kind: "background", state: "blocked").isWaiting)
+        #expect(!AgentEntry(sessionId: "a", pid: nil, cwd: "/", kind: "background", state: "failed").isWaiting)
+        #expect(AgentEntry(sessionId: "b", pid: 1, cwd: "/", kind: "interactive", status: "waiting").isWaiting)
+        #expect(!AgentEntry(sessionId: "b", pid: 1, cwd: "/", kind: "interactive", status: "idle").isWaiting)
+    }
+}

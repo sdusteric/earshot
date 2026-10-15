@@ -182,6 +182,16 @@ public actor Dispatcher {
         }
     }
 
+    /// A reply typed in the session view, to that session by its ID. The same
+    /// path as a spoken send: busy or waiting sessions queue it.
+    public func send(typed prompt: String, toSession id: String) async -> Outcome {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return Outcome(line: "") }
+        await directory.refresh(ifOlderThan: 2)
+        guard let s = await directory.session(id) else { return Outcome(line: "That session has closed.") }
+        return await send(text, to: s)
+    }
+
     private func send(_ prompt: String, to s: LiveSession) async -> Outcome {
         let broken = await sendingBroken()
         guard let pid = s.pid, !broken else {

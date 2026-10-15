@@ -3,7 +3,8 @@ import Foundation
 /// One turn of a session's conversation, as the session view shows it:
 /// what you typed, what Claude said, and a short note of the work between.
 public struct SessionTurn: Sendable, Equatable, Identifiable {
-    public enum Role: Sendable, Equatable { case you, claude, work }
+    /// `note`: a background job's status line, which may quote you or Claude.
+    public enum Role: Sendable, Equatable { case you, claude, work, note }
     public let id: String
     public let role: Role
     /// For `.work`: "Ran 2 commands, edited about.md".
@@ -47,18 +48,27 @@ public enum SessionTranscript {
             .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// The last `limit` turns of the file, read from its last `tailBytes`.
+    /// The last `limit` turns of the file. It reads the file's tail, starting
+    /// with `tailBytes` and reading further back (up to 32 MB) while the tail
+    /// holds fewer than a few things said: screenshots and long tool output can
+    /// fill megabytes between two lines of conversation.
     public static func recent(_ url: URL, limit: Int = 12, tailBytes: Int = 600_000) -> Recent? {
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
         let size = (try? h.seekToEnd()) ?? 0
-        let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
-        try? h.seek(toOffset: start)
-        guard let data = try? h.readToEnd() else { return nil }
-        var lines = data.split(separator: UInt8(ascii: "\n"))
-        // A read from the middle starts inside a line.
-        if start > 0, !lines.isEmpty { lines.removeFirst() }
-        return parse(lines.map { Data($0) }, limit: limit)
+        var tail = UInt64(tailBytes)
+        while true {
+            let start = size > tail ? size - tail : 0
+            try? h.seek(toOffset: start)
+            guard let data = try? h.readToEnd() else { return nil }
+            var lines = data.split(separator: UInt8(ascii: "\n"))
+            // A read from the middle starts inside a line.
+            if start > 0, !lines.isEmpty { lines.removeFirst() }
+            let r = parse(lines.map { Data($0) }, limit: limit)
+            let said = r.turns.filter { $0.role != .work }.count
+            if start == 0 || said >= min(limit, 6) || tail >= 32_000_000 { return r }
+            tail *= 4
+        }
     }
 
     public static func parse(_ lines: [Data], limit: Int = 12) -> Recent {
@@ -122,6 +132,34 @@ public enum SessionTranscript {
         return Recent(turns: Array(turns.suffix(limit)), asked: open)
     }
 
+    /// A background session (a job) keeps no transcript in the projects folder:
+    /// it has a folder under ~/.claude/jobs, named by the first 8 characters of
+    /// its ID, with state.json (what it needs from you) and timeline.jsonl (its
+    /// progress notes). Read as status notes, and the need as the question.
+    public static func job(sessionID: String, limit: Int = 30,
+                           home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Recent? {
+        guard sessionID.count >= 8, !sessionID.contains("/") else { return nil }
+        let dir = home.appending(path: ".claude/jobs/\(sessionID.prefix(8))", directoryHint: .isDirectory)
+        let state = (try? Data(contentsOf: dir.appending(path: "state.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let timeline = (try? Data(contentsOf: dir.appending(path: "timeline.jsonl")))?
+            .split(separator: UInt8(ascii: "\n")) ?? []
+        guard state != nil || !timeline.isEmpty else { return nil }
+        var turns: [SessionTurn] = []
+        for (i, line) in timeline.enumerated() {
+            guard let o = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  let detail = (o["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !detail.isEmpty, turns.last?.text != detail else { continue }
+            turns.append(SessionTurn(id: "job-\(i)", role: .note, text: detail, at: (o["at"] as? String).flatMap(date)))
+        }
+        var asked: AskedQuestion?
+        if state?["state"] as? String == "blocked",
+           let needs = (state?["needs"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !needs.isEmpty {
+            asked = AskedQuestion(question: needs.prefix(1).uppercased() + needs.dropFirst(), options: [])
+        }
+        return Recent(turns: Array(turns.suffix(limit)), asked: asked)
+    }
+
     /// What you typed, or nil for what Claude Code itself put in your turn
     /// (slash command wrappers, reminders, interrupted-turn notes).
     static func typed(_ text: String) -> String? {
@@ -150,7 +188,14 @@ public enum SessionTranscript {
         case "Agent", "Task": return "started a helper"
         case "AskUserQuestion": return "asked you a question"
         case "TodoWrite": return "updated its plan"
-        default: return "used \(name)"
+        case "ToolSearch", "Skill": return "loaded tools"
+        default:
+            // "mcp__computer-use__screenshot": the server says enough.
+            if name.hasPrefix("mcp__") {
+                let server = String(name.dropFirst(5)).components(separatedBy: "__").first ?? name
+                return "used \(server.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " "))"
+            }
+            return "used \(name)"
         }
     }
 

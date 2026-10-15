@@ -311,6 +311,16 @@ actor FakeTransport: SessionTransport {
         #expect(await transport.sent == [.init(pid: 10, session: "a", text: "what else should we do", priority: .next)])
     }
 
+    /// A reply typed in the session view goes to that session by its ID.
+    @Test func aTypedReplyGoesToThatSession() async {
+        let (d, _, _) = make([agent("a", "blog", pid: 10), agent("b", "docs", pid: 11)])
+        #expect(await d.send(typed: "  run the tests ", toSession: "b").line == "Sent to docs.")
+        #expect(await transport.sent == [.init(pid: 11, session: "b", text: "run the tests", priority: .next)])
+        #expect(await d.send(typed: "   ", toSession: "b").line == "")
+        #expect(await d.send(typed: "hi", toSession: "gone").line == "That session has closed.")
+        #expect(await transport.sent.count == 1)
+    }
+
     @Test func anUnclearSendWithoutAYesSendsNothing() async {
         let (d, _, _) = make([agent("a", "earshot", pid: 10)])
         guard let p = await d.run(.confirmSend(target: "earshot", prompt: "run the tests")).pending else {

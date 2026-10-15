@@ -6,6 +6,8 @@ public struct ListenStack: Sendable {
     public let listener: Listener
     public let loop: VoiceLoop
     public let directory: SessionDirectory
+    /// For what you type in the session view.
+    public let dispatcher: Dispatcher
     public let models: ListenModels
     /// The `claude` command. The first plugin check looks for it, and later checks
     /// look again until it is found (Claude Code may be installed after launch).
@@ -40,7 +42,7 @@ public struct ListenStack: Sendable {
         // Apple's speech model may need installing; start now, so the first command has it.
         Task { await second.prepare() }
         await loop.start(utterances: listener.utterances)
-        return ListenStack(listener: listener, loop: loop, directory: directory, models: ListenModels(),
+        return ListenStack(listener: listener, loop: loop, directory: directory, dispatcher: dispatcher, models: ListenModels(),
                            claude: runner, gate: gate, spotter: spotter, chimes: chimes)
     }
 

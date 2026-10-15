@@ -35,6 +35,8 @@ struct EarshotApp: App {
                     dock.start()
                     #if DEBUG
                     // For checking the window during development: open with -openActivity YES.
+                    // -openSession <id> opens it on that session's page.
+                    if let id = UserDefaults.standard.string(forKey: "openSession") { model.activityPage = .session(id) }
                     if UserDefaults.standard.bool(forKey: "openActivity") {
                         NSApp.activate()
                         openWindow(id: "activity")

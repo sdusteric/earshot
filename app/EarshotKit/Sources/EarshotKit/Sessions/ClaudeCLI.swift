@@ -43,7 +43,9 @@ public struct AgentEntry: Decodable, Sendable, Equatable {
 
     public var isBackground: Bool { kind == "background" }
     public var isBusy: Bool { status == "busy" }
-    public var isWaiting: Bool { status == "waiting" }
+    /// Waiting on you: a session with a process says "waiting"; a background
+    /// session, which has none, is "blocked" on a prompt or a question.
+    public var isWaiting: Bool { status == "waiting" || (isBackground && state == "blocked") }
 
     public static func decodeList(_ data: Data) -> [AgentEntry] {
         guard let items = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return [] }

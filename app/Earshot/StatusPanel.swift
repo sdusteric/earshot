@@ -1,9 +1,9 @@
 import EarshotKit
 import SwiftUI
 
-/// What the Activity window shows.
-enum ActivityFilter: Hashable {
-    case all, you, earshot
+/// What the Activity window shows: the brief, the day's history, or one session.
+enum ActivityPage: Hashable {
+    case brief, history
     case session(String)
 }
 
@@ -173,7 +173,7 @@ struct StatusPanel: View {
                     }
                 }
                 if sessions.count > Self.shownSessions {
-                    Button("\(sessions.count - Self.shownSessions) more in Activity") { show(.all) }
+                    Button("\(sessions.count - Self.shownSessions) more in Activity") { show(.brief) }
                         .buttonStyle(.link)
                         .font(.callout)
                         .padding(.horizontal, 20)
@@ -209,7 +209,7 @@ struct StatusPanel: View {
 
     private var footer: some View {
         HStack {
-            Button("Activity") { show(.all) }
+            Button("Activity") { show(.brief) }
             Button("Settings\u{2026}") {
                 NSApp.activate()
                 openSettings()
@@ -234,8 +234,8 @@ struct StatusPanel: View {
         .padding(.vertical, 10)
     }
 
-    private func show(_ filter: ActivityFilter) {
-        model.activityFilter = filter
+    private func show(_ page: ActivityPage) {
+        model.activityPage = page
         NSApp.activate()
         openWindow(id: "activity")
         dismiss()
@@ -353,7 +353,7 @@ private struct SessionRow: View {
         .onTapGesture(perform: open)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Shows this session's activity")
+        .accessibilityHint("Opens this session")
     }
 }
 

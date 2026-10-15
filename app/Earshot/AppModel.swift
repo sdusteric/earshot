@@ -21,7 +21,7 @@ final class AppModel {
     /// What the plugin row says while `pluginWorking`.
     var pluginWorkLine = "Installing through Claude Code\u{2026}"
     /// What the Activity window shows; set before opening it from the panel.
-    var activityFilter: ActivityFilter = .all
+    var activityPage: ActivityPage = .brief
     /// Goes up when a click on a banner asks for the Activity window (see EarshotApp).
     var activityRequests = 0
     /// You turned Earshot's notifications off in System Settings.
@@ -279,10 +279,62 @@ final class AppModel {
 
     func clearHistory() { Task { await historyStore?.clear() } }
 
-    /// A click on a banner: the Activity window, showing everything.
+    /// A click on a banner: the Activity window, on the brief.
     func openActivity() {
-        activityFilter = .all
+        activityPage = .brief
         activityRequests += 1
+    }
+
+    // MARK: Session view
+
+    /// One name per session everywhere in Activity: the plugin's, then the name
+    /// today's lines used, then Claude Code's own label.
+    func displayName(_ id: String) -> String {
+        ActivitySessions(known: sessions.map(ActivitySessions.Known.init),
+                         live: liveSessions.map(ActivitySessions.Live.init), history: history).displayName(id)
+    }
+
+    /// A session as Claude Code lists it: its process, folder and kind.
+    func liveSession(_ id: String) -> LiveSession? { liveSessions.first { $0.id == id } }
+
+    /// The session's last turns and any question it left open, read from its
+    /// transcript off the main thread. Nil when there is no transcript to read.
+    /// A file that hasn't changed since the last read is not read again.
+    func transcript(for id: String) async -> SessionTranscript.Recent? {
+        let cwd = liveSession(id)?.cwd ?? ""
+        let cached = transcripts[id]
+        let (stamp, recent) = await Task.detached(priority: .userInitiated) { () -> (TranscriptStamp?, SessionTranscript.Recent?) in
+            guard let url = SessionTranscript.file(sessionID: id, cwd: cwd),
+                  let a = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+                // A background session keeps notes in its job folder instead.
+                return (nil, SessionTranscript.job(sessionID: id))
+            }
+            let stamp = TranscriptStamp(modified: a[.modificationDate] as? Date, size: a[.size] as? Int)
+            if let cached, cached.stamp == stamp { return (stamp, cached.recent) }
+            return (stamp, SessionTranscript.recent(url, limit: 30))
+        }.value
+        if let stamp, let recent { transcripts[id] = (stamp, recent) }
+        return recent
+    }
+
+    struct TranscriptStamp: Equatable, Sendable {
+        let modified: Date?
+        let size: Int?
+    }
+    @ObservationIgnored private var transcripts: [String: (stamp: TranscriptStamp, recent: SessionTranscript.Recent)] = [:]
+
+    /// What you typed in the session view, sent to that session. Returns the
+    /// line Earshot would have said ("Sent to blog.", "Queued, blog is busy.").
+    func send(_ text: String, toSession id: String) async -> String {
+        guard let stack else { return "Earshot is still starting." }
+        return await stack.dispatcher.send(typed: text, toSession: id).line ?? ""
+    }
+
+    /// Brings the session's own window forward. Returns a line when that fails.
+    func openInTerminal(_ id: String) -> String? {
+        guard let s = liveSession(id) else { return "Claude Code doesn't list this session any more." }
+        if case .failed(let why) = TerminalHost.open(s, claude: stack?.claudePath) { return why }
+        return nil
     }
 
     /// Re-reads whether notifications are allowed, which changes in System Settings.
