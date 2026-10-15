@@ -13,6 +13,8 @@ import SwiftUI
     private let glass = NSGlassEffectView()
     private let model: AppModel
     private var shown = false
+    /// What was heard or said, under the orb (see CaptionPanel).
+    private var caption: CaptionPanel?
     /// True while Earshot moves the panel itself, so only your drags are saved.
     private var placing = false
 
@@ -37,8 +39,12 @@ import SwiftUI
         hosting.onReset = { [weak self] in self?.resetPosition() }
         glass.contentView = hosting
         panel.contentView = glass
+        caption = CaptionPanel(model: model) { [panel] in panel.frame }
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.saveMove() }
+            MainActor.assumeIsolated {
+                self?.caption?.orbMoved()
+                self?.saveMove()
+            }
         }
         observe()
     }

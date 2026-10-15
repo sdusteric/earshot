@@ -89,7 +89,10 @@ struct BriefView: View {
 
     // MARK: Waiting on you
 
-    private var waiting: [SessionInfo] { sessions.filter { SessionGroup.kind($0.state) == .needsYou } }
+    /// Sessions waiting on you, and ones you just answered here, until their card says what became of it.
+    private var waiting: [SessionInfo] {
+        sessions.filter { SessionGroup.kind($0.state) == .needsYou || model.answered[$0.id] != nil }
+    }
 
     @ViewBuilder private var waitingSection: some View {
         let approvals = model.approvals
@@ -123,7 +126,7 @@ struct BriefView: View {
     private var changed: [SessionInfo] {
         let cut = since ?? .distantPast
         return sessions.filter { s in
-            SessionGroup.kind(s.state) != .needsYou && s.state != .open && s.state != .closed
+            SessionGroup.kind(s.state) != .needsYou && model.answered[s.id] == nil && s.state != .open && s.state != .closed
                 && (s.updated > cut || s.since > cut || s.state == .working)
         }
     }
@@ -202,9 +205,12 @@ private struct QuestionCard: View {
     @State private var note: String?
     @State private var draft = ""
     @State private var sending = false
+    @State private var sentAt: Date?
 
     var body: some View {
-        WaitingCard(name: model.displayName(session.id), state: SessionStyle.describe(session),
+        // Kept up a moment after your answer reached it, to say so.
+        let state = SessionGroup.kind(session.state) == .needsYou ? SessionStyle.describe(session) : "answered"
+        WaitingCard(name: model.displayName(session.id), state: state,
                     since: session.since == .distantPast ? session.updated : session.since, session: session.id) {
             VStack(alignment: .leading, spacing: 10) {
                 if let asked {
@@ -229,23 +235,33 @@ private struct QuestionCard: View {
                             .onSubmit(send)
                         Button("Send", action: send)
                             .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || sending)
-                        Button("Open in \(model.hostName(session.id))") { note = model.openInTerminal(session.id) }
+                        Button("Open in \(model.hostName(session.id))") {
+                            sentAt = nil   // its note replaces the last receipt
+                            note = model.openInTerminal(session.id)
+                        }
                     }
-                    if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
+                    if let line = receipt ?? note { Text(line).font(.callout).foregroundStyle(.secondary) }
                 }
             }
         }
         .task(id: session.id) { asked = await model.transcript(for: session.id)?.asked }
+        .onChange(of: receipt) { _, line in
+            if let line { AccessibilityNotification.Announcement(line).post() }
+        }
     }
 
     private var picker: Bool { !(asked?.options.isEmpty ?? true) }
+
+    /// What became of your answer, once Earshot knows ("Wedding started working.").
+    private var receipt: String? { model.receiptLine(for: session.id, since: sentAt) }
 
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !sending else { return }
         sending = true
+        sentAt = Date()
         Task {
-            let line = await model.send(text, toSession: session.id)
+            let line = await model.send(text, toSession: session.id, answering: true)
             sending = false
             note = line
             if line.hasPrefix("Sent") || line.hasPrefix("Queued") { draft = "" }
