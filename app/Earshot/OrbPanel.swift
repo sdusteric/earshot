@@ -36,11 +36,12 @@ import SwiftUI
         glass.cornerRadius = Self.size / 2
         if #available(macOS 27, *) { glass.effectIsInteractive = true }
         // Out of sight (the orb is off in Settings, or the panel faded out), it stops drawing.
-        let hosting = OrbHostingView(rootView: AnyView(OrbView().environment(model).tracksWindowPresence()))
+        // While it lingers it turns slowly to rest instead of freezing mid-swell.
+        let hosting = OrbHostingView(rootView: AnyView(OrbView(spinsWhenIdle: true).environment(model).tracksWindowPresence()))
         hosting.onReset = { [weak self] in self?.resetPosition() }
         glass.contentView = hosting
         panel.contentView = glass
-        caption = CaptionPanel(model: model) { [panel] in panel.frame }
+        caption = CaptionPanel(model: model, orbFrame: { [panel] in panel.frame }, orbShown: { [weak self] in self?.shown ?? false })
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.caption?.orbMoved()
@@ -82,21 +83,48 @@ import SwiftUI
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
+    /// How long the orb and its caption stay once Earshot has finished, so the
+    /// last thing heard or said can still be read. They leave together.
+    static let linger: Duration = .milliseconds(3500)
+    private var lingerTask: Task<Void, Never>?
+
     private func update() {
         if model.config.showOrb, let mode = OrbMode(model) {
+            lingerTask?.cancel()
+            lingerTask = nil
             glass.tintColor = mode.glassTint(model.config.orbColor)
-            guard !shown else { return }
-            shown = true
-            if !panel.isVisible {
-                place()
-                panel.alphaValue = 0
+            if !shown {
+                shown = true
+                if !panel.isVisible {
+                    place()
+                    panel.alphaValue = 0
+                }
+                panel.orderFrontRegardless()
+                fade(to: 1, over: 0.18)
             }
-            panel.orderFrontRegardless()
-            fade(to: 1, over: 0.18)
+        } else if shown, model.config.showOrb, model.caption?.kind == .heard || model.caption?.kind == .saying {
+            // Finished: the orb settles and stays with its words a moment, then both go.
+            if lingerTask == nil {
+                lingerTask = Task { [weak self] in
+                    try? await Task.sleep(for: Self.linger)
+                    guard let self, !Task.isCancelled else { return }
+                    self.lingerTask = nil
+                    self.hide()
+                }
+            }
         } else if shown {
-            shown = false
-            fade(to: 0, over: 0.25)
+            // Nothing was heard, or the orb was turned off: no reason to wait.
+            lingerTask?.cancel()
+            lingerTask = nil
+            hide()
         }
+        caption?.update()
+    }
+
+    private func hide() {
+        shown = false
+        fade(to: 0, over: 0.25)
+        caption?.update()
     }
 
     private var fadeTask: Task<Void, Never>?

@@ -13,13 +13,11 @@ struct OrbCaption: Equatable {
 }
 
 /// A small caption on dark glass under the floating orb, at most two lines.
-/// It shows while the orb does and stays a few seconds after the orb settles,
-/// so the last thing heard or said can still be read. It never takes focus or
+/// It shows exactly while the orb does: OrbPanel keeps both up a few seconds
+/// after Earshot finishes, then hides them together. It never takes focus or
 /// clicks. What it shows is never logged.
 @MainActor final class CaptionPanel {
     static let maxWidth: CGFloat = 340
-    /// How long the caption stays once the orb has settled.
-    static let linger: Duration = .milliseconds(3500)
     private static let gap: CGFloat = 6
 
     private let panel: NSPanel
@@ -27,14 +25,16 @@ struct OrbCaption: Equatable {
     private let hosting: NSHostingController<AnyView>
     private let model: AppModel
     private let orbFrame: () -> NSRect
+    /// Whether the orb is up, lingering included (see OrbPanel.linger).
+    private let orbShown: () -> Bool
     private var shown = false
-    private var lingerTask: Task<Void, Never>?
     private var fadeTask: Task<Void, Never>?
     private var lastAnnounced: OrbCaption?
 
-    init(model: AppModel, orbFrame: @escaping () -> NSRect) {
+    init(model: AppModel, orbFrame: @escaping () -> NSRect, orbShown: @escaping () -> Bool) {
         self.model = model
         self.orbFrame = orbFrame
+        self.orbShown = orbShown
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 120, height: 32),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
         panel.hidesOnDeactivate = false
@@ -59,10 +59,6 @@ struct OrbCaption: Equatable {
     private func observe() {
         withObservationTracking {
             _ = model.caption
-            _ = model.listenPhase
-            _ = model.speechState
-            _ = model.thinking
-            _ = model.config.showOrb
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.update()
@@ -74,11 +70,9 @@ struct OrbCaption: Equatable {
 
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
-    private func update() {
-        let orbUp = model.config.showOrb && OrbMode(model) != nil
-        if orbUp, let caption = model.caption {
-            lingerTask?.cancel()
-            lingerTask = nil
+    /// Called on every change of the caption, and by OrbPanel whenever the orb shows or hides.
+    func update() {
+        if orbShown(), let caption = model.caption {
             announce(caption)
             layout()
             guard !shown else { return }
@@ -86,26 +80,14 @@ struct OrbCaption: Equatable {
             if !panel.isVisible { panel.alphaValue = 0 }
             panel.orderFrontRegardless()
             fade(to: 1, over: 0.18)
-        } else if shown, !orbUp, model.caption?.kind == .heard || model.caption?.kind == .saying {
-            // The orb settled: the words stay a moment longer, then go.
-            guard lingerTask == nil else { return }
-            lingerTask = Task { [weak self] in
-                try? await Task.sleep(for: Self.linger)
-                guard let self, !Task.isCancelled else { return }
-                self.lingerTask = nil
-                self.hide()
-            }
-        } else if shown {
-            // Nothing was heard ("Listening" only), or the orb is turned off.
-            lingerTask?.cancel()
-            lingerTask = nil
+        } else if shown, !orbShown() {
             hide()
         }
     }
 
     private func hide() {
         shown = false
-        fade(to: 0, over: 0.3)
+        fade(to: 0, over: 0.25)
         // A stale caption must not flash when the orb next shows.
         model.caption = nil
         lastAnnounced = nil
