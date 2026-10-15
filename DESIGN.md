@@ -197,11 +197,11 @@ The session view stacks header, conversation and composer, separated by 1pt Trac
 
 Today's History is a single column of rows with 28pt gutters, 9pt vertical padding and inset Track dividers, up to 900pt wide.
 
-The menu bar panel is 360pt wide: a header with the state-tinted menu icon (26pt) and status line, any open approvals, the five highest-ranked sessions, the last four lines, and a footer of buttons. Settings uses SwiftUI grouped forms.
+The menu bar panel is 360pt wide on Ground: a header with the state-tinted menu icon (26pt), status line, Talk and mute; up to three waiting cards; the five highest-ranked other sessions; the last four lines (two while something waits); and a footer of buttons. Sections are separated by 1pt Track rules with 14pt gutters. Settings uses SwiftUI grouped forms.
 
 ## Elevation & Depth
 
-Mostly flat. Depth comes from tonal steps of the same cool ground (Ground, Raised, Track, Tick) and from the orb's own glass. The floating orb panel uses Liquid Glass forced to the dark appearance, with a circular corner radius and no system window shadow, because the glass draws its own. The only drop shadow in the Activity window is under the timeline's hover callout (black 40%, radius 12, y offset 4), since it floats over the brief. Timeline dots carry a 1.5pt Track halo so close neighbours stay separate.
+Mostly flat. Depth comes from tonal steps of the same cool ground (Ground, Raised, Track, Tick) and from the orb's own glass. The menu bar panel is forced dark on Ground, like Activity. The floating orb panel uses Liquid Glass forced to the dark appearance, with a circular corner radius and no system window shadow, because the glass draws its own. The only drop shadow in the Activity window is under the timeline's hover callout (black 40%, radius 12, y offset 4), since it floats over the brief. Timeline dots carry a 1.5pt Track halo so close neighbours stay separate.
 
 ### Named Rules
 **The Tonal Depth Rule.** Raise a surface by stepping to the next neutral (Ground to Raised), not by adding a shadow. The timeline callout is the one exception.
@@ -255,7 +255,12 @@ The last three things you said since you left, as history rows: a symbol, your w
 An 8pt state dot, the name in medium, the age at the right in caption monospaced secondary ("now", "4m", "2h"), and one line under it in callout secondary: the last thing Earshot said about it, or Claude Code's title for it. Two sessions with the same name add "Started <time>" to tell them apart.
 
 ### Menu bar panel
-A compact panel on the system menu material. Sessions are ranked (needs you, then stuck or failed, then working, then the rest) and only the first five show, followed by an "N more in Activity" link. Each row: an 8pt state dot, name in body medium, state in callout (orange when it needs you), last line in callout secondary (2 lines max), and a hover fill of primary at 6% in a 6pt rounded rectangle. Section titles are subheadline semibold secondary. Clicking a row opens that session in Activity.
+A compact panel that always renders dark on Ground, whatever the system appearance, so its waiting cards and state colors read exactly as they do in Activity, and opening Activity from it never changes the ground.
+
+- **Header:** the menu icon tinted by the orb's state color (blue listening, violet working, amber speaking or holding lines, secondary when muted), "Earshot" in headline, the status line in callout secondary, then a Talk button (mic symbol) and the mute menu.
+- **Waiting on You** comes first whenever anything waits, with its count in orange. Up to three compact waiting cards (Raised, 12pt radius, 12pt padding, 1pt orange border at 35%), then "N more waiting in Activity". Each card's top line is an 8pt orange dot, the name in body semibold, and the wait in callout secondary ("4m"). A permission prompt says what it wants in callout ("Wants to run the migration") above "Open Session", Deny and Allow; Return allows only when that prompt is the only thing waiting. A question shows itself in callout and a one-line rounded-border field ("Answer <session>") with Send; a question with fixed choices lists them in callout secondary and offers "Pick an Answer in <app>" instead.
+- **Sessions:** ranked (needs you, then stuck or failed, then working, then the rest), leaving out the ones in waiting cards; only the first five show, followed by an "N more in Activity" link. Each row: an 8pt state dot, name in body medium, state in callout (orange when it needs you), last line in callout secondary (2 lines max), and a hover fill of primary at 5% in a 6pt rounded rectangle. Clicking a row opens that session in Activity.
+- Section titles are subheadline semibold secondary; counts beside them are secondary, or orange for what waits on you.
 
 ### Buttons
 System buttons at regular control size. "Open Session" and "N more in Activity" are link-style buttons. No custom button styling.
@@ -287,4 +292,4 @@ System `ContentUnavailableView` with a system symbol, a short title, and one sen
 
 ## Not canonized
 
-The build carries a few things that should not be copied to new surfaces. `HistoryRow` metadata (session and time) and the menu bar panel's section counts still use tertiary text, against the Secondary Floor Rule; `HistoryRow` appears on Ground in the brief and Today's History. `NowStrip` in ActivityStyle.swift is no longer used by any view. Several opacities are tuned by eye in single files rather than shared (0.13 and 0.7 on the timeline, 0.35 on the orange border, 0.05 hover fill in away rows against 0.06 in the menu bar panel). The panel and sidebar use adaptive system colors while the Activity palette is fixed. Treat these as drift to consolidate, not as rules.
+The build carries a few things that should not be copied to new surfaces. `NowStrip` in ActivityStyle.swift is no longer used by any view. Several opacities are tuned by eye in single files rather than shared (0.13 and 0.7 on the timeline, 0.35 on the orange border, 0.05 for row hover fills). The sidebar uses adaptive system colors while the Activity palette is fixed. Treat these as drift to consolidate, not as rules.
