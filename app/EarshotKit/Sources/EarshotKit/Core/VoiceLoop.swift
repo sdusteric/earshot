@@ -129,13 +129,15 @@ public actor VoiceLoop: ListenObserver {
     private func handle(_ u: Listener.Utterance) async {
         signposter.emitEvent("transcript")
         if !awaiting.isEmpty { awaiting.removeFirst(); endsOwed += 1 }
+        let owedBefore = Set(commandEnded.keys)
         if u.tooLong { await tooLong(u) } else {
             await record(u)
             await respond(to: u)
         }
         heardEntry = nil
-        // Nothing to say back ("thanks", a clear yes in a window): done thinking now.
-        if commandEnded.isEmpty { setThinking(false) }
+        // Nothing to say back ("thanks", a clear yes in a window): done thinking now, even
+        // with an earlier reply still waiting (held for a call) or dropped unsaid.
+        if commandEnded.keys.allSatisfy(owedBefore.contains) { setThinking(false) }
         if endsOwed > 0 {
             endsOwed -= 1
             await speech.endListening()

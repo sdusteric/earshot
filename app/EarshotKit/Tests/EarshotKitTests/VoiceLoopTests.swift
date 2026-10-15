@@ -123,6 +123,21 @@ actor CountingSpeaker: LineSpeaker {
         #expect(await r.player.played.isEmpty)
     }
 
+    /// An earlier reply that never started (held for a call) doesn't keep the orb
+    /// thinking after a later command that has nothing to say back.
+    @Test func aReplyStillWaitingDoesNotKeepALaterCommandThinking() async {
+        let r = await rig([agent("b", "blog", pid: 11)])
+        let loop = r.loop
+        mic.set(true)   // a call: the reply waits
+        await loop.captureEnded(heard: true)
+        r.heard.yield(said("Tell blog to deploy."))
+        #expect(await eventually { await transport.sent.count == 1 })
+        await loop.captureEnded(heard: true)
+        r.heard.yield(said("Thanks."))
+        #expect(await eventually { await loop.thinking == false })
+        #expect(await r.player.played.isEmpty)
+    }
+
     @Test func aHeardCaptureWithNoUtteranceDoesNotThinkForever() async {
         let r = await rig([agent("b", "blog", pid: 11)])
         await r.loop.captureEnded(heard: false)
