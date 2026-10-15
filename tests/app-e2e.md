@@ -51,6 +51,19 @@ playback within 3 seconds (a speaker in standby).
 | Speakers | Late in the run the default output (Audioengine 2+) could not start playback at all (`afplay`: AudioQueueStart failed, -66681, after 15 s). Outside Earshot; the app now survives it. |
 | Menu, Settings, First launch, Sleep and wake | Not checked: needs a person at the Mac. |
 
+## Results, 2026-10-15 (automated only)
+
+| Suite | Result |
+|---|---|
+| EarshotKit | 603 pass |
+| stuck-and-levels, app-handoff, engines | 132, 22 and 55 pass |
+| Kokoro, ducking, mic recording, on-device model | Pass |
+| Mic hog | Not run: needs a program that holds the mic open |
+| FluidListeningTests | 23 of 24. The wake spotter woke on "Good morning everyone, the build passed." (macOS `say` voice) at sensitivity 5, the default |
+| eval-parser | 65 of 100 (21 by the grammar). Bar 95%. Most misses are phrasings the grammar lacks that the on-device model answers as unknown ("let billing know...", "make billing stop", "absolutely not") |
+| eval-listener | Not run: needs recordings of your voice (`eval-listener.sh record`) |
+| send-integration | Not run: Claude Code needs this folder trusted first (run `claude` here once) |
+
 ## Listening (plan 2)
 
 Release gate: the release waits for docs/superpowers/specs/2026-10-11-listening-probe.md (the Task 0 measurements) and the Task 21 eval output (`eval-parser.sh`, `eval-listener.sh`, the latency and power runs).
