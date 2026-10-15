@@ -287,6 +287,12 @@ public enum Grammar {
     private static func status(_ w: Words, known: [String]) -> Command? {
         if everyone.contains(w.key) { return .status(target: nil) }
         if greetings.contains(w.key) { return .greet }
+        // A session's whole name and nothing else, even one that ends like a
+        // status question would ("Reflow status" is not "reflow, status"). A
+        // name that starts like a question ("What's next") is left to the model.
+        if isExactName(w.text, known: known), !questionWords.contains(nameWords(w.text).first ?? "") {
+            return .status(target: w.text)
+        }
         for (pre, post) in statusShapes {
             guard var t = pre.isEmpty ? Optional(w) : w.after([pre]) else { continue }
             if !post.isEmpty { guard let b = t.before([post]) else { continue }; t = b }
