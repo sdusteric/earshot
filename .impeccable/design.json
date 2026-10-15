@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-12T00:00:00Z",
+  "generatedAt": "2026-10-14T00:00:00Z",
   "title": "Design System: Earshot",
   "extensions": {
     "colorMeta": {
@@ -36,7 +36,7 @@
       },
       "track": {
         "role": "neutral",
-        "displayName": "Ring Track",
+        "displayName": "Track",
         "canonical": "#1c202b",
         "tonalRamp": [
           "#07080b",
@@ -51,7 +51,7 @@
       },
       "tick": {
         "role": "neutral",
-        "displayName": "Hour Tick",
+        "displayName": "Tick",
         "canonical": "#3b4152",
         "tonalRamp": [
           "#0f1014",
@@ -62,6 +62,21 @@
           "#3b4152",
           "#444b5e",
           "#4d546b"
+        ]
+      },
+      "hour-label": {
+        "role": "neutral",
+        "displayName": "Hour Label",
+        "canonical": "#8f8f8f",
+        "tonalRamp": [
+          "#262626",
+          "#3b3b3b",
+          "#505050",
+          "#656565",
+          "#7a7a7a",
+          "#8f8f8f",
+          "#b0b0b0",
+          "#d1d1d1"
         ]
       },
       "you-blue": {
@@ -188,115 +203,150 @@
     "typographyMeta": {
       "recap": {
         "displayName": "Recap",
-        "purpose": "The one line that says who needs you, 24pt semibold."
+        "purpose": "The brief's one line that says who needs you, 24pt semibold."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Session header name (title2) and waiting card names (title3), semibold."
       },
       "headline": {
         "displayName": "Headline",
-        "purpose": "List and window titles."
+        "purpose": "Brief section heads, Progress Notes, headings in Claude's messages."
       },
       "body": {
         "displayName": "Body",
-        "purpose": "Session names."
+        "purpose": "Turns and questions, capped at a 520pt measure."
       },
       "callout": {
         "displayName": "Callout",
-        "purpose": "Line text and replies."
+        "purpose": "Second lines, times, job notes, Earshot's lines, table cells."
       },
       "label": {
         "displayName": "Label",
-        "purpose": "Ring names, clock labels, callout metadata."
+        "purpose": "You and Claude labels, turn times, sidebar ages, timeline hour labels and now."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Fenced code in Claude's messages, system monospaced at callout size."
       }
     },
     "shadows": [
       {
-        "name": "callout",
+        "name": "timeline-callout",
         "value": "0 4px 12px rgba(0,0,0,0.4)",
-        "purpose": "The only shadow in the Activity window, under the dial hover callout."
+        "purpose": "The only shadow in the Activity window, under the timeline hover callout."
       }
     ],
     "motion": [
       {
         "name": "orb-color-blend",
-        "value": "0.25s linear blend between state colors",
+        "value": "0.25s blend between state colors",
         "purpose": "Orb changes hue between listening, working, speaking."
       },
       {
         "name": "idle-turn",
         "value": "slow continuous rotation",
-        "purpose": "Activity-window orb turns while idle."
-      },
-      {
-        "name": "type-in",
-        "value": "letter by letter for lines under 20s old; off with Reduce Motion",
-        "purpose": "Newest line in the now strip."
+        "purpose": "The brief's orb turns while idle."
       }
     ],
     "breakpoints": []
   },
   "components": [
     {
-      "name": "Dial Callout",
+      "name": "System Button",
+      "kind": "button",
+      "refersTo": "",
+      "description": "Native push button at regular size (Talk, Say the Recap, Allow, Deny, Send). No custom styling.",
+      "html": "<button class=\"ds-btn\">Say the Recap</button>",
+      "css": ".ds-btn{font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#f2f5ff;background:rgba(255,255,255,.1);border:none;border-radius:6px;padding:4px 12px}.ds-btn:hover{background:rgba(255,255,255,.16)}.ds-btn:focus-visible{outline:3px solid rgba(10,132,255,.6);outline-offset:1px}.ds-btn:active{background:rgba(255,255,255,.22)}"
+    },
+    {
+      "name": "Link Button",
+      "kind": "button",
+      "refersTo": "",
+      "description": "Link-style button for Open Session and N more in Activity.",
+      "html": "<button class=\"ds-link\">Open Session</button>",
+      "css": ".ds-link{font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#0a84ff;background:none;border:none;padding:0;cursor:pointer}.ds-link:hover{text-decoration:underline}.ds-link:focus-visible{outline:2px solid rgba(10,132,255,.6);border-radius:3px}"
+    },
+    {
+      "name": "Reply Field",
+      "kind": "input",
+      "refersTo": "reply-field",
+      "description": "The session composer: plain growing field on Raised, Track border, accent at 60% when focused.",
+      "html": "<input class=\"ds-reply\" placeholder=\"Message Wedding\">",
+      "css": ".ds-reply{font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#f2f5ff;background:#11141b;border:1px solid #1c202b;border-radius:9px;padding:8px 12px;width:320px;outline:none}.ds-reply::placeholder{color:rgba(235,235,245,.6)}.ds-reply:focus-visible{border-color:rgba(10,132,255,.6)}"
+    },
+    {
+      "name": "Sidebar Session Row",
+      "kind": "nav",
+      "refersTo": "",
+      "description": "A session in the inbox sidebar: state dot, name in medium, age, last line in secondary.",
+      "html": "<div class=\"ds-side\"><span class=\"ds-side-dot\"></span><div class=\"ds-side-main\"><div class=\"ds-side-top\"><span class=\"ds-side-name\">Earshot</span><span class=\"ds-side-age\">8h</span></div><div class=\"ds-side-line\">From earshot: Give it a mumble...</div></div></div>",
+      "css": ".ds-side{display:flex;gap:8px;align-items:baseline;width:250px;padding:6px 8px;border-radius:6px;font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff;background:#1e2028}.ds-side:hover{background:#262833}.ds-side:focus-visible{outline:2px solid rgba(10,132,255,.6)}.ds-side-dot{width:8px;height:8px;border-radius:50%;background:#0a84ff;flex:none}.ds-side-main{flex:1;min-width:0}.ds-side-top{display:flex;justify-content:space-between}.ds-side-name{font-size:13px;font-weight:500}.ds-side-age{font-size:10px;font-variant-numeric:tabular-nums;color:rgba(235,235,245,.6)}.ds-side-line{font-size:12px;color:rgba(235,235,245,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+    },
+    {
+      "name": "Waiting Card",
       "kind": "card",
-      "refersTo": "dial-callout",
-      "description": "Hover readout for one dot on the dial.",
-      "html": "<div class=\"ds-callout\"><div class=\"ds-callout-line\">Deploy is waiting on your answer</div><div class=\"ds-callout-reply\">Which environment?</div><div class=\"ds-callout-meta\">Billing service  9:41 AM</div></div>",
-      "css": ".ds-callout{width:230px;box-sizing:border-box;padding:8px 10px;background:#11141b;border:1px solid rgba(59,65,82,.6);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.4);font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff}.ds-callout-line{font-size:13px}.ds-callout-reply{font-size:11px;color:rgba(235,235,245,.6);margin-top:3px}.ds-callout-meta{font-size:10px;color:rgba(235,235,245,.3);margin-top:3px}"
+      "refersTo": "waiting-card",
+      "description": "Something waiting on you, with its answer controls inside: Raised, 12pt radius, 1pt orange border at 35%.",
+      "html": "<div class=\"ds-wait\"><div class=\"ds-wait-top\"><span class=\"ds-wait-dot\"></span><span class=\"ds-wait-name\">Wedding</span><span class=\"ds-wait-state\">needs you</span><span class=\"ds-wait-open\">Open Session</span></div><div class=\"ds-wait-q\">Provide a test invitation code, or reply to proceed with the deploy check</div><div class=\"ds-wait-row\"><input class=\"ds-wait-field\" placeholder=\"Answer Wedding\"><button class=\"ds-wait-btn\">Send</button></div></div>",
+      "css": ".ds-wait{font-family:-apple-system,system-ui,sans-serif;background:#11141b;border:1px solid rgba(255,159,10,.35);border-radius:12px;padding:16px;color:#f2f5ff;width:520px;box-sizing:border-box}.ds-wait-top{display:flex;align-items:baseline;gap:8px;margin-bottom:12px}.ds-wait-dot{width:8px;height:8px;border-radius:50%;background:#ff9f0a}.ds-wait-name{font-size:15px;font-weight:600}.ds-wait-state{font-size:13px;color:#ff9f0a;flex:1}.ds-wait-open{font-size:13px;color:#0a84ff;cursor:pointer}.ds-wait-open:hover{text-decoration:underline}.ds-wait-q{font-size:13px;margin-bottom:10px}.ds-wait-row{display:flex;gap:8px}.ds-wait-field{flex:1;font-size:13px;color:#f2f5ff;background:#0b0d12;border:1px solid #3b4152;border-radius:5px;padding:4px 8px;outline:none}.ds-wait-field:focus-visible{border-color:rgba(10,132,255,.8)}.ds-wait-btn{font-size:13px;color:#f2f5ff;background:rgba(255,255,255,.1);border:none;border-radius:6px;padding:4px 12px}.ds-wait-btn:hover{background:rgba(255,255,255,.16)}"
     },
     {
-      "name": "Session Ring Label",
-      "kind": "chip",
-      "refersTo": "",
-      "description": "Ring name in the session's state color, set just clockwise of now.",
-      "html": "<span class=\"ds-ring-label\">Blog</span>",
-      "css": ".ds-ring-label{font-family:-apple-system,system-ui,sans-serif;font-size:10px;font-weight:500;color:#ff9f0a}"
-    },
-    {
-      "name": "Line Dot",
+      "name": "Away Row",
       "kind": "custom",
-      "refersTo": "",
-      "description": "A dot per line on a ring, with a ground halo. Need lines are larger.",
-      "html": "<span class=\"ds-dot-halo\"><span class=\"ds-dot\"></span></span>",
-      "css": ".ds-dot-halo{display:inline-block;padding:2px;background:#0b0d12;border-radius:50%}.ds-dot{display:block;width:9px;height:9px;border-radius:50%;background:#63c4ff}"
+      "refersTo": "away-row",
+      "description": "One session that changed while you were away: dot, name, lead in primary, detail in secondary, time.",
+      "html": "<div class=\"ds-away\"><span class=\"ds-away-dot\"></span><span class=\"ds-away-name\">Finebrief</span><span class=\"ds-away-text\">Working, 12 minutes in. <span class=\"ds-away-detail\">The docs are updated.</span></span><span class=\"ds-away-time\">5:20 PM</span></div>",
+      "css": ".ds-away{display:flex;align-items:baseline;gap:12px;padding:10px 8px;border-radius:6px;font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff;width:560px;cursor:pointer}.ds-away:hover{background:rgba(255,255,255,.05)}.ds-away:focus-visible{outline:2px solid rgba(10,132,255,.6)}.ds-away-dot{width:8px;height:8px;border-radius:50%;background:#0a84ff;flex:none}.ds-away-name{width:150px;font-size:13px;font-weight:600;flex:none}.ds-away-text{flex:1;font-size:13px}.ds-away-detail{color:rgba(235,235,245,.6)}.ds-away-time{font-size:12px;font-variant-numeric:tabular-nums;color:rgba(235,235,245,.6)}"
     },
     {
-      "name": "Now Tick",
+      "name": "Day Timeline",
       "kind": "custom",
-      "refersTo": "",
-      "description": "The amber tick and label that mark now at the top of the dial.",
-      "html": "<div class=\"ds-now\"><span class=\"ds-now-label\">now</span><span class=\"ds-now-tick\"></span></div>",
-      "css": ".ds-now{display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-family:-apple-system,system-ui,sans-serif}.ds-now-label{font-size:10px;font-weight:600;color:#ffbd6b}.ds-now-tick{width:2px;height:16px;background:#ffbd6b}"
+      "refersTo": "timeline-track",
+      "description": "The signature strip: 24 hours left to right, now at the right, state-colored dots, amber shade since you last looked.",
+      "html": "<div class=\"ds-tl\"><div class=\"ds-tl-track\"><span class=\"ds-tl-shade\"></span><span class=\"ds-tl-dot\" style=\"left:4%;background:#32d74b\"></span><span class=\"ds-tl-dot\" style=\"left:12%;background:#ffbd6b\"></span><span class=\"ds-tl-dot\" style=\"left:32%;background:#63c4ff\"></span><span class=\"ds-tl-dot ds-tl-ask\" style=\"left:63%;background:#ff9f0a\"></span></div><div class=\"ds-tl-labels\"><span>6 PM</span><span>12 AM</span><span>6 AM</span><span>12 PM</span><span class=\"ds-tl-now\">now</span></div></div>",
+      "css": ".ds-tl{width:520px;font-family:-apple-system,system-ui,sans-serif;}.ds-tl-track{position:relative;height:16px;border-radius:8px;background:#1c202b;overflow:hidden}.ds-tl-shade{position:absolute;left:63%;right:0;top:0;bottom:0;background:rgba(255,189,107,.13);border-left:1.5px solid rgba(255,189,107,.7)}.ds-tl-dot{position:absolute;top:50%;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;box-shadow:0 0 0 1.5px #1c202b;cursor:pointer}.ds-tl-dot:hover{transform:scale(1.3)}.ds-tl-ask{width:10px;height:10px;margin:-5px 0 0 -5px}.ds-tl-labels{display:flex;justify-content:space-between;margin-top:4px;font-size:10px;font-variant-numeric:tabular-nums;color:#8f8f8f}.ds-tl-now{color:#ffbd6b;font-weight:600}"
+    },
+    {
+      "name": "Timeline Callout",
+      "kind": "card",
+      "refersTo": "timeline-callout",
+      "description": "Hover readout for a timeline dot; the one shadowed surface.",
+      "html": "<div class=\"ds-callout\"><div class=\"ds-callout-line\">Wedding is waiting on your answer</div><div class=\"ds-callout-meta\">Wedding  6:03 PM  +2 more</div></div>",
+      "css": ".ds-callout{width:260px;box-sizing:border-box;padding:8px 10px;background:#11141b;border:1px solid rgba(59,65,82,.6);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.4);font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff}.ds-callout-line{font-size:13px}.ds-callout-meta{font-size:11px;color:rgba(235,235,245,.6);margin-top:3px}"
+    },
+    {
+      "name": "Code and Table Block",
+      "kind": "custom",
+      "refersTo": "table-block",
+      "description": "Claude's markdown tables as a grid on Raised; fenced code uses the same fill in monospace.",
+      "html": "<div class=\"ds-table\"><div class=\"ds-tr ds-th\"><span>Date</span><span>Page views</span><span>403s</span></div><div class=\"ds-tr\"><span>Aug 26</span><span>228</span><span>629</span></div><div class=\"ds-tr\"><span>Aug 28</span><span>546</span><span>636</span></div></div>",
+      "css": ".ds-table{font-family:-apple-system,system-ui,sans-serif;background:#11141b;border-radius:8px;padding:12px;width:360px;font-size:12px}.ds-tr{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;padding:3px 0;color:rgba(235,235,245,.6)}.ds-th{color:#f2f5ff;font-weight:600;border-bottom:1px solid #1c202b;padding-bottom:6px;margin-bottom:3px}"
     },
     {
       "name": "Orb Disc",
       "kind": "custom",
       "refersTo": "orb-disc",
-      "description": "The orb on its black disc with a Tick outline.",
-      "html": "<div class=\"ds-orb\"></div>",
-      "css": ".ds-orb{width:96px;height:96px;border-radius:50%;background:radial-gradient(circle at 50% 50%,rgba(99,196,255,.5),rgba(99,196,255,0) 70%),#000;border:1px solid #3b4152}"
-    },
-    {
-      "name": "History Row",
-      "kind": "custom",
-      "refersTo": "history-row",
-      "description": "Session row with state dot and hover fill.",
-      "html": "<div class=\"ds-row\"><span class=\"ds-row-dot\"></span><div><div class=\"ds-row-name\">Blog</div><div class=\"ds-row-state\">waiting on your answer</div></div></div>",
-      "css": ".ds-row{display:flex;gap:10px;align-items:flex-start;padding:8px;border-radius:6px;font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff}.ds-row:hover{background:rgba(255,255,255,.06)}.ds-row-dot{width:8px;height:8px;border-radius:50%;background:#ff9f0a;margin-top:6px}.ds-row-name{font-size:13px;font-weight:500}.ds-row-state{font-size:12px;color:rgba(235,235,245,.6)}"
+      "description": "The orb on its black disc with a Tick outline; click to talk.",
+      "html": "<div class=\"ds-orb\" role=\"button\" tabindex=\"0\" aria-label=\"Talk\"></div>",
+      "css": ".ds-orb{width:96px;height:96px;border-radius:50%;background:radial-gradient(circle at 50% 50%,rgba(242,245,255,.35),rgba(242,245,255,0) 70%),#000;border:1px solid #3b4152;cursor:pointer}.ds-orb:hover{background:radial-gradient(circle at 50% 50%,rgba(99,196,255,.5),rgba(99,196,255,0) 70%),#000}.ds-orb:focus-visible{outline:3px solid rgba(10,132,255,.6);outline-offset:2px}"
     }
   ],
   "narrative": {
     "northStar": "The Orb's Glass",
-    "overview": "Earshot is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (blue for you, violet for working, amber for Earshot's voice). The Activity window always renders dark.\n\nThe Activity window is built around one idea: History keeps one day, so the day wraps around the orb as a 24-hour dial. The dial fills the window height on the left; the right side is plain text on the same ground, using system type and system controls.",
+    "overview": "Earshot is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (light blue for your words, violet for working, amber for Earshot's voice, orange for what needs you). The Activity window always renders dark, whatever the system appearance, because the light points need a dark backing.\n\nThe Activity window is an inbox for your sessions. A native sidebar lists the brief (\"Since You Left\"), today's history, and every session grouped by what it needs from you. The first page is the brief, written for the moment you come back: who is waiting on you, with the question and the answer controls right there, one line per session about what changed, and what you asked. Selecting a session swaps the detail for that session's own view: its last turns from its transcript, what it waits on you for, and a reply field. The day runs along the bottom of the brief as a slim timeline strip, the one custom drawn object besides the orb.\n\nEverything else uses system type and system controls (the sidebar, buttons, text fields, grouped forms in Settings, `ContentUnavailableView` for empty states), so the app reads as a Mac app with two custom objects: the orb and the strip.",
     "keyCharacteristics": [
-      "Cool near-black ground with a faint blue tint.",
-      "Color is state, not decoration.",
-      "Dots, thin tracks, and hairline ticks.",
-      "System type with one weight step for headlines.",
-      "Motion is slow and tied to state."
+      "Cool near-black ground with a faint blue tint, never pure black except behind the orb disc.",
+      "Color marks state only. Each hue has one meaning and appears only where that state is shown.",
+      "Dots, thin tracks, and hairline rules in Track. Cards appear only around things that wait on you.",
+      "System type with one weight step for headlines (semibold).",
+      "Motion is slow and tied to state: the orb changes color with state and turns while idle."
     ],
     "rules": [
       {
         "name": "The One Meaning Rule",
-        "body": "A hue has one job. Blue is you, amber is Earshot, violet is working, and orange, red, green are session states. Do not use them as accents.",
+        "body": "A hue has one job. Light blue is you, amber is Earshot, violet is working, and orange, red, green, system blue are session states. Do not use them as accents.",
         "section": "colors"
       },
       {
@@ -305,8 +355,13 @@
         "section": "colors"
       },
       {
+        "name": "The Secondary Floor Rule",
+        "body": "Text that carries information on Ground uses the secondary label color or brighter. Tertiary text measures about 2.2:1 on #0b0d12 and is too faint to read.",
+        "section": "colors"
+      },
+      {
         "name": "The One Weight Step Rule",
-        "body": "Headlines are semibold, ring names and \"now\" are medium or semibold at caption size, everything else is regular.",
+        "body": "Headlines and titles are semibold, names are medium or semibold, everything else is regular. No other weights.",
         "section": "typography"
       },
       {
@@ -316,23 +371,29 @@
       },
       {
         "name": "The Tonal Depth Rule",
-        "body": "Raise a surface by stepping to the next neutral (Ground to Raised), not by adding a shadow. The callout is the one exception.",
+        "body": "Raise a surface by stepping to the next neutral (Ground to Raised), not by adding a shadow. The timeline callout is the one exception.",
         "section": "elevation"
       }
     ],
     "dos": [
-      "Do start from Ground (#0b0d12) and its neutral steps for any new dark surface in the Activity window.",
-      "Do take state colors from DialPalette, OrbMode.rgb, and SessionStyle.color, and keep their meanings.",
-      "Do use system type styles and system controls; add one semibold step for headlines.",
-      "Do keep motion tied to state (orb color change, idle turn, typing in) and honor Reduce Motion.",
-      "Do give every dial element a VoiceOver summary or label, since the dial draws its dots in a canvas."
+      "Do start from Ground (#0b0d12) and its neutral steps for any new dark surface in the Activity window, including the toolbar band.",
+      "Do take state colors from ActivityPalette.color, OrbMode.rgb, and SessionStyle.color, and keep their meanings.",
+      "Do use system type styles and system controls; add one semibold step for headlines and titles.",
+      "Do use secondary text, never tertiary, for anything informative on Ground.",
+      "Do cap a turn at the 520pt measure, its code and tables included.",
+      "Do put anything that waits on you in a Raised card with a 12pt radius and a 1pt orange border at 35%, with its answer controls inside it.",
+      "Do keep motion tied to state (orb color change, idle turn) and honor Reduce Motion.",
+      "Do give canvas-drawn elements, such as the timeline, a VoiceOver summary."
     ],
     "donts": [
       "Don't use amber, blue, or violet as general accents or button fills.",
-      "Don't add a sidebar of filters or a card around the dial.",
+      "Don't put the day back as a hero object or add a sidebar of filters; the day stays a slim strip at the bottom of the brief.",
       "Don't use a second type family or weights beyond regular, medium, and semibold.",
-      "Don't add drop shadows to surfaces other than the hover callout.",
-      "Don't let a ring arc claim work across a gap of more than 30 minutes between lines."
+      "Don't add drop shadows to surfaces other than the timeline callout.",
+      "Don't give a colored border to anything that does not wait on you.",
+      "Don't label background-job notes with a speaker; they are a log.",
+      "Don't show Claude's markdown as raw syntax (pipes, asterisks, backticks).",
+      "Don't let timeline dots closer than 14pt draw separately; their halos cut into each other."
     ]
   }
 }
