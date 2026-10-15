@@ -94,6 +94,14 @@ struct ActivityView: View {
                 .tag(ActivityPage.brief)
                 Label("Today's History", systemImage: "clock").tag(ActivityPage.history)
             }
+            if sessions.isEmpty {
+                Section("Sessions") {
+                    Text("No Claude Code sessions are open.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .selectionDisabled()
+                }
+            }
             let names = Dictionary(grouping: sessions, by: { NameMatch.normalize(model.displayName($0.id)) })
             ForEach(groups) { g in
                 let rows = ForEach(g.sessions) { s in
@@ -143,7 +151,7 @@ struct ActivityView: View {
 
     @ViewBuilder private func detail(now: Date) -> some View {
         if !search.trimmingCharacters(in: .whitespaces).isEmpty {
-            HistoryPage(search: search, now: now)
+            HistoryPage(search: search, now: now) { search = "" }
         } else {
             switch model.activityPage {
             case .brief:

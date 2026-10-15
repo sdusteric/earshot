@@ -21,6 +21,7 @@ struct BriefView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
                 masthead
+                pluginNotice
                 waitingSection
                 awaySection
                 askedSection
@@ -35,8 +36,18 @@ struct BriefView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            DayTimeline(entries: dayEntries, since: since, now: now) { e in
-                if let id = e.session { model.activityPage = .session(id) } else { model.activityPage = .history }
+            Group {
+                if model.config.history == .off {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text("History is off, so the day isn't kept here.").font(.callout).foregroundStyle(.secondary)
+                        Button("Turn On History") { model.turnOnHistory() }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    DayTimeline(entries: dayEntries, since: since, now: now) { e in
+                        if let id = e.session { model.activityPage = .session(id) } else { model.activityPage = .history }
+                    }
+                }
             }
             .padding(.horizontal, 36)
             .padding(.top, 12)
@@ -122,11 +133,63 @@ struct BriefView: View {
                 }
             }
             .transition(.opacity)
-        } else if !sessions.isEmpty {
-            Label("Nothing is waiting on you.", systemImage: "checkmark.circle")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .transition(.opacity)
+        } else if sessions.isEmpty {
+            // Claude Code missing is the plugin notice's to say.
+            if model.pluginStatus != .noClaude {
+                Text("Start Claude Code in a terminal and its sessions show up here.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Nothing is waiting on you.", systemImage: "checkmark.circle")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                if changed.isEmpty {
+                    // A quiet brief still says where things stand, and what you could do.
+                    Text("\(lastHeard) \(nextStep)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// That nothing changed, and which session Earshot last spoke about, and when.
+    private var lastHeard: String {
+        guard let e = model.history.last(where: { $0.kind == .said && $0.session != nil }), let id = e.session else {
+            return "Nothing changed since you looked."
+        }
+        let t = now.timeIntervalSince(e.date)
+        let ago = t < 60 ? "just now" : "\(ActivityTime.spoken(t)) ago"
+        return "Nothing changed since you looked. You last heard from \(SessionStyle.title(model.displayName(id))) \(ago)."
+    }
+
+    private var nextStep: String {
+        let say = model.hotkeyName.map { "hold \($0) and say one" } ?? "click the orb and say one"
+        return "To start some work, open a session and send it a prompt, or \(say)."
+    }
+
+    // MARK: Setup
+
+    /// Without the plugin Claude Code still lists the sessions, but Earshot hears nothing from them.
+    @ViewBuilder private var pluginNotice: some View {
+        let status = model.pluginStatus
+        if model.pluginWorking || (!status.isConnected && status != .checking) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: "puzzlepiece.extension").foregroundStyle(.secondary).accessibilityHidden(true)
+                Text(model.pluginWorking ? model.pluginWorkLine : status.line)
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.pluginWorking {
+                    ProgressView().controlSize(.small)
+                } else if let action = status.action {
+                    Button(action) { model.fixPlugin() }
+                }
+            }
+            .transition(.opacity)
         }
     }
 
@@ -325,9 +388,12 @@ private struct AwayRow: View {
     private var lead: String {
         // The plugin's account of when it started working, else your last prompt to it.
         let started = session.since == .distantPast ? asked : session.since
+        // A working session that has gone quiet says for how long: the first hint it may be stuck.
+        let quiet = Date().timeIntervalSince(when)
+        let hush = session.state == .working && quiet >= 10 * 60 ? " Quiet for \(ActivityTime.spoken(quiet))." : ""
         return switch session.state {
         case .done: "Finished."
-        case .working: started.map { "Working, \(ActivityTime.spoken(Date().timeIntervalSince($0))) in." } ?? "Working."
+        case .working: (started.map { "Working, \(ActivityTime.spoken(Date().timeIntervalSince($0))) in." } ?? "Working.") + hush
         case .stuck: "Might be stuck."
         case .failed: "Hit an error."
         default: ""
