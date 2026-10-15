@@ -63,9 +63,14 @@ struct SessionView: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle().fill(SessionStyle.color(session.state)).frame(width: 9, height: 9).accessibilityHidden(true)
             Text(SessionStyle.title(model.displayName(session.id))).font(.title2.weight(.semibold)).lineLimit(1)
-            Text(SessionStyle.describe(session))
+            Text(dismissed ? "dismissed" : SessionStyle.describe(session))
                 .foregroundStyle(SessionGroup.kind(session.state) == .needsYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .lineLimit(1)
+            if dismissed {
+                Button("Bring Back") { model.restore(session.id) }
+                    .buttonStyle(.link)
+                    .help("Put it back on Waiting on You")
+            }
             if let folder {
                 Text(folder).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
             }
@@ -80,6 +85,8 @@ struct SessionView: View {
         .padding(.vertical, 16)
     }
 
+    /// A wait you dismissed: it reads as open everywhere else.
+    private var dismissed: Bool { model.dismissals.isDismissed(session.id) }
     private var live: LiveSession? { model.liveSession(session.id) }
     private var isBackground: Bool { live?.isBackground ?? false }
     private var hostName: String { model.hostName(session.id) }

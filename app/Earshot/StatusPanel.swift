@@ -437,6 +437,7 @@ private struct QuestionCard: View {
             if picker {
                 HStack(spacing: 8) {
                     Button("Open Session", action: open).buttonStyle(.link).font(.callout)
+                    dismissButton
                     Spacer(minLength: 6)
                     Button("Pick an Answer in \(model.hostName(session.id))") { note = model.openInTerminal(session.id) }
                 }
@@ -448,11 +449,22 @@ private struct QuestionCard: View {
                     Button("Send", action: send)
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || sending)
                 }
-                Button("Open Session", action: open).buttonStyle(.link).font(.callout)
+                HStack(spacing: 12) {
+                    Button("Open Session", action: open).buttonStyle(.link).font(.callout)
+                    dismissButton
+                }
             }
             if let note { Text(note).font(.callout).foregroundStyle(.secondary).lineLimit(2) }
         }
         .task(id: session.id) { asked = await model.transcript(for: session.id)?.asked }
+    }
+
+    private var dismissButton: some View {
+        Button("Dismiss") { model.dismiss(session.id) }
+            .buttonStyle(.link)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .help("Take it off Waiting on You until it asks something new. The session keeps running.")
     }
 
     private var picker: Bool { !(asked?.options.isEmpty ?? true) }

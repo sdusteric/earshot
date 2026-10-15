@@ -251,6 +251,8 @@ private struct WaitingCard<Actions: View>: View {
     let state: String
     let since: Date?
     let session: String
+    /// A question can be dismissed; a permission prompt is answered with Allow or Deny.
+    var dismissible = false
     @ViewBuilder let actions: () -> Actions
     @Environment(AppModel.self) private var model
 
@@ -262,6 +264,13 @@ private struct WaitingCard<Actions: View>: View {
                 Text(state).foregroundStyle(.orange).lineLimit(2)
                 Spacer(minLength: 8)
                 if let since, Date().timeIntervalSince(since) >= 60 { Text("waiting \(ActivityTime.spoken(Date().timeIntervalSince(since)))").font(.callout).foregroundStyle(.secondary) }
+                if dismissible {
+                    Button("Dismiss") { model.dismiss(session) }
+                        .buttonStyle(.link)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
+                        .help("Take it off Waiting on You until it asks something new. The session keeps running.")
+                }
                 Button("Open Session") { model.activityPage = .session(session) }
                     .buttonStyle(.link)
                     .padding(.leading, 6)
@@ -291,7 +300,8 @@ private struct QuestionCard: View {
         // Kept up a moment after your answer reached it, to say so.
         let state = SessionGroup.kind(session.state) == .needsYou ? SessionStyle.describe(session) : "answered"
         WaitingCard(name: model.displayName(session.id), state: state,
-                    since: session.since == .distantPast ? session.updated : session.since, session: session.id) {
+                    since: session.since == .distantPast ? session.updated : session.since, session: session.id,
+                    dismissible: state != "answered") {
             VStack(alignment: .leading, spacing: 10) {
                 if let asked {
                     Text(asked.question).font(.body).fixedSize(horizontal: false, vertical: true)

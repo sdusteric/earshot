@@ -8,9 +8,18 @@ import SwiftUI
 
 @MainActor @Observable
 final class AppModel {
-    var sessions: [SessionInfo] = []
-    /// What `claude agents` lists: running sessions even before the plugin reports them.
-    var liveSessions: [LiveSession] = []
+    /// The plugin's sessions, with dismissed waits read as open (see Dismissals).
+    private(set) var sessions: [SessionInfo] = []
+    /// What `claude agents` lists: running sessions even before the plugin
+    /// reports them. Dismissed waits read as open here too.
+    private(set) var liveSessions: [LiveSession] = []
+    /// Both lists as their sources give them, before dismissals.
+    private var knownRaw: [SessionInfo] = []
+    private var liveRaw: [LiveSession] = []
+    /// Claude Code's list has come in once: before that, a session missing from it proves nothing.
+    private var liveLoaded = false
+    /// Waits you dismissed, kept across launches.
+    private(set) var dismissals = AppModel.loadDismissals()
     /// What Earshot said and heard, oldest first (see HistoryStore).
     var history: [HistoryEntry] = []
     /// Permission prompts waiting on you, oldest first, for the Allow and Deny rows.
@@ -176,7 +185,7 @@ final class AppModel {
             // Kokoro takes about 12 s to load cold, so load it before the first line.
             await live.synth.prepare()
         }
-        Task { for await list in await live.core.sessions.changes() { sessions = list; await listeningChanged() } }
+        Task { for await list in await live.core.sessions.changes() { knownRaw = list; applyDismissals(); await listeningChanged() } }
         Task { for await list in await live.core.approvals.changes() { approvals = list } }
         Task { for await s in await live.core.speech.stateChanges() { speechState = s; updateActivity() } }
         Task {
@@ -354,6 +363,46 @@ final class AppModel {
     }
     @ObservationIgnored private var transcripts: [String: (stamp: TranscriptStamp, recent: SessionTranscript.Recent)] = [:]
 
+    // MARK: Dismissing a wait
+
+    private static let dismissalsKey = "dismissedWaits"
+
+    private static func loadDismissals() -> Dismissals {
+        guard let data = UserDefaults.standard.data(forKey: dismissalsKey),
+              let d = try? JSONDecoder().decode(Dismissals.self, from: data) else { return Dismissals() }
+        return d
+    }
+
+    private func saveDismissals() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(dismissals), forKey: Self.dismissalsKey)
+    }
+
+    /// Takes a waiting session off Waiting on You, the recap and the panel
+    /// until it asks something new. It is not stopped and nothing is sent.
+    func dismiss(_ id: String) {
+        dismissals.dismiss(id)
+        saveDismissals()
+        applyDismissals()
+    }
+
+    /// Puts a dismissed session back on Waiting on You.
+    func restore(_ id: String) {
+        dismissals.restore(id)
+        saveDismissals()
+        applyDismissals()
+    }
+
+    /// Recomputes both lists from their sources. Set only on a change, as
+    /// setting the same value still redraws every view that reads it.
+    private func applyDismissals() {
+        // Only once Claude Code's list is in: at launch an empty list proves nothing.
+        if liveLoaded, dismissals.prune(known: knownRaw, live: liveRaw) { saveDismissals() }
+        let known = knownRaw.map { dismissals.apply($0) }
+        let live = liveRaw.map { dismissals.apply($0) }
+        if known != sessions { sessions = known }
+        if live != liveSessions { liveSessions = live }
+    }
+
     /// What you typed in the session view, sent to that session. Returns the
     /// line Earshot would have said ("Sent to blog.", "Queued, blog is busy.").
     /// What became of it arrives later in `receipts`. `answering` is a waiting
@@ -496,7 +545,7 @@ final class AppModel {
         }
         let live = await stack.directory.sessions
         directorySessions = live.count
-        if live != liveSessions { liveSessions = live }
+        if live != liveRaw || !liveLoaded { liveRaw = live; liveLoaded = true; applyDismissals() }
         i = listenInputs(c)
         // Set only on a change: setting the same value still redraws every view that reads it.
         let block = ListenPolicy.wakeBlock(i)
@@ -529,7 +578,7 @@ final class AppModel {
         Task {
             await stack.directory.refresh(ifOlderThan: floor)
             let live = await stack.directory.sessions
-            if live != liveSessions { liveSessions = live }
+            if live != liveRaw || !liveLoaded { liveRaw = live; liveLoaded = true; applyDismissals() }
             let count = live.count
             if count != directorySessions {
                 directorySessions = count
