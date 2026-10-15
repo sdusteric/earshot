@@ -261,7 +261,23 @@ A compact panel on the system menu material. Sessions are ranked (needs you, the
 System buttons at regular control size. "Open Session" and "N more in Activity" are link-style buttons. No custom button styling.
 
 ### Empty states
-System `ContentUnavailableView` with a system symbol, a short title, and one sentence on what to do ("This session has closed", "Nothing to show yet", "History is off").
+System `ContentUnavailableView` with a system symbol, a short title, one sentence on what to do, and the button that does it when one exists ("This session has closed" with Show the Brief, "Can't read this conversation" with Show in <app>, "History is off" with Turn On History, "No results for ..." with Clear Search). Inside the brief, plain callout or body text in secondary instead of a view: "Start Claude Code in a terminal and its sessions show up here." with no sessions; the plugin's status line and its fix button (Install, Turn On, Update, Check Again) beside a puzzle piece when the plugin is not connected; and, when nothing waits and nothing changed, who you last heard from and when, then one next step.
+
+### Quick switcher
+Command-K opens a sheet, 460pt wide on Raised: a magnifying glass and a plain title3 field ("Go to a session"), a Track rule, up to eight 34pt rows (state dot, name in medium, state in callout secondary, its Command number at the right), the selected row on the system selection color in a 6pt rounded rectangle, and a caption hint under a second rule. Matches go by name start, word starts, anywhere in the name, then title or folder, then letters in order (`SwitcherMatch`).
+
+## Keyboard
+
+The Go menu holds the window's shortcuts and is on only while Activity is key: Command-0 Since You Left, Today's History, Command-1 to Command-9 the first nine sessions in sidebar order (listed by name), Command-K Go to Session, Command-F Search What Was Said. Return allows a permission prompt only when exactly one shows; Command-Return sends a reply.
+
+## Motion
+
+Motion happens only when a session's state does, once per change, and the parts of one change move together:
+- A session that changes groups moves in the sidebar (smooth, 0.3s).
+- A waiting card or pending box settles in from 8pt above at 98% scale with opacity, and leaves at 97% scale, fading over 0.2s, once answered. The brief's rows below settle in the same transaction.
+- A new line in a session rises 14pt into place with opacity; the first read of a session does not animate.
+- Reduce Motion turns each into a crossfade (ease in out, 0.2s), and the sidebar does not animate.
+Timings live in `ActivityMotion` (ActivityStyle.swift). No motion on hover, page changes, or load.
 
 ## Do's and Don'ts
 
