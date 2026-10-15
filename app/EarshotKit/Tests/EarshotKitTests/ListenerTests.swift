@@ -245,7 +245,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([1, 1, 1])
         try? await Task.sleep(for: .milliseconds(40))
         let before = await gate.resets
@@ -325,7 +326,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func aCancelledHoldSendsNothing() async {
         let l = await make()
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([1, 1])
         await l.hotkeyCancel()
         try? await Task.sleep(for: .milliseconds(50))
@@ -336,7 +338,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func aCallDropsTheCapture() async {
         let l = await make()
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([1, 1])
         await l.setMicBusy(true)
         await l.hotkeyUp()
@@ -692,7 +695,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         let t = ScriptTranscriber()
         let l = await make(transcriber: t)
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([Float](repeating: 1, count: 60))   // 15.4 s, past the 15 s cap
         #expect(await eventually { await heard.items.count == 1 })
         let u = await heard.items.first
@@ -760,7 +764,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func aMicThatEndsMidCaptureDropsTheCapture() async {
         let l = await make()
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([1, 1])
         await input.endStream()
         #expect(await eventually { await observer.events == ["began", "ended"] })
@@ -861,7 +866,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func aCommandPrewarmsTheModel() async {
         let l = await make()
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         #expect(await eventually { await transcriber.prewarms == 1 })
         await l.hotkeyCancel()
     }
@@ -902,7 +908,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func aReleaseKeepsListeningBriefly() async {
         let l = await make()
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([1, 1])
         try? await Task.sleep(for: .milliseconds(30))
         await l.hotkeyUp()
@@ -944,7 +951,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func blockingMidCaptureDropsIt() async {
         let l = await make()
         await l.hotkeyDown()
-        try? await Task.sleep(for: .milliseconds(60))
+        // Held past minHold: wait for the capture itself, not a fixed time a busy machine can overrun.
+        #expect(await eventually { await observer.events.contains("began") })
         await input.push([1, 1])
         await l.setBlocked(true)
         await l.hotkeyUp()
