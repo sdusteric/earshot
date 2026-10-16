@@ -4,7 +4,8 @@
 //   transcribe WAV [TERM...] Parakeet TDT v2, then vocabulary rescoring with TERMs
 //   listen MINUTES           the live cascade on the mic, with CPU use per minute
 //   parse-eval TSV           the command parser on tests/eval/parser-cases.tsv
-//   wake-eval DIR            wake word and transcripts on recordings (DIR/manifest.tsv)
+//   wake-eval DIR            wake word (spotter, Apple's confirm, the finish rule) and
+//                            transcripts on recordings (DIR/manifest.tsv)
 //   hear WAV...              a recorded command as the app takes it: Parakeet with the
 //                            live session names, the parser, then the answer for a
 //                            status or greeting (read-only: nothing is sent)
@@ -12,6 +13,14 @@
 //   hear-bench MANIFEST SESSIONS
 //                            commands through the transcriber and parser, scored
 //                            (tests/hearing: make-audio.sh makes the audio)
+//   wake-bench MANIFEST... [--out OUT.tsv] [--confirmers ctc,apple,parakeet] [--limit N]
+//                            the wake word's spotter and second looks on many files, cut
+//                            into segments as the listener cuts them, swept over thresholds
+//   wake-rescore TSV... [--threshold T]
+//                            wake-bench's --out rows rescored from the heard text, stripWake vs
+//                            Listener.wakeWords, for apple, parakeet and the two OR'd, and end to
+//                            end (Apple's confirm, then the finish rule on the head texts), with
+//                            false wakes counted as dispatch or window
 //   send TARGET PROMPT       one prompt through the real directory and dispatcher
 //   send-id ID PROMPT        the same, to the session with this id
 import AVFoundation
@@ -37,11 +46,13 @@ let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
         case "wake-eval" where a.count == 2: try await wakeEval(URL(fileURLWithPath: a[1]))
         case "parse" where a.count >= 3: await parseText(sessionsFile: URL(fileURLWithPath: a[1]), Array(a.dropFirst(2)))
         case "hear-bench" where a.count == 3: try await hearBench(URL(fileURLWithPath: a[1]), sessionsFile: URL(fileURLWithPath: a[2]))
+        case "wake-bench" where a.count >= 2: try await wakeBench(Array(a.dropFirst()))
+        case "wake-rescore" where a.count >= 2: try wakeRescore(Array(a.dropFirst()))
         case "hear" where a.count >= 2: try await hear(a.dropFirst().map { URL(fileURLWithPath: $0) })
         case "send" where a.count == 3: await send(target: a[1], prompt: a[2])
         case "send-id" where a.count == 3: await send(id: a[1], prompt: a[2])
         default:
-            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | hear WAV... | hear-bench MANIFEST SESSIONS | send TARGET PROMPT | send-id ID PROMPT")
+            print("usage: earshot-probe record SECS OUT.wav | spot WAV... | transcribe WAV [TERM...] | listen MINUTES | parse-eval TSV | wake-eval DIR | hear WAV... | hear-bench MANIFEST SESSIONS | wake-bench MANIFEST... [--out OUT.tsv] [--confirmers ctc,apple,parakeet] [--limit N] | wake-rescore TSV... [--threshold T] | send TARGET PROMPT | send-id ID PROMPT")
             exit(2)
         }
     }
@@ -334,19 +345,74 @@ func matches(_ c: Command, _ want: String) -> Bool {
 /// DIR holds WAV files and manifest.tsv: file, 1 if it says the wake phrase
 /// else 0, words the transcript must contain (may be empty), and for Earshot's
 /// own lines the line it was saying (may be left out).
+/// A recording wakes as the listener would wake on it at sensitivity 5: the spotter fires
+/// on its head (CtcWakeSpotter.threshold), Apple's recognizer reads the head within the
+/// confirm limit and the wake passes when its words start with the phrase in any tier
+/// (Listener.wakeWords), or, with no answer, only on the strict score
+/// (CtcWakeSpotter.unconfirmedThreshold). Then the finish rule (Listener.finishRemainder) on
+/// the transcripts, heard without the names that spell the wake phrase (Listener.wakeVocabulary):
+/// a greeting and the phrase written as such, in the unboosted words or the second hearing,
+/// sends what follows it; a wake passed on words without it sends nothing and only opens the
+/// command window; a wake passed on the score alone without it is dropped (it chimed, then closes).
+/// False wakes are counted in two kinds: dispatch (words went out as a command) and window
+/// (a chime and nothing sent). A wake that only opened the window counts as a hit, and is
+/// listed, since its command would have to be said again.
 func wakeEval(_ dir: URL) async throws {
+    let timing = Listener.Timing()
     let spotter = CtcWakeSpotter()
     try await spotter.load()
+    let apple = AppleTranscriber()
+    let confirmer = AppleHeadConfirmer(apple)
+    await confirmer.prepare()
+    print("apple ready: \(await apple.isReady)")
     let transcriber = ParakeetTranscriber()
-    var hits = 0, misses = 0, falseWakes = 0, words = 0, wordsTotal = 0, rows = 0
+    // A session named earshot, as the app would have; the wake's own clip is heard without it.
+    let vocabulary = Listener.wakeVocabulary(["billing service", "finebrief", "earshot", "blog"])
+    var hits = 0, windowHits = 0, misses = 0, dispatches = 0, windows = 0, words = 0, wordsTotal = 0, rows = 0
     for line in try String(contentsOf: dir.appending(path: "manifest.tsv"), encoding: .utf8).split(separator: "\n") {
         let p = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
         guard p.count >= 2 else { continue }
         rows += 1
         let samples = try AudioConverter().resampleAudioFile(dir.appending(path: p[0]))
-        // The first 2 s of the recording. The live listener spots on the first 1.5 s of a
-        // speech segment, so a recording should start with the wake phrase.
-        var woke = await spotter.heardWake(Array(samples.prefix(32_000)), sensitivity: 5)
+        // The head the listener spots and confirms on. It spots on the start of a speech
+        // segment, so a recording should start with the wake phrase.
+        let head = Array(samples.prefix(timing.spotWindowSamples))
+        let score = await spotter.wakeScore(head) ?? -.infinity
+        var woke = score >= CtcWakeSpotter.threshold(5)
+        var why = "spotter \(scoreText(score))"
+        var passedOnWords = false
+        // What the finish sends: nil when it sends nothing (the window, or a dropped wake).
+        var sent: String?
+        // Passed on the score alone and the transcript lacks the phrase: it chimed, then closed.
+        var dropped = false
+        if woke {
+            // Nil past the limit, as the listener takes a confirm that runs too long.
+            let heard = await benchBounded(timing.confirmLimit, String?.none) { await confirmer.headText(head) }
+            if let heard {
+                let tier = Listener.wakeWords(heard)
+                passedOnWords = tier != nil
+                woke = passedOnWords
+                why += ", confirm heard \"\(heard)\"\(tier == .soundAlike ? " (sound-alike)" : tier == .bare ? " (bare)" : "")"
+            } else {
+                woke = score >= CtcWakeSpotter.unconfirmedThreshold
+                why += ", no confirm answer"
+            }
+        }
+        var text = ""
+        let wantWords = p.count > 2 && !p[2].isEmpty
+        if woke || wantWords {
+            let r = try? await transcriber.transcribeBoth(samples, vocabulary: vocabulary)
+            text = r?.text ?? ""
+            if woke {
+                let second = await apple.hear(samples, names: vocabulary)
+                let rest = Listener.finishRemainder(text, plain: r?.plain, second: second, passedOnWords: passedOnWords)
+                sent = rest.flatMap { $0.isEmpty ? nil : $0 }
+                why += ", transcript \"\(text)\""
+                why += rest == nil ? (passedOnWords ? ", no phrase in it: only the window opens" : ", fails the finish rule")
+                    : sent.map { ", sends \"\($0)\"" } ?? ", the phrase alone: the window opens"
+                dropped = rest == nil && !passedOnWords
+            }
+        }
         // Column 4: the line Earshot was saying. The listener ignores the spotter while Earshot
         // says the wake phrase itself. Any other line it would cut off, so that counts as a false wake.
         if woke, p.count > 3, Listener.mentionsWake(p[3]) {
@@ -354,22 +420,27 @@ func wakeEval(_ dir: URL) async throws {
             print("OWN WAKE PHRASE, IGNORED\t\(p[0])")
         }
         switch (p[1] == "1", woke) {
-        case (true, true): hits += 1
-        case (true, false): misses += 1; print("MISSED WAKE\t\(p[0])")
-        case (false, true): falseWakes += 1; print("FALSE WAKE\t\(p[0])")
+        case (true, true) where dropped: misses += 1; print("MISSED WAKE\t\(p[0])\t\(why)")
+        case (true, true):
+            hits += 1
+            if sent == nil, wantWords { windowHits += 1; print("WINDOW ONLY\t\(p[0])\t\(why)") }
+        case (true, false): misses += 1; print("MISSED WAKE\t\(p[0])\t\(why)")
+        case (false, true) where sent != nil: dispatches += 1; print("FALSE WAKE, DISPATCH\t\(p[0])\t\(why)")
+        case (false, true): windows += 1; print("FALSE WAKE, WINDOW\t\(p[0])\t\(why)")
         default: break
         }
-        if p.count > 2, !p[2].isEmpty {
+        if wantWords {
             wordsTotal += 1
-            let text = (try? await transcriber.transcribe(samples, vocabulary: ["billing service", "finebrief", "earshot", "blog"])) ?? ""
             if text.lowercased().contains(p[2].lowercased()) { words += 1 } else { print("WORDS\t\(p[0])\twant \(p[2])\tgot \(text)") }
         }
     }
-    print("wake: \(hits) hit, \(misses) missed, \(falseWakes) false; transcripts: \(words) of \(wordsTotal) right")
+    print("wake: \(hits) hit (\(windowHits) of them only opened the window, the command lost), \(misses) missed, "
+          + "\(dispatches + windows) false (\(dispatches) dispatch, \(windows) window); transcripts: \(words) of \(wordsTotal) right")
     var reasons: [String] = []
     if rows == 0 { reasons.append("the manifest is empty") }
     if misses > 0 { reasons.append("\(misses) missed wake(s)") }
-    if falseWakes > 0 { reasons.append("\(falseWakes) false wake(s)") }
+    if dispatches > 0 { reasons.append("\(dispatches) false wake(s) that dispatch") }
+    if windows > 0 { reasons.append("\(windows) false wake(s) that open the window") }
     if wordsTotal - words > wordsTotal / 5 { reasons.append("\(wordsTotal - words) of \(wordsTotal) transcripts wrong (at most 1 in 5)") }
     if !reasons.isEmpty { print("FAIL: " + reasons.joined(separator: "; ")); exit(1) }
 }
