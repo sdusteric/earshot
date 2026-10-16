@@ -51,4 +51,23 @@ import Testing
         #expect(layout.approvals.count == 1)
         #expect(layout.sessions.isEmpty)
     }
+
+    // MARK: Scroll height
+
+    @Test func theMiddleTakesAllItNeedsWhenThePanelFits() {
+        #expect(PanelLayout.scrollHeight(content: 400, fixed: 110, screen: 900) == 400)
+        // Exactly at the limit still fits, so no empty scroll area.
+        #expect(PanelLayout.scrollHeight(content: 766, fixed: 110, screen: 900) == 766)
+    }
+
+    @Test func theMiddleShrinksToTheScreenWhenItWouldRunOff() {
+        // A 13 inch screen, about 780 pt visible, with the 920 pt worst case.
+        #expect(PanelLayout.scrollHeight(content: 810, fixed: 110, screen: 780) == 646)
+    }
+
+    @Test func theMiddleNeverShrinksBelowTheMinimum() {
+        #expect(PanelLayout.scrollHeight(content: 500, fixed: 110, screen: 200) == 120)
+        // Content shorter than the minimum is not padded.
+        #expect(PanelLayout.scrollHeight(content: 80, fixed: 300, screen: 200) == 80)
+    }
 }

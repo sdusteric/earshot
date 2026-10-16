@@ -32,4 +32,16 @@ public struct PanelLayout: Sendable, Equatable {
     }
 
     public var isWaiting: Bool { !approvals.isEmpty || !questions.isEmpty }
+
+    /// The height for the panel's scrolling middle. `content` is what the middle
+    /// needs, `fixed` is the header, rule and bottom bar around it, `screen` is
+    /// the screen's visible height. The middle takes all it needs when the whole
+    /// panel fits within `screen` less `margin`, so there is no empty scroll
+    /// area; otherwise it takes what is left, but never less than `minimum`.
+    public static func scrollHeight(content: Double, fixed: Double, screen: Double,
+                                    margin: Double = 24, minimum: Double = 120) -> Double {
+        let room = screen - margin - fixed
+        guard content > room else { return content }
+        return max(min(minimum, content), room)
+    }
 }

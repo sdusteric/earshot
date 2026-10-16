@@ -16,6 +16,19 @@ struct StatusPanel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
 
+    @State private var headerHeight: CGFloat = 60
+    @State private var footerHeight: CGFloat = 44
+    @State private var contentHeight: CGFloat = 400
+
+    /// The visible height of the screen the panel opens on.
+    private var screenHeight: Double { Double(NSScreen.main?.visibleFrame.height ?? 900) }
+
+    private var scrollHeight: CGFloat {
+        CGFloat(PanelLayout.scrollHeight(content: Double(contentHeight),
+                                         fixed: Double(headerHeight + footerHeight) + 1,
+                                         screen: screenHeight))
+    }
+
     var body: some View {
         // The plugin's sessions, plus the ones only `claude agents` lists (all of them without the plugin).
         let ranked = SessionInfo.panelList(known: model.sessions, live: model.liveSessions)
@@ -23,19 +36,30 @@ struct StatusPanel: View {
                                  maxWaiting: Self.shownWaiting, maxSessions: Self.shownSessions)
         VStack(alignment: .leading, spacing: 0) {
             header
-            notices
-            if layout.isWaiting {
-                PanelRule()
-                waitingSection(layout)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { headerHeight = $0 }
+            // The middle scrolls when the panel would run off the screen; the
+            // header and the bottom bar stay put.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    notices
+                    if layout.isWaiting {
+                        PanelRule()
+                        waitingSection(layout)
+                    }
+                    if !layout.sessions.isEmpty || !layout.isWaiting {
+                        PanelRule()
+                        sessionsSection(layout, total: ranked.count)
+                    }
+                    PanelRule()
+                    recentSection(lines: layout.isWaiting ? 2 : 4)
+                }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0 }
             }
-            if !layout.sessions.isEmpty || !layout.isWaiting {
-                PanelRule()
-                sessionsSection(layout, total: ranked.count)
-            }
-            PanelRule()
-            recentSection(lines: layout.isWaiting ? 2 : 4)
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: scrollHeight)
             PanelRule()
             footer
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
         }
         .frame(width: 360)
         .background(ActivityPalette.ground)
