@@ -37,6 +37,12 @@ struct EarshotApp: App {
                     // For checking the window during development: open with -openActivity YES.
                     // -openSession <id> opens it on that session's page.
                     if let id = UserDefaults.standard.string(forKey: "openSession") { model.activityPage = .session(id) }
+                    // -appearance dark or light: check a window in the other appearance.
+                    switch UserDefaults.standard.string(forKey: "appearance") {
+                    case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+                    case "light": NSApp.appearance = NSAppearance(named: .aqua)
+                    default: break
+                    }
                     if UserDefaults.standard.bool(forKey: "openActivity") {
                         NSApp.activate()
                         openWindow(id: "activity")

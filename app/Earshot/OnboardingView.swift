@@ -38,9 +38,16 @@ struct OnboardingView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
         }
-        .frame(width: 540, height: 560)
+        // The upgrade's "New" line above the title needs the room, or the listening rows scroll.
+        .frame(width: 540, height: upgrading ? 600 : 560)
         .onAppear {
             if plan.isEmpty { plan = Onboarding.steps(onboarded: onboarded, storedVersion: onboardingVersion) }
+            #if DEBUG
+            // For checking the steps during development: launch with -onboarded NO -onboardingStep N.
+            if UserDefaults.standard.object(forKey: "onboardingStep") != nil {
+                index = min(max(UserDefaults.standard.integer(forKey: "onboardingStep"), 0), steps.count - 1)
+            }
+            #endif
         }
         .onChange(of: index) {
             if step == .tryIt { tryStart = Date() }
@@ -122,7 +129,7 @@ struct OnboardingView: View {
                 "Click the orb and ask: \u{201C}What's everyone doing?\u{201D}"
             }
         case .activity:
-            "Activity shows who is waiting on you, with the answer right there, and what each session did while you were away."
+            "Activity shows what's waiting on you, so you can answer it there, and what each session did while you were away."
         }
     }
 
@@ -267,13 +274,15 @@ struct OnboardingView: View {
 
     private var activity: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 10) {
+            // Centered like the rest of the step: the icon to look for, then where it lives.
+            VStack(spacing: 8) {
                 Image(nsImage: MenuIcon.image(.idle))
                     .renderingMode(.template)
                     .accessibilityHidden(true)
                 Text("Earshot lives in the menu bar. Click its icon for your sessions, recent lines, and mute.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 420)
