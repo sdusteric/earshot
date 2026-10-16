@@ -42,9 +42,13 @@ actor FakeGate: SpeechGate {
     }
 }
 
+/// A window with a 2 in it scores `hit`, any other far below every threshold.
 actor FakeSpotter: WakeSpotter {
     private(set) var calls = 0
-    func heardWake(_ s: [Float], sensitivity: Int) async -> Bool { calls += 1; return s.contains(2) }
+    /// 0 fires the spotter and clears the strict threshold for a wake no recognizer judged.
+    private(set) var hit: Float = 0
+    func setHit(_ score: Float) { hit = score }
+    func wakeScore(_ s: [Float]) async -> Float? { calls += 1; return s.contains(2) ? hit : -100 }
 }
 
 actor FakeTranscriber: Transcriber {
@@ -83,6 +87,31 @@ actor BoostTranscriber: Transcriber {
     func transcribeBoth(_ s: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
         let wake = s.contains(2) ? "Hey Earshot, " : ""
         return (wake + "how are you wedding", wake + "how are you doing")
+    }
+    func prewarm() async {}
+}
+
+/// Hears the same words in every clip, boosted and not.
+actor FixedTranscriber: Transcriber {
+    let text: String, plain: String?
+    init(text: String, plain: String?) { self.text = text; self.plain = plain }
+    func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String { text }
+    func transcribeBoth(_ s: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) { (text, plain) }
+    func prewarm() async {}
+}
+
+/// Hears `wake` in a clip with the wake in it (a 2), after `wakeDelay`, and `command` in any other.
+actor WakeAndCommandTranscriber: Transcriber {
+    let wake: String, command: String, wakeDelay: Duration
+    private(set) var clips: [[Float]] = []
+    init(wake: String, command: String, wakeDelay: Duration = .zero) {
+        self.wake = wake; self.command = command; self.wakeDelay = wakeDelay
+    }
+    func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String {
+        clips.append(s)
+        guard s.contains(2) else { return command }
+        if wakeDelay > .zero { try? await Task.sleep(for: wakeDelay) }
+        return wake
     }
     func prewarm() async {}
 }
@@ -182,6 +211,22 @@ actor FakeObserver: ListenObserver {
     func captureEnded(heard h: Bool) async { events.append("ended"); heard.append(h) }
 }
 
+/// Hears fixed words in a wake's head, and can hold its answer until released.
+actor FakeConfirmer: WakeConfirmer {
+    private let words: String?
+    private var hold: Bool
+    private var waiter: CheckedContinuation<Void, Never>?
+    private(set) var heads: [[Float]] = []
+    var waiting: Bool { waiter != nil }
+    init(words: String?, hold: Bool = false) { self.words = words; self.hold = hold }
+    func headText(_ head: [Float]) async -> String? {
+        heads.append(head)
+        if hold { await withCheckedContinuation { waiter = $0 } }
+        return words
+    }
+    func release() { hold = false; waiter?.resume(); waiter = nil }
+}
+
 actor Collected<T: Sendable> {
     private(set) var items: [T] = []
     func add(_ x: T) { items.append(x) }
@@ -204,9 +249,9 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     func make(_ t: Listener.Timing = .forTests, input custom: (any AudioInput)? = nil,
               transcriber customT: (any Transcriber)? = nil, second: (any SecondHearing)? = nil,
-              chimes customC: (any Chimes)? = nil) async -> Listener {
+              chimes customC: (any Chimes)? = nil, confirmer: any WakeConfirmer = PassThroughConfirmer()) async -> Listener {
         let l = Listener(input: custom ?? input, gate: gate, spotter: spotter, transcriber: customT ?? transcriber,
-                         second: second, chimes: customC ?? chimes, timing: t)
+                         second: second, confirmer: confirmer, chimes: customC ?? chimes, timing: t)
         await l.setObserver(observer)
         let heard = self.heard
         Task { for await u in l.utterances { await heard.add(u) } }
@@ -992,6 +1037,757 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await !input.isOpen)   // arming while blocked keeps it closed
         await l.setBlocked(false)
         #expect(await eventually { await input.isOpen })
+    }
+
+    // MARK: - Confirming a wake
+
+    /// Timing for a confirmer the test holds: long enough that the limit never passes it first.
+    static var confirmTiming: Listener.Timing {
+        var t = Listener.Timing.forTests
+        t.confirmLimit = .seconds(10)
+        return t
+    }
+
+    /// Every phase the listener goes through, from now on.
+    func phases(of l: Listener) async -> Collected<Listener.Phase> {
+        let seen = Collected<Listener.Phase>()
+        let stream = await l.phaseChanges()
+        Task { for await p in stream { await seen.add(p) } }
+        return seen
+    }
+
+    /// A sentence that only sounded like the wake word stays silent: no chime, no
+    /// orb, no barge-in of the line Earshot is saying.
+    @Test func aRejectedWakeIsSilent() async {
+        let confirmer = FakeConfirmer(words: "and then the tests ran")
+        let l = await make(Self.confirmTiming, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        let seen = await phases(of: l)
+        await l.setSpeaking("Billing service needs your OK to run the tests.")
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await l.falseWakes == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await confirmer.heads.count == 1)
+        #expect(await confirmer.heads.first?.contains(2) == true)   // the window the spotter got
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)   // no captureBegan, so no barge-in
+        #expect(await heard.items.isEmpty)
+        #expect(l.level.value == 0)
+        #expect(await seen.items.allSatisfy { $0 == .waiting })
+        #expect(await l.currentPhase == .waiting)
+    }
+
+    /// The confirm takes its time while you go on talking: nothing said after the
+    /// phrase is lost, and the chime comes once, when the wake passes.
+    @Test func aSlowConfirmLosesNothingSaidAfterThePhrase() async {
+        let confirmer = FakeConfirmer(words: "Hey Earshot, what's", hold: true)
+        let st = ScriptTranscriber()
+        let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        let seen = await phases(of: l)
+        await input.push([2, 3, 3, 3, 3, 3])
+        #expect(await eventually { await confirmer.waiting })
+        await input.push([3, 3, 1, 1])
+        #expect(await eventually { await l.capturedSamples == 10 * 4096 })
+        #expect(l.level.value == 0)   // the orb shows nothing yet
+        await input.push([0, 0])
+        #expect(await eventually { await l.capturedSamples == 12 * 4096 })
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+        #expect(await seen.items.allSatisfy { $0 == .waiting })
+        await confirmer.release()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "what's everyone doing?")
+        let clip = await st.clips.first ?? []
+        #expect(clip.first == 2)
+        #expect(clip.contains(1))   // said after the confirm began
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await st.clips.count == 1)
+    }
+
+    /// The segment ends while the confirm runs: a pass finishes it at once, and
+    /// "Hey Earshot" alone goes on to listen for the command.
+    @Test func aSegmentThatEndsDuringTheConfirmIsFinishedOnThePass() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let l = await make(Self.confirmTiming, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 2, 2, 2, 2])
+        #expect(await eventually { await confirmer.waiting })
+        await input.push([0, 0])
+        #expect(await eventually { await l.capturedSamples == 8 * 4096 })
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(await observer.events.isEmpty)
+        await confirmer.release()
+        #expect(await eventually { await chimes.played == [.listening] })
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await observer.events == ["began", "ended"])
+    }
+
+    /// A call that starts during the confirm ends it silently, and the late answer does nothing.
+    @Test func aCallDuringTheConfirmEndsItSilently() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let l = await make(Self.confirmTiming, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3])
+        #expect(await eventually { await confirmer.waiting })
+        await l.setMicBusy(true)
+        #expect(await eventually { await !input.isOpen })
+        await confirmer.release()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+        #expect(await heard.items.isEmpty)
+        #expect(await l.falseWakes == 0)
+        await l.setMicBusy(false)
+        #expect(await eventually { await input.isOpen })
+        #expect(await eventually { await l.currentPhase == .waiting })
+    }
+
+    /// A hotkey press during the confirm wins: the wake is dropped unheard, and the hold is heard.
+    @Test func theHotkeyWinsOverAWakeBeingConfirmed() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let l = await make(Self.confirmTiming, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3])
+        #expect(await eventually { await confirmer.waiting })
+        await l.hotkeyDown()
+        #expect(await eventually { await observer.events == ["began"] })
+        #expect(await l.currentPhase == .capturing(.hotkey))
+        await confirmer.release()   // a pass that comes too late does nothing
+        await input.push([1, 1])
+        #expect(await eventually { await l.capturedSamples == 9 * 4096 })
+        await l.hotkeyUp()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.trigger == .hotkey)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+    }
+
+    /// Disarming during the confirm drops the wake unheard and closes the mic.
+    @Test func disarmingDuringTheConfirmClosesTheMicSilently() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let l = await make(Self.confirmTiming, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3])
+        #expect(await eventually { await confirmer.waiting })
+        await l.setWakeArmed(false)
+        #expect(await eventually { await !input.isOpen })
+        await confirmer.release()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+        #expect(await l.currentPhase == .off)
+    }
+
+    /// A follow-up that opens during the confirm waits for its answer, so a rejected
+    /// wake does not cost Earshot its window.
+    @Test func aFollowUpWaitsForTheConfirm() async {
+        let confirmer = FakeConfirmer(words: "and then the tests ran", hold: true)
+        let l = await make(Self.confirmTiming, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await confirmer.waiting })
+        let follow = Task { await l.listenFollowUp(.reply) }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await observer.events.isEmpty)
+        await confirmer.release()
+        await follow.value
+        #expect(await observer.events == ["began"])
+        #expect(await l.falseWakes == 1)
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.trigger == .followUp(.reply))
+    }
+
+    /// A confirmer that never answers can't hold a wake back: past the limit it is no
+    /// answer, as nil is. A strong score passes; one under the strict threshold is silent.
+    @Test(arguments: [(Float(-4), true), (Float(-6), false)])
+    func aHungConfirmerIsTreatedAsNoAnswer(score: Float, passes: Bool) async {
+        await spotter.setHit(score)
+        let confirmer = FakeConfirmer(words: "and then the tests ran", hold: true)
+        var t = Listener.Timing.forTests
+        t.confirmLimit = .milliseconds(100)
+        let l = await make(t, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        if passes {
+            #expect(await eventually { await heard.items.count == 1 })
+            #expect(await heard.items.first?.text == "what's everyone doing?")
+            #expect(await chimes.played == [.listening])
+        } else {
+            #expect(await eventually { await l.falseWakes == 1 })
+            try? await Task.sleep(for: .milliseconds(50))
+            #expect(await heard.items.isEmpty)
+            #expect(await chimes.played.isEmpty)
+            #expect(await observer.events.isEmpty)
+        }
+        await confirmer.release()
+    }
+
+    /// A wake no recognizer could judge (the confirmer has no answer) passes only on a
+    /// score at or above CtcWakeSpotter.unconfirmedThreshold; under it, it is silent.
+    @Test(arguments: [(Float(-4), true), (Float(-5), true), (Float(-6), false), (Float(-7.9), false)])
+    func anUnjudgedWakeNeedsTheStrictScore(score: Float, passes: Bool) async {
+        await spotter.setHit(score)
+        let confirmer = FakeConfirmer(words: nil)
+        let l = await make(confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await confirmer.heads.count == 1 })   // the spotter fired
+        if passes {
+            #expect(await eventually { await heard.items.count == 1 })
+            #expect(await heard.items.first?.text == "what's everyone doing?")
+            #expect(await chimes.played == [.listening])
+            #expect(await l.falseWakes == 0)
+        } else {
+            #expect(await eventually { await l.falseWakes == 1 })
+            try? await Task.sleep(for: .milliseconds(50))
+            #expect(await heard.items.isEmpty)
+            #expect(await chimes.played.isEmpty)
+            #expect(await observer.events.isEmpty)
+            #expect(l.level.value == 0)
+            #expect(await l.currentPhase == .waiting)
+        }
+    }
+
+    /// Words that start with the wake phrase pass at any score the spotter fires on.
+    @Test func aConfirmedWakePassesAtALowScore() async {
+        await spotter.setHit(-7.9)
+        let confirmer = FakeConfirmer(words: "Hey Earshot, what's")
+        let l = await make(confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "what's everyone doing?")
+    }
+
+    /// Under the threshold the spotter does not fire: nothing is confirmed.
+    @Test func aScoreUnderTheThresholdIsNoWake() async {
+        await spotter.setHit(CtcWakeSpotter.threshold(5) - 0.5)
+        let confirmer = FakeConfirmer(words: "Hey Earshot, what's")
+        let l = await make(confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await spotter.calls == 1 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await confirmer.heads.isEmpty)
+        #expect(await heard.items.isEmpty)
+        #expect(await l.falseWakes == 0)
+    }
+
+    /// Confirmed from words that only sound like the phrase ("hey your shot"), a wake whose
+    /// transcript writes the phrase as such keeps its command.
+    @Test func aSoundAlikeConfirmWithALiteralTranscriptKeepsItsCommand() async {
+        let confirmer = FakeConfirmer(words: "Hey your shot, what's everyone doing?")
+        let st = ScriptTranscriber(fixed: "Hey Earshot, what's everyone doing?")
+        let l = await make(transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "what's everyone doing?")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await l.falseWakes == 0)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.heard == [true])
+    }
+
+    /// "Okay, your shot. Approve it." sounds like the wake and was heard word for word. It
+    /// chimes, but "Approve it." is never sent: no transcript writes the phrase as such, so
+    /// the listener waits for the command, as after "Hey Earshot" alone.
+    @Test func aSoundAlikeSentenceSendsNothingAndWaitsForTheCommand() async {
+        let said = "Okay, your shot. Approve it."
+        let st = WakeAndCommandTranscriber(wake: said, command: "run the tests")
+        let other = FakeSecondHearing(words: said)
+        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: said))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await st.clips.count == 1 })
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began"])
+        #expect(await l.falseWakes == 0)
+        // The window is the one after "Hey Earshot" alone: the next thing said is the command.
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+    }
+
+    /// A mention whose start the noise gate cut off, so the confirm heard "Earshot" alone first
+    /// ("Ear shot. To run."): nothing is sent, whether the transcript has the phrase later ("did
+    /// you ask earshot to run the tests") or was cut off the same way, and the window that opens
+    /// closes on silence.
+    @Test(arguments: ["did you ask earshot to run the tests", "Ear shot. To run the tests."])
+    func aMentionCutOffAtTheStartSendsNothing(_ transcript: String) async {
+        let st = WakeAndCommandTranscriber(wake: transcript, command: "")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Ear shot. To run."))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await observer.heard == [false])
+        #expect(await eventually { await l.currentPhase == .waiting })
+    }
+
+    /// The boost turned "Earshot" into a session's name; the plain words still have the phrase.
+    @Test func thePlainWordsCanCarryThePhrase() async {
+        let st = FixedTranscriber(text: "Hey reflow summarized the last session.", plain: "Hey Earshot summarized the last session.")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Hey Earshot"))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "summarized the last session.")
+        #expect(await chimes.played == [.listening])
+    }
+
+    /// Parakeet heard nothing; the second hearing, waited for anyway, has the phrase and the command.
+    @Test func theSecondHearingCanCarryTheCommandWhenParakeetHeardNothing() async {
+        let st = FixedTranscriber(text: "", plain: nil)
+        let other = FakeSecondHearing(words: "Hey Earshot, pause.", delay: .milliseconds(50))
+        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: "Hey Earshot"))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "pause.")
+        #expect(await chimes.played == [.listening])
+    }
+
+    /// "Earshot, stop" with no greeting chimes and opens the window, but sends nothing of its
+    /// own segment, even when the transcript agrees: the next segment is the command.
+    @Test func aBareEarshotOpensTheWindowAndTheNextSegmentIsTheCommand() async {
+        let st = WakeAndCommandTranscriber(wake: "Earshot, stop", command: "run the tests")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Earshot, stop"))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await st.clips.count == 1 })
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played == [.listening])
+        #expect(await l.falseWakes == 0)
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await st.clips.last?.contains(2) == false)
+    }
+
+    /// A session named earshot: the boost wrote the phrase over "Okay, your shot." The unboosted
+    /// words are a sound-alike, so nothing is sent, and the window opens for the command.
+    @Test func theBoostWritingThePhraseOverASoundAlikeSendsNothing() async {
+        let st = FixedTranscriber(text: "Okay, earshot stop the blog", plain: "Okay, you're shot, stop the build.")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Okay, your shot."))
+        await l.setVocabulary(["blog"])
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began"])
+        #expect(await l.falseWakes == 0)
+        // Nothing more is said: the window closes on silence.
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+    }
+
+    /// A wake passed on the strict score alone whose boost lost the phrase: the unboosted words
+    /// have it, so they are the command.
+    @Test func aStrictWakeTakesTheCommandFromTheUnboostedWords() async {
+        let st = FixedTranscriber(text: "Okay reflow what's the status of the blog",
+                                  plain: "Okay earshot, what's the status of the build?")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: nil))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "what's the status of the build?")
+        #expect(await heard.items.first?.plain == nil)
+        #expect(await l.falseWakes == 0)
+    }
+
+    /// After a sound-alike pass, speech begun while the confirm ran is not the command, even
+    /// with the window open when it ends: the command is what starts after the chime.
+    @Test func speechBegunDuringASlowConfirmAfterASoundAlikeIsNotTheCommand() async {
+        let confirmer = FakeConfirmer(words: "Okay, your shot.", hold: true)
+        let st = WakeAndCommandTranscriber(wake: "Okay, your shot.", command: "approve it")
+        var t = Self.confirmTiming
+        t.wakeSilence = .seconds(2)
+        let l = await make(t, transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 2, 2, 2, 2])
+        #expect(await eventually { await confirmer.waiting })
+        await input.push([0, 0, 1, 1])   // the wake's end edge, then the next sentence's start edge
+        #expect(await eventually { await l.capturedSamples == 10 * 4096 })
+        await confirmer.release()
+        #expect(await eventually { await chimes.played == [.listening] })
+        #expect(await eventually { await st.clips.count == 1 })
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        await input.push([1, 0, 0])   // it ends after the window opened
+        #expect(await eventually { await l.capturedSamples == 13 * 4096 })
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(await heard.items.isEmpty)
+        #expect(await st.clips.count == 1)
+        // Said after the chime: the command.
+        await input.push([3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "approve it")
+        let command = await st.clips.last ?? []
+        #expect(command.contains(3))
+        #expect(!command.contains(1))
+        #expect(await observer.events == ["began", "ended"])
+    }
+
+    /// The same with the whole sentence said during the confirm: it is not the command either.
+    @Test func aSentenceSaidDuringASlowConfirmAfterASoundAlikeIsNotTheCommand() async {
+        let confirmer = FakeConfirmer(words: "Hey your shot", hold: true)
+        let st = WakeAndCommandTranscriber(wake: "Hey your shot", command: "approve it")
+        let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 2, 2, 2, 2])
+        #expect(await eventually { await confirmer.waiting })
+        await input.push([0, 0, 1, 1, 0, 0])
+        #expect(await eventually { await l.capturedSamples == 12 * 4096 })
+        await confirmer.release()
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+        #expect(await st.clips.count == 1)
+        #expect(await observer.heard == [false])
+    }
+
+    /// A wake's own clip is heard without the names that spell the wake phrase; the command
+    /// after "Hey Earshot" alone is heard with all of them.
+    @Test func aWakesOwnClipIsHeardWithoutNamesThatSpellThePhrase() async {
+        let other = FakeSecondHearing(words: "")
+        let l = await make(second: other)
+        await l.setVocabulary(["billing service", "earshot", "Earshot Spike", "blog"])
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening] })
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await transcriber.vocabularies == [["billing service", "blog"], ["billing service", "earshot", "Earshot Spike", "blog"]])
+        #expect(await other.names == [["billing service", "blog"], ["billing service", "earshot", "Earshot Spike", "blog"]])
+    }
+
+    /// A wake that passed on the strict score alone, with no words to go on, whose transcript
+    /// has no wake words at all ("Earshot" run into a sentence is a mention): a false wake.
+    @Test(arguments: ["Earshot which sessions are waiting", "which sessions are waiting"])
+    func aWakePassedOnTheScoreAloneKeepsThePlainRuleAtFinish(_ transcript: String) async {
+        let st = ScriptTranscriber(fixed: transcript)
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: nil))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+        #expect(await l.falseWakes == 1)
+        #expect(await observer.heard == [false])
+    }
+
+    /// A wake passed on the strict score alone whose transcript has "Earshot" alone first or a
+    /// sound-alike: as for a wake passed on those words, it chimed, nothing of its segment is
+    /// sent, it is not a false wake, and the next segment is the command.
+    @Test(arguments: ["Earshot, stop", "Earshot.", "Hey your shot. Approve it."])
+    func aWakePassedOnTheScoreAloneWithoutThePhraseWrittenAsSuchWaitsForTheCommand(_ transcript: String) async {
+        let st = WakeAndCommandTranscriber(wake: transcript, command: "run the tests")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: nil))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await st.clips.count == 1 })
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began"])
+        #expect(await l.falseWakes == 0)
+        await input.push([1, 1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await st.clips.last?.contains(2) == false)
+    }
+
+    /// The settle after a sound-alike's chime runs from the chime, not from when the window
+    /// opens after the wake's transcription: the audio held meanwhile, and a one-word command
+    /// said soon after the chime, are not taken for the chime.
+    @Test func aOneWordCommandSoonAfterASoundAlikesChimeIsHeard() async {
+        let st = WakeAndCommandTranscriber(wake: "Hey your shot.", command: "stop", wakeDelay: .milliseconds(150))
+        var t = Listener.Timing.forTests
+        t.followUpSettle = .milliseconds(250)
+        t.wakeSilence = .seconds(2)
+        let l = await make(t, transcriber: st, confirmer: FakeConfirmer(words: "Hey your shot."))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening] })
+        try? await Task.sleep(for: .milliseconds(300))
+        await input.push([1, 0, 0])   // one chunk of speech, 300 ms after the chime
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "stop")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await chimes.played == [.listening])
+        #expect(await l.falseWakes == 0)
+        #expect(await observer.heard == [true])
+    }
+
+    /// The chime, heard while a slow transcription of the wake held audio back, is still too
+    /// soon once the window opens: the settle goes by when audio came in, not when it is processed.
+    @Test func theChimeHeardDuringASlowWakeTranscriptionIsNotTheCommand() async {
+        let st = WakeAndCommandTranscriber(wake: "Hey your shot.", command: "stop", wakeDelay: .milliseconds(400))
+        var t = Listener.Timing.forTests
+        t.followUpSettle = .milliseconds(250)
+        t.wakeSilence = .seconds(2)
+        let l = await make(t, transcriber: st, confirmer: FakeConfirmer(words: "Hey your shot."))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 0, 0])
+        #expect(await eventually { await chimes.played == [.listening] })
+        await input.push([0.75, 0, 0])   // the chime, as the mic hears it
+        #expect(await eventually { await l.capturedSamples == 7 * 4096 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await st.clips.count == 1)
+        await input.push([1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "stop")
+        #expect(await st.clips.last?.contains(0.75) == false)
+        #expect(await chimes.played == [.listening])
+    }
+
+    /// An everyday sentence the spotter fired on and the confirmer heard word for word is
+    /// rejected silently, so the rest of it never goes out as a command.
+    @Test(arguments: ["Take a shot, run the test.", "Hey you shot the deploy.", "Take your shot."])
+    func anEverydayShotSentenceIsRejectedSilently(_ words: String) async {
+        await spotter.setHit(-7.877)
+        let confirmer = FakeConfirmer(words: words)
+        let st = ScriptTranscriber(fixed: words)
+        let l = await make(transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await l.falseWakes == 1 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+        #expect(await st.clips.isEmpty)
+    }
+
+    /// The unboosted words and the second hearing lose the phrase by the same rule,
+    /// however each recognizer spelled it.
+    @Test func theOtherHearingsLoseATolerantWakePhraseToo() async {
+        let st = FixedTranscriber(text: "Hey Earshot, how are you wedding", plain: "Hey, ear shot. how are you doing")
+        let other = FakeSecondHearing(words: "Hate earshot. How are you doing?")
+        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: "Hey Earshot"))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        let u = await heard.items.first
+        #expect(u?.text == "how are you wedding")
+        #expect(u?.plain == "how are you doing")
+        #expect(u?.second == "How are you doing?")
+    }
+
+    /// Apple first; Parakeet only when Apple has no answer. Heard nothing is an answer.
+    @Test func theConfirmChainAsksTheNextOnlyOnNoAnswer() async {
+        let apple = FakeConfirmer(words: nil), parakeet = FakeConfirmer(words: "Hey Earshot")
+        #expect(await FirstAnswerConfirmer([apple, parakeet]).headText([1]) == "Hey Earshot")
+        #expect(await parakeet.heads.count == 1)
+        let quiet = FakeConfirmer(words: ""), unasked = FakeConfirmer(words: "Hey Earshot")
+        #expect(await FirstAnswerConfirmer([quiet, unasked]).headText([1]) == "")
+        #expect(await unasked.heads.isEmpty)
+        #expect(await FirstAnswerConfirmer([FakeConfirmer(words: nil), FakeConfirmer(words: nil)]).headText([1]) == nil)
+        #expect(await FirstAnswerConfirmer([]).headText([1]) == nil)
+    }
+
+    /// A confirmer that hears the wake phrase changes nothing from before there was a confirm.
+    @Test func aPassingConfirmerHearsTheWakeAsBefore() async {
+        let confirmer = FakeConfirmer(words: "Hey Earshot, what's everyone")
+        let l = await make(confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        let u = await heard.items.first
+        #expect(u?.text == "what's everyone doing?")
+        #expect(u?.trigger == .wake)
+        #expect(await confirmer.heads.count == 1)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await observer.heard == [true])
+        #expect(await l.falseWakes == 0)
+    }
+
+    /// A confirmer that hears one of Earshot's own recent lines rejects the wake.
+    @Test func aConfirmThatRepeatsEarshotsLineIsRejected() async {
+        let confirmer = FakeConfirmer(words: "Hey earshot needs your OK.")
+        var timing = Listener.Timing.forTests
+        timing.ownWakeGrace = .zero
+        let l = await make(timing, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking(nil)
+        try? await Task.sleep(for: .milliseconds(20))
+        await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
+        #expect(await eventually { await l.falseWakes == 1 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await chimes.played.isEmpty)
+        #expect(await observer.events.isEmpty)
+    }
+
+    /// A wake whose command runs past the cap during the confirm is still too long once it passes.
+    @Test func aWakeThatHitsTheCapDuringTheConfirmIsTooLongOnThePass() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        var t = Listener.Timing(wakeSilence: .milliseconds(150), followUp: .milliseconds(150), minHold: .milliseconds(30),
+                                maxCommandSamples: 4 * 4096, spotAtSamples: 2 * 4096, reopenDelay: .milliseconds(30), soundWait: .zero)
+        t.confirmLimit = .seconds(10)
+        let l = await make(t, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 3])
+        #expect(await eventually { await l.capturedSamples == 8 * 4096 })
+        #expect(await confirmer.waiting)
+        #expect(await chimes.played.isEmpty)
+        await confirmer.release()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.tooLong == true)
+        #expect(await chimes.played == [.listening, .closed])
+        #expect(await observer.heard == [true])
+    }
+
+    /// "Hey Earshot" alone, a pause, then the command, begun before the confirm answered:
+    /// the command is heard from where it began, not lost to a capture that waits for speech.
+    @Test func aCommandBegunDuringTheConfirmIsHeard() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let st = ScriptTranscriber()
+        let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 2, 2, 2, 2])
+        #expect(await eventually { await confirmer.waiting })
+        await input.push([0, 0, 1, 1])   // the wake's end edge, then the command's start edge
+        #expect(await eventually { await l.capturedSamples == 10 * 4096 })
+        await confirmer.release()
+        #expect(await eventually { await chimes.played == [.listening] })
+        await input.push([1, 0, 0])
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await chimes.played == [.listening])   // no closed chime from a timeout
+        #expect(await observer.events == ["began", "ended"])
+        let command = await st.clips.last ?? []
+        #expect(command.filter { $0 == 1 }.count == 3 * 4096)   // from its first chunk
+        #expect(!command.contains(2))
+    }
+
+    /// The same, with the whole command said before the confirm answered: it is
+    /// heard as soon as the wake passes.
+    @Test func aCommandSaidDuringTheConfirmIsHeardOnThePass() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let st = ScriptTranscriber()
+        let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 2, 2, 2, 2, 2])
+        #expect(await eventually { await confirmer.waiting })
+        await input.push([0, 0, 1, 1, 0, 0])
+        #expect(await eventually { await l.capturedSamples == 12 * 4096 })
+        await confirmer.release()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "run the tests")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await st.clips.last?.contains(2) == false)
+        #expect(await eventually { await l.currentPhase == .waiting })
+    }
+
+    /// A tap or a chord of the hotkey changes nothing, even while a wake is being
+    /// confirmed: the answer that comes while the key is down still passes the wake.
+    @Test(arguments: [false, true])
+    func aTapOrChordDuringTheConfirmChangesNothing(chord: Bool) async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        var t = Self.confirmTiming
+        t.minHold = .milliseconds(400)
+        let l = await make(t, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await confirmer.waiting })
+        #expect(await eventually { await l.capturedSamples == 9 * 4096 })
+        await l.hotkeyDown()
+        await confirmer.release()   // the answer comes while the key is down
+        try? await Task.sleep(for: .milliseconds(50))
+        if chord { await l.hotkeyCancel() } else { await l.hotkeyUp() }
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.text == "what's everyone doing?")
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
+        #expect(await l.falseWakes == 0)
+    }
+
+    /// A follow-up waits for the confirmer's answer, not for the passed wake's
+    /// transcription: Earshot's lines are not held back while it runs.
+    @Test func aFollowUpDuringAPassedWakesTranscriptionReturnsPromptly() async {
+        let confirmer = FakeConfirmer(words: nil, hold: true)
+        let st = ScriptTranscriber(holdFirst: true)
+        let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await confirmer.waiting })
+        let returned = Collected<Bool>()
+        Task { await l.listenFollowUp(.reply); await returned.add(true) }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await returned.items.isEmpty)   // it waits for the answer
+        await confirmer.release()
+        #expect(await eventually { await st.waiting })   // the wake's transcription is held
+        #expect(await eventually { await returned.items.count == 1 })
+        #expect(await observer.events == ["began"])   // the wake's own: no follow-up window
+        await st.release()
+        #expect(await eventually { await heard.items.count == 1 })
+        #expect(await heard.items.first?.trigger == .wake)
+        #expect(await heard.items.first?.text == "what's everyone doing?")
+        #expect(await chimes.played == [.listening])
+        #expect(await observer.events == ["began", "ended"])
     }
 
     // MARK: - Earshot's own voice

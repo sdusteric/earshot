@@ -14,6 +14,9 @@ actor SingleFlight<T: Sendable> {
 
     var isLoaded: Bool { value != nil }
 
+    /// The value if it is loaded now. Never starts a load.
+    var current: T? { value }
+
     func get() async throws -> T {
         if let value { return value }
         if let task { return try await task.value }
@@ -39,6 +42,10 @@ actor SharedLoad<T: Sendable> {
 
     var isLoaded: Bool { get async { await flight.isLoaded } }
     var loads: Int { get async { await flight.loads } }
+
+    /// The value if it is loaded now, for a reader that must not wait for a load and
+    /// does not hold the model: it may be freed the moment after.
+    func current() async -> T? { await flight.current }
 
     func acquire(_ holder: String) async throws -> T {
         holders.insert(holder)
@@ -192,6 +199,27 @@ public actor SileroGate: SpeechGate {
     }
 }
 
+/// What the CTC model made of one clip, kept so a second reader of the same
+/// clip (the wake confirmer) does not run the model again.
+struct CtcPass: Sendable {
+    /// The clip's length and a few of its values: the same clip gives the same key,
+    /// and two different clips do not in practice (the model's input is not hashed whole).
+    struct Key: Hashable, Sendable {
+        let count: Int
+        let probes: [UInt32]
+
+        init(_ samples: [Float]) {
+            count = samples.count
+            let n = samples.count
+            probes = n == 0 ? [] : (0..<8).map { samples[min(n - 1, $0 * n / 8)].bitPattern }
+        }
+    }
+
+    let key: Key
+    /// Only the frames that cover the clip: the rest is the zeros it was padded with.
+    let logProbs: [[Float]]
+}
+
 /// The CTC model is shared: the wake word spotter and the vocabulary boost use it.
 /// It is freed when neither holds it.
 actor CtcShared {
@@ -199,14 +227,27 @@ actor CtcShared {
     static let shared = CtcShared()
     private let model = SharedLoad<CtcModels> { try await CtcModels.downloadAndLoad(variant: .ctc110m) }
     private var phraseTokens: [String: [Int]] = [:]
+    private var lastPass: CtcPass?
 
     func models(for holder: Holder) async throws -> CtcModels { try await model.acquire(holder.rawValue) }
-    func release(_ holder: Holder) async { await model.release(holder.rawValue) }
+
+    func release(_ holder: Holder) async {
+        await model.release(holder.rawValue)
+        if !(await model.isLoaded) { lastPass = nil }
+    }
+
+    /// The model if some holder has it loaded now, else nil. A reader that is not a
+    /// holder (the wake confirmer) uses this so it never waits for a load or keeps the model alive.
+    func loadedModels() async -> CtcModels? { await model.current() }
 
     /// The clip with zeros out to the model's full input (15 s). FluidAudio 0.17.7 copies a
     /// shorter clip into a buffer it never clears, so the rest was whatever memory held,
     /// often NaN, and the model's output stopped depending on the audio: every sentence
-    /// scored the same and woke Earshot (FluidAudio issue #991, fixed upstream in PR #1003).
+    /// scored the same and woke Earshot (FluidAudio issue #991).
+    /// FluidAudio's fix (PR #1003, merge e05ab923) is not in a tagged release yet. An A/B of
+    /// 0.17.7 against e05ab923 was identical on the tests, the parser eval, the hearing bench
+    /// and the spotter's scores. The padding stays with the fix too, for score parity:
+    /// without it the scores move (309 of 1738 rows), and the thresholds were tuned with it.
     static func fullLength(_ samples: [Float]) -> [Float] {
         let n = ASRConstants.maxModelSamples
         return samples.count >= n ? samples : samples + [Float](repeating: 0, count: n - samples.count)
@@ -218,6 +259,38 @@ actor CtcShared {
         let t = tokenizer.encode(text)
         phraseTokens[text] = t
         return t
+    }
+
+    /// Keeps the model's output for the clip it was run on (only the last clip is kept).
+    func remember(_ samples: [Float], logProbs: [[Float]], frameDuration: Double) {
+        guard frameDuration > 0, !samples.isEmpty else { return }
+        let frames = Int((Double(samples.count) / Double(ASRConstants.sampleRate) / frameDuration).rounded(.up))
+        lastPass = CtcPass(key: CtcPass.Key(samples), logProbs: Array(logProbs.prefix(frames)))
+    }
+
+    /// The model's output for this clip, if the last clip run was this one.
+    func recalled(_ samples: [Float]) -> [[Float]]? {
+        guard let p = lastPass, p.key == CtcPass.Key(samples) else { return nil }
+        return p.logProbs
+    }
+}
+
+/// Reads text off the CTC model's output by taking the likeliest token at each frame.
+enum CtcGreedy {
+    /// Repeats collapsed, blanks dropped, SentencePiece word marks (the lower one-eighth
+    /// block) turned into spaces. `blankId` is the id one past the vocabulary.
+    static func text(logProbs: [[Float]], vocabulary: [Int: String], blankId: Int) -> String {
+        var out = ""
+        var previous = -1
+        for row in logProbs {
+            var best = -1
+            var top = -Float.infinity
+            for (i, v) in row.enumerated() where v > top { top = v; best = i }
+            defer { previous = best }
+            guard best >= 0, best != previous, best != blankId, let piece = vocabulary[best] else { continue }
+            out += piece.replacingOccurrences(of: "\u{2581}", with: " ")
+        }
+        return out.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 }
 
@@ -256,36 +329,108 @@ public actor CtcWakeSpotter: WakeSpotter {
         log.info("unloaded the wake word model")
     }
 
-    /// The lowest score that wakes, as the phrase is finally judged. Sensitivity 5 is
-    /// -6.0; each step moves it by 0.25, higher waking more easily (5.0 at 1, 7.25 at 10).
-    /// Measured once the model read the audio (see CtcShared.fullLength), on six macOS
-    /// voices: "Hey Earshot" scored -4.5 to -7.3, other sentences up to -5.1 ("Hey there,
-    /// nice shot"). A wake whose words don't start with the phrase is dropped
-    /// (Listener.stripWake), so a false wake costs a chime, not a command.
-    /// To be tuned on real voices with scripts/eval-listener.sh.
-    public static func threshold(_ sensitivity: Int) -> Float { -6.0 - 0.25 * Float(min(max(sensitivity, 1), 10) - 5) }
+    /// The lowest score that fires the spotter. Sensitivity 5 is -8.0; each step moves it
+    /// by 0.25, higher waking more easily (-7.0 at 1, -9.25 at 10).
+    /// A fire is not a wake yet: Apple's recognizer reads the window's words, and the wake
+    /// passes only when they start with the wake phrase (Listener.wakeWords), written as
+    /// such or only sounding like it; only a greeting and the phrase written as such ever
+    /// send the words after them. So the
+    /// threshold can sit low, where the spotter alone would chime about 140 times an hour
+    /// of speech. Measured on the wake bench (tests/wake/README.md, earshot-probe
+    /// wake-rescore, 19950 synthetic clips over 30 voices and 5 mic conditions, a third of the
+    /// voices held out, and 5.4 h of LibriSpeech), at -8.0 with Apple's confirm: positives woken
+    /// (tune, holdout) clean 87%, 81%; quiet 50%, 38%; noise gate 0.2 38%, 34%; gate 0.4 4%, 6%;
+    /// gate 0.6 0%, 1%. Dispatch false wakes: near-misses 0 of 12900, mentions 0 of 2250.
+    /// Window false wakes: near-misses 405 of 12900 (3.1%), mentions 8 of 2250 (0.4 and 0.6 gates).
+    /// LibriSpeech: the spotter fires 142.6 times an hour, 0.00 an hour dispatch, 0.00 a window. The confirm
+    /// takes 51 ms at the median and 59 ms at the 95th percentile.
+    /// The spotter alone at the old -6.0 woke on 73% of clean positives and 17% of quiet
+    /// ones, with 505/4800 near-miss false wakes.
+    public static func threshold(_ sensitivity: Int) -> Float { -8.0 - 0.25 * Float(min(max(sensitivity, 1), 10) - 5) }
+
+    /// The lowest score that wakes when no recognizer could judge the window (Apple's has
+    /// no answer and Parakeet is not loaded, or the confirm ran past its limit). Spotter
+    /// alone at -5.0 on the wake bench: clean positives 52%, near-miss false wakes 3%,
+    /// LibriSpeech 0 audible an hour. The same at any sensitivity.
+    public static let unconfirmedThreshold: Float = -5.0
 
     /// FluidAudio lowers the score a phrase needs by 1 for each token past 3 ("hey
     /// earshot" has 6), so the threshold is raised by as much to mean what it says.
+    /// This is what FluidAudio's own filter is given for a sensitivity: it keeps the
+    /// detections whose score reaches `threshold(sensitivity)`.
     static func minScore(_ sensitivity: Int, tokens: Int) -> Float {
         let extra = max(0, tokens - ContextBiasingConstants.baselineTokenCountForThreshold)
         return threshold(sensitivity) + Float(extra) * ContextBiasingConstants.thresholdRelaxationPerToken
     }
 
-    public func heardWake(_ samples: [Float], sensitivity: Int) async -> Bool {
-        guard await flight.isLoaded, let (spotter, vocab) = try? await flight.get() else { return false }
+    /// Asked for so low that FluidAudio's own filter keeps every detection, so the
+    /// best score comes back whatever it is.
+    private static let keepAll: Float = -1000
+
+    /// How well the audio says the wake phrase: the best detection's score, in the
+    /// space `threshold` is in (a wake is a score at or above it), or nil when the
+    /// spotter is not loaded or failed. The score is per token, so it does not depend
+    /// on the phrase's length. The model's output is kept in CtcShared for the head
+    /// confirmer, which reads the same clip.
+    public func wakeScore(_ samples: [Float]) async -> Float? {
+        guard await flight.isLoaded, let (spotter, vocab) = try? await flight.get() else { return nil }
         do {
-            // `minScore` is the base threshold: FluidAudio relaxes it for each
-            // token a phrase has beyond its baseline, and returns only the
-            // detections that pass the relaxed threshold. Any detection is a wake.
             let r = try await spotter.spotKeywordsWithLogProbs(audioSamples: CtcShared.fullLength(samples), customVocabulary: vocab,
-                                                               minScore: Self.minScore(sensitivity, tokens: vocab.terms.first?.ctcTokenIds?.count ?? 0))
-            if !r.detections.isEmpty { log.info("wake") }
-            return !r.detections.isEmpty
+                                                               minScore: Self.keepAll)
+            await CtcShared.shared.remember(samples, logProbs: r.logProbs, frameDuration: r.frameDuration)
+            // No detection at all means the clip had fewer frames than the phrase has tokens.
+            return r.detections.map(\.score).max() ?? -.infinity
         } catch {
             if failures.shouldLog() { log.error("the wake spotter failed: \(error.localizedDescription, privacy: .public)") }
-            return false
+            return nil
         }
+    }
+
+    /// The spotter fired: wakeScore against the threshold, with no confirm (for the probe).
+    public func heardWake(_ samples: [Float], sensitivity: Int) async -> Bool {
+        guard let score = await wakeScore(samples) else { return false }
+        return score >= Self.threshold(sensitivity)
+    }
+}
+
+/// A look at the words of the first moments of a segment by the CTC model that
+/// already heard it for the spotter: greedy decoding of its output, no second run.
+/// The model is small and was trained to score keywords, so its words are rough.
+/// Nil when the model is not loaded (never loads it) or the pass fails.
+public struct CtcHeadConfirmer: WakeConfirmer {
+    private let shared: CtcShared
+
+    public init() { self.init(shared: .shared) }
+    init(shared: CtcShared) { self.shared = shared }
+
+    public func headText(_ head: [Float]) async -> String? {
+        guard !head.isEmpty, let models = await shared.loadedModels() else { return nil }
+        let logProbs: [[Float]]
+        if let kept = await shared.recalled(head) {
+            logProbs = kept
+        } else {
+            // The spotter did not just hear this clip: run the model, with no phrase to look for.
+            let spotter = CtcKeywordSpotter(models: models, blankId: models.vocabulary.count)
+            guard let r = try? await spotter.spotKeywordsWithLogProbs(audioSamples: CtcShared.fullLength(head),
+                                                                      customVocabulary: CustomVocabularyContext(terms: [])),
+                  r.frameDuration > 0 else { return nil }
+            await shared.remember(head, logProbs: r.logProbs, frameDuration: r.frameDuration)
+            logProbs = await shared.recalled(head) ?? []
+        }
+        return CtcGreedy.text(logProbs: logProbs, vocabulary: models.vocabulary, blankId: models.vocabulary.count)
+    }
+}
+
+/// The head's words from Parakeet, when it is loaded already. Nil when it is not:
+/// a confirm never waits for a model to load, and does not load one.
+public struct ParakeetHeadConfirmer: WakeConfirmer {
+    private let transcriber: ParakeetTranscriber
+
+    public init(_ transcriber: ParakeetTranscriber) { self.transcriber = transcriber }
+
+    public func headText(_ head: [Float]) async -> String? {
+        guard !head.isEmpty else { return nil }
+        return await transcriber.transcribeIfLoaded(head)
     }
 }
 
@@ -303,6 +448,9 @@ public actor ParakeetTranscriber: Transcriber {
     private let makeBoost: @Sendable ([String]) async throws -> VocabularyBoostingSession
     /// Transcriptions in progress: the model is not unloaded under them.
     private var busy = 0
+    /// An unload (the idle timer, memory pressure) came while busy: it is done when the
+    /// last transcription in progress ends (see done(reschedule:)).
+    private var unloadPending = false
     private let log = Logger(subsystem: "com.earshot.app", category: "transcriber")
 
     public init() { self.init(idle: .seconds(600), load: ParakeetTranscriber.loadModels, run: ParakeetTranscriber.recognize) }
@@ -328,7 +476,7 @@ public actor ParakeetTranscriber: Transcriber {
         return m
     }
 
-    var isLoaded: Bool { asr != nil }
+    public var isLoaded: Bool { asr != nil }
     var loads: Int { get async { await flight.loads } }
 
     public func prewarm() async {
@@ -341,12 +489,38 @@ public actor ParakeetTranscriber: Transcriber {
         try await transcribeBoth(samples, vocabulary: vocabulary).text
     }
 
+    /// The words in the clip, with no vocabulary, only when the model is loaded now; nil
+    /// when it is not (this never starts a load) or the run failed. It leaves the idle timer
+    /// alone, so a wake confirm never keeps the model resident: it unloads when the commands
+    /// that loaded it have been idle for the usual time, confirms or not. An unload that
+    /// comes during the run is done when it ends.
+    public func transcribeIfLoaded(_ clip: [Float]) async -> String? {
+        // The check and the start of the run share one stretch of this actor, so an unload
+        // can't come between them: the model is marked busy before the first wait.
+        guard let asr else { return nil }
+        busy += 1
+        let text = try? await run(asr, ClipLevel.padded(clip)).text
+        await done(reschedule: false)
+        return text
+    }
+
     public func transcribeBoth(_ clip: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
         // A short clip ("Yes.") comes back empty unless it is padded out.
         let samples = ClipLevel.padded(clip)
         idleTask?.cancel()
         busy += 1
-        defer { busy -= 1; scheduleUnload() }
+        do {
+            let r = try await transcribeBusy(samples, vocabulary: vocabulary)
+            await done(reschedule: true)
+            return r
+        } catch {
+            await done(reschedule: true)
+            throw error
+        }
+    }
+
+    /// One transcription in progress (counted in `busy`), boosted with the vocabulary.
+    private func transcribeBusy(_ samples: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
         let asr = try await loaded()
         let result = try await run(asr, samples)
         guard !vocabulary.isEmpty, !result.text.isEmpty, let timings = result.tokenTimings else { return (result.text, nil) }
@@ -383,8 +557,21 @@ public actor ParakeetTranscriber: Transcriber {
         return dropped.count <= max(2, added.count * 2)
     }
 
+    /// A transcription ended. With none left in progress, an unload that came during them is
+    /// done now; otherwise, with `reschedule`, the idle timer starts again (a command used the model).
+    private func done(reschedule: Bool) async {
+        busy -= 1
+        if busy == 0, unloadPending {
+            await unload()
+        } else if reschedule {
+            scheduleUnload()
+        }
+    }
+
     public func unload() async {
-        guard busy == 0 else { return }   // the idle timer or memory pressure came during a transcription
+        // The idle timer or memory pressure came during a transcription: done when it ends.
+        guard busy == 0 else { unloadPending = true; return }
+        unloadPending = false
         idleTask?.cancel()
         idleTask = nil
         boosting = nil

@@ -23,8 +23,13 @@ public struct ListenStack: Sendable {
             chimes = SystemChimes(output: {
             AudioDevices.chooseOutput(setting: config().outputDevice, devices: AudioDevices.all())
         })
+        // The second look at a wake: Apple's recognizer (the second hearing's, so it is prepared
+        // with it), and Parakeet only when Apple has no answer and Parakeet is loaded already.
+        // When neither can tell, the wake passes only on a strict spotter score (see Listener).
+        let confirmer: any WakeConfirmer = FirstAnswerConfirmer([AppleHeadConfirmer(second),
+                                                                  ParakeetHeadConfirmer(transcriber)])
         let listener = Listener(input: MicInput(deviceUID: { config().inputDevice }), gate: gate, spotter: spotter,
-                                transcriber: transcriber, second: second, chimes: chimes)
+                                transcriber: transcriber, second: second, confirmer: confirmer, chimes: chimes)
         let runner = LocatedClaude()
         let directory = SessionDirectory(runner: runner, store: core.sessions, labeler: Labeler(model: FoundationLabelModel()))
         let speech = core.speech

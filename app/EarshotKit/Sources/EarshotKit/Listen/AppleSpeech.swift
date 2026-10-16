@@ -14,6 +14,9 @@ public actor AppleTranscriber: SecondHearing {
 
     public init() {}
 
+    /// The model is installed and the transcriber can run (see prepare).
+    public var isReady: Bool { state == .ready }
+
     public func prepare() async {
         guard state == .unknown else { return }
         state = .preparing
@@ -90,5 +93,22 @@ public actor AppleTranscriber: SecondHearing {
         }
         if let err { throw err }
         return out
+    }
+}
+
+/// The head's words from Apple's SpeechTranscriber, with the wake phrase as context
+/// so "Earshot" is not heard as "ear shot". Nil when the transcriber is not ready
+/// (not available on this Mac, or its model not installed): a confirm never installs it.
+public struct AppleHeadConfirmer: WakeConfirmer {
+    private let transcriber: AppleTranscriber
+
+    /// Share the app's transcriber, or make one (then call `prepare` before the first confirm).
+    public init(_ transcriber: AppleTranscriber = AppleTranscriber()) { self.transcriber = transcriber }
+
+    public func prepare() async { await transcriber.prepare() }
+
+    public func headText(_ head: [Float]) async -> String? {
+        guard !head.isEmpty, await transcriber.isReady else { return nil }
+        return try? await transcriber.transcribe(head, names: ["Hey Earshot", "Earshot"])
     }
 }

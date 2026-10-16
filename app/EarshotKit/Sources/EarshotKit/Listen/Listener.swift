@@ -4,6 +4,13 @@ import os
 /// Hears one command at a time: after "Hey Earshot", while the hotkey is
 /// held, or in a short window after Earshot asked something. Audio lives
 /// only in the ring buffer, and a command's audio is erased once it is heard.
+///
+/// A wake has two tiers (see wakeWords). A greeting, then the phrase written as such
+/// ("Hey Earshot, stop"), chimes and sends the words after it. "Earshot" alone at the start
+/// ("Earshot, stop"), or words that only sound like the phrase ("hey your shot"), may chime,
+/// but nothing said with them is sent: Earshot waits for the command, said after the chime,
+/// since "Okay, your shot. Approve it." and a mention whose start the mic cut off ("did you
+/// ask earshot to run the tests" heard as "Ear shot. To run.") sound the same.
 public actor Listener {
     public enum FollowUp: Sendable, Equatable {
         /// The answer to a permission prompt Earshot just announced.
@@ -70,6 +77,11 @@ public actor Listener {
         /// that hangs past it ends the capture unheard, so Earshot isn't left listening
         /// with its lines held back.
         public var transcribeLimit: Duration = .seconds(30)
+        /// The longest the second look at a wake may take (see WakeConfirmer). One that
+        /// runs past it is taken as no answer: the wake passes only on a strict spotter
+        /// score (CtcWakeSpotter.unconfirmedThreshold). Apple's recognizer answers in about
+        /// 51 ms (59 ms at the 95th percentile) on the wake bench.
+        public var confirmLimit: Duration = .milliseconds(750)
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
                     minHold: Duration = .milliseconds(200), maxCommandSamples: Int = 15 * 16_000,
@@ -97,15 +109,43 @@ public actor Listener {
         var waitingForSpeech: Bool
         /// After "Hey Earshot" alone: this clip is the command itself.
         var commandPhase = false
-        /// A follow-up takes speech only from here on (see Timing.followUpSettle).
+        /// A follow-up takes speech only from here on (see Timing.followUpSettle), by when
+        /// its audio came in, so audio held back and processed later is judged by its own time.
         var acceptFrom: ContinuousClock.Instant?
+        /// When a wake's listening chime played (showWake). The window a wake opens without
+        /// its command takes speech from Timing.followUpSettle after it, not after the
+        /// wake's transcription (see openCommandWindow).
+        var chimedAt: ContinuousClock.Instant?
         /// The hotkey was let go: the capture ends after Timing.releaseTail.
         var released = false
+        /// A wake the spotter heard that the confirmer has not passed yet. Its audio
+        /// goes on into the ring, but nothing shows or sounds: no orb level, no
+        /// captureBegan (so no barge-in), no chime. See confirmed(_:text:score:).
+        var confirming = false
+        /// Where the segment ended while the wake was being confirmed.
+        var endAt: Int?
+        /// A later segment, begun and ended while the wake was being confirmed: after
+        /// "Hey Earshot" alone, the command, said before the wake passed.
+        var after: Range<Int>?
+        /// The command ran past the length cap while the wake was being confirmed:
+        /// the first seconds, kept for tooLong's check, since the ring moves on.
+        var cappedHead: [Float]?
+        /// What was said ended during the confirm (or ran past the cap): a pass
+        /// finishes it at once, and the VAD's later edges are not its own.
+        var heardOut: Bool { endAt != nil || cappedHead != nil }
+        /// Passed, and being shown (captureBegan, the chime). Until that is done the
+        /// VAD's edges are noted, as during the confirm, so it never ends before it began.
+        var showing = false
+        /// The confirmer's words passed the wake (in any tier of wakeWords), not the strict
+        /// score alone: at finish a transcript without a greeting and the phrase sends nothing
+        /// and the listener waits for the command, rather than dropping the wake (see finishRemainder).
+        var passedOnWords = false
     }
 
     private let input: any AudioInput
     private let gate: any SpeechGate
     private let spotter: any WakeSpotter
+    private var confirmer: any WakeConfirmer
     private let transcriber: any Transcriber
     private let second: (any SecondHearing)?
     private let chimes: any Chimes
@@ -148,6 +188,13 @@ public actor Listener {
     private var segmentOwn = false
     private var spotted = false
     private var capture: Capture?
+    /// The confirmer's answer on the wake being confirmed (true: it passed), so a
+    /// follow-up or a click can wait for it, and not for the passed wake's show and
+    /// transcription. Resolved in confirmed(_:text:score:), or when the wake is dropped.
+    private var decision: (id: UUID, passed: Task<Bool, Never>, answer: AsyncStream<Bool>.Continuation)?
+    /// A wake that passed its confirm, being shown (and finished, when what was said
+    /// already ended). Audio waits for it (see confirmed(_:text:score:)).
+    private var audioHeld: Task<Void, Never>?
     /// Where the last capture's audio ended in the ring, so the next one never starts before it.
     private var lastCaptureEnd = 0
     private var hotkeyHeld = false
@@ -164,14 +211,19 @@ public actor Listener {
     /// Earshot's recent lines, normalised, with when they were last heard.
     private var ownLines: [(text: String, at: ContinuousClock.Instant)] = []
 
-    /// Wakes that were not you: the transcript did not start with the wake
-    /// phrase, or it was Earshot's own voice.
+    /// Wakes that were not you: the confirmer's words did not start with the wake
+    /// phrase, no recognizer could judge it and the spotter's score was under the strict
+    /// threshold, the transcript of a wake passed on that score alone had no wake words at
+    /// all (wakeWords), or it was Earshot's own voice. A wake passed on words whose transcript
+    /// lacks the phrase is not counted, nor one passed on the score whose transcript has
+    /// "Earshot" alone first or a sound-alike: each waits for the command (see finishRemainder).
     public private(set) var falseWakes = 0
 
     public init(input: any AudioInput, gate: any SpeechGate, spotter: any WakeSpotter, transcriber: any Transcriber,
-                second: (any SecondHearing)? = nil, chimes: any Chimes, timing: Timing = Timing()) {
+                second: (any SecondHearing)? = nil, confirmer: any WakeConfirmer = PassThroughConfirmer(),
+                chimes: any Chimes, timing: Timing = Timing()) {
         self.input = input; self.gate = gate; self.spotter = spotter; self.transcriber = transcriber
-        self.second = second
+        self.second = second; self.confirmer = confirmer
         self.chimes = chimes; self.timing = timing
         ring = Self.ring(timing)
         let (stream, cont) = AsyncStream<Utterance>.makeStream()
@@ -191,6 +243,8 @@ public actor Listener {
     public func setObserver(_ o: any ListenObserver) { observer = o }
     public func setSensitivity(_ s: Int) { sensitivity = s }
     public func setVocabulary(_ v: [String]) { vocabulary = v }
+    /// The second look at a wake. Takes effect from the next wake.
+    public func setConfirmer(_ c: any WakeConfirmer) { confirmer = c }
 
     /// The mic chosen in Settings. The input reads the choice only when it
     /// opens, so a change reopens a mic the wake word holds open, at once or
@@ -255,6 +309,7 @@ public actor Listener {
     /// The wake word may listen (see ListenPolicy). Opens or closes the mic.
     public func setWakeArmed(_ on: Bool) async {
         armed = on
+        if !on, let c = capture, c.confirming { discard(c) }
         if on { await openMic() } else { await closeMicIfIdle() }
         settlePhase()
     }
@@ -296,6 +351,8 @@ public actor Listener {
         await openMic()
         // Released, pressed again, or a call started, while the mic opened.
         guard micOpen, hotkeyHeld, pressID == press, !refused else { await closeMicIfIdle(); return }
+        // The hotkey wins over a wake still being confirmed, which nobody saw or heard.
+        if let c = capture, c.confirming { discard(c) }
         if let c = capture {
             guard case .followUp = c.trigger else { return }
             // The hotkey takes over: end the follow-up before the new capture begins.
@@ -366,6 +423,7 @@ public actor Listener {
 
     /// Listens once without the wake word, for a few seconds.
     public func listenFollowUp(_ f: FollowUp, within: Duration? = nil) async {
+        if await waitForConfirm() { return }
         guard !refused, capture == nil, !hotkeyHeld else { return }
         pendingOpens += 1
         await openMic()
@@ -391,6 +449,7 @@ public actor Listener {
     /// You clicked the orb: listens for one command, as after "Hey Earshot" on
     /// its own, ending when you stop talking or after the wake word's silence.
     public func tapToTalk() async {
+        if await waitForConfirm() { return }
         guard !refused, capture == nil, !hotkeyHeld else { return }
         pendingOpens += 1
         await openMic()
@@ -578,11 +637,17 @@ public actor Listener {
             soundAt = ring.total + chunker.pendingCount
         }
         // Per mic buffer (about 85 ms), not per 256 ms chunk, so the orb keeps up.
-        level.set(capture == nil ? 0 : AudioLevel.fromSamples(samples))
-        for c in chunker.push(samples) { await process(c) }
+        // A wake still being confirmed shows nothing.
+        let shown = capture.map { !$0.confirming } ?? false
+        level.set(shown ? AudioLevel.fromSamples(samples) : 0)
+        let at = ContinuousClock.now
+        for c in chunker.push(samples) { await process(c, heardAt: at) }
     }
 
-    private func process(_ chunk: [Float]) async {
+    /// `heardAt`: when the mic buffer that completed the chunk came in. A wake being shown
+    /// holds audio back (audioHeld), so a chunk can be processed well after it was heard.
+    private func process(_ chunk: [Float], heardAt: ContinuousClock.Instant) async {
+        if let held = audioHeld { await held.value }
         ring.append(chunk)
         if let c = capture, c.trigger == .hotkey {
             if ring.total - c.start >= maxCommand { await tooLong(c) }
@@ -592,7 +657,7 @@ public actor Listener {
         let loud = energy.admit(chunk)
         guard loud || segmentStart != nil || capture != nil else { return }
         let edge = await gate.feed(chunk)
-        if edge == .start, var c = capture, c.waitingForSpeech, let from = c.acceptFrom, ContinuousClock.now < from {
+        if edge == .start, var c = capture, c.waitingForSpeech, let from = c.acceptFrom, heardAt < from {
             // Too soon after a follow-up's chime: the chime or the tail of Earshot's line.
             // Forget it, and reset the VAD so speech that goes on starts afresh.
             c.start = ring.total
@@ -612,6 +677,23 @@ public actor Listener {
             }
         }
         if let c = capture, !c.waitingForSpeech {
+            if c.confirming || c.showing {
+                // A wake being confirmed (or passed, and being shown): note where what was
+                // said ended, at its segment's end or at the length cap. The confirm's
+                // answer decides what happens to it.
+                if edge == .end {
+                    if !c.heardOut {
+                        capture?.endAt = ring.total
+                    } else if c.after == nil, let end = c.endAt, let s = segmentStart {
+                        // Another segment after a pause: the command, when the wake was the phrase alone.
+                        capture?.after = max(s, end)..<ring.total
+                    }
+                    segmentStart = nil
+                } else if !c.heardOut, ring.total - c.start >= maxCommand {
+                    capture?.cappedHead = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
+                }
+                return
+            }
             if edge == .end {
                 segmentStart = nil
                 await finish(c, end: ring.total)
@@ -626,21 +708,123 @@ public actor Listener {
             spotted = true
             let window = ring.samples(from: s, to: s + timing.spotWindowSamples)
             let ownBefore = ownVoiceWake
-            let woke = await spotter.heardWake(window, sensitivity: sensitivity)
+            let score = await spotter.wakeScore(window)
+            let woke = score.map { $0 >= CtcWakeSpotter.threshold(sensitivity) } ?? false
             if woke, segmentOwn || ownBefore || ownVoiceWake {
                 // Earshot said the wake phrase itself (a session named "earshot"): not a wake, no barge-in.
                 falseWakes += 1
             } else if woke, capture == nil, !refused, micOpen {
-                let c = Capture(trigger: .wake, start: s, waitingForSpeech: false)
+                log.info("wake fired at \(score ?? 0, privacy: .public); confirming")
+                // Nothing shows yet: the words of the same window must start with the wake
+                // phrase first. The confirm runs on its own, so audio keeps coming in.
+                var c = Capture(trigger: .wake, start: s, waitingForSpeech: false)
+                c.confirming = true
+                if edge == .end { c.endAt = ring.total }
                 capture = c
-                phase = .capturing(.wake)
-                startPrewarm()
-                await observer?.captureBegan(.wake)
-                await chimes.play(.listening)
-                if edge == .end { segmentStart = nil; await finish(c, end: ring.total) }
+                let (answers, answer) = AsyncStream<Bool>.makeStream()
+                decision = (c.id, Task { for await passed in answers { return passed }; return false }, answer)
+                Task { [confirmer, limit = timing.confirmLimit, score = score ?? -.infinity] in
+                    let text = await bounded(limit, String?.none) { await confirmer.headText(window) }
+                    await self.confirmed(c.id, text: text, score: score)
+                }
             }
         }
         if edge == .end { segmentStart = nil }
+    }
+
+    // MARK: - Confirming a wake
+
+    /// The confirmer's answer for a wake the spotter heard, whose window scored `score`.
+    /// A pass does what a wake always did; a reject ends it silently, as if the spotter
+    /// had not fired. Words pass when they start with the wake phrase in any tier of
+    /// wakeWords. The finish decides what is a command, from the transcripts. Nil (no recognizer could tell, or the
+    /// confirm was too slow) passes only when the score reaches
+    /// CtcWakeSpotter.unconfirmedThreshold: at the usual threshold alone the spotter would
+    /// chime about 140 times an hour of speech.
+    private func confirmed(_ id: UUID, text: String?, score: Float) async {
+        guard capture?.id == id, capture?.confirming == true else { return }
+        // A press not yet held long enough: wait to see what it is. Held on, it wins
+        // and drops the wake (see holdConfirmed); a tap or a chord changes nothing.
+        if hotkeyHeld, let press = holdTask { await press.value }
+        guard let c = capture, c.id == id, c.confirming else { return }
+        guard !refused, micOpen, armed else { discard(c); return }
+        let tier = text.flatMap { repeatsOwnLine($0) ? nil : Self.wakeWords($0) }
+        let isWake = text == nil ? score >= CtcWakeSpotter.unconfirmedThreshold : tier != nil
+        guard isWake, !ownVoiceWake else {
+            falseWakes += 1
+            discard(c)
+            await closeMicIfIdle()
+            settlePhase()
+            return
+        }
+        capture?.passedOnWords = tier != nil
+        let how: String
+        switch tier {
+        case .literal?: how = "the phrase"
+        case .bare?: how = "the phrase alone first"
+        case .soundAlike?: how = "a sound-alike"
+        case nil: how = "the strict score"
+        }
+        log.info("wake passed on \(how, privacy: .public)")
+        decide(id, passed: true)
+        // Audio waits while the wake is shown and, when what was said already ended,
+        // finished, as it did when a wake was shown as the audio came in. Otherwise a
+        // command said right after "Hey Earshot" alone could start before the capture
+        // that waits for it, and pass for unrelated speech.
+        let pass = Task { await self.showWake(id) }
+        audioHeld = pass
+        await pass.value
+        if audioHeld == pass { audioHeld = nil }
+    }
+
+    /// A wake that passed its confirm: what a wake always did, then, when what was
+    /// said ended during the confirm, the command is all there and is finished at once.
+    private func showWake(_ id: UUID) async {
+        // A hotkey press, a call or disarming may have dropped it since the pass.
+        guard var c = capture, c.id == id, c.confirming else { return }
+        c.confirming = false
+        c.showing = true
+        capture = c
+        phase = .capturing(.wake)
+        startPrewarm()
+        await observer?.captureBegan(.wake)
+        if capture?.id == id { capture?.chimedAt = .now }
+        await chimes.play(.listening)
+        guard var now = capture, now.id == id else { return }
+        now.showing = false
+        capture = now
+        if now.cappedHead != nil {
+            await tooLong(now)
+        } else if let end = now.endAt {
+            await finish(now, end: end)
+        }
+    }
+
+    /// Forgets a wake still being confirmed. Nobody saw or heard it, so nothing
+    /// ends either: no captureEnded, no chime.
+    private func discard(_ c: Capture) {
+        guard let current = capture, current.id == c.id, current.confirming else { return }
+        capture = nil
+        decide(c.id, passed: false)
+        settlePhase()
+    }
+
+    /// The confirm of wake `id` is over: it passed, or it is gone.
+    private func decide(_ id: UUID, passed: Bool) {
+        guard let d = decision, d.id == id else { return }
+        decision = nil
+        d.answer.yield(passed)
+        d.answer.finish()
+    }
+
+    /// Waits for the confirmer's answer on a wake being confirmed, so a window that
+    /// opens now neither overlaps a real wake nor is lost to one that turns out not to
+    /// be. Only the answer: a passed wake's show and transcription are not waited for.
+    /// At most Timing.confirmLimit, and Timing.minHold for a press the answer waits on.
+    /// Returns true when the wake passed: it is the one being heard, so the caller backs off.
+    private func waitForConfirm() async -> Bool {
+        guard let c = capture, c.confirming, let d = decision, d.id == c.id else { return false }
+        return await bounded(timing.confirmLimit + timing.minHold, false) { await d.passed.value }
     }
 
     // MARK: - Ending a capture
@@ -654,7 +838,11 @@ public actor Listener {
         return clip
     }
 
-    /// Stage 4: transcribes the clip and hands it on.
+    /// Stage 4: transcribes the clip and hands it on. For a wake, only the words after a
+    /// greeting and the phrase written as such are a command (finishRemainder); a wake passed
+    /// on words whose transcripts lack them, or on the score whose words have "Earshot" alone
+    /// first or a sound-alike, sends nothing and waits for a command said after the chime
+    /// (openCommandWindow).
     /// `claimed`: the capture was already taken off `capture` (a new press during the tail),
     /// and `clip` is its audio, taken then.
     private func finish(_ c: Capture, end: Int, claimed: Bool = false, clip taken: [Float]? = nil) async {
@@ -668,19 +856,24 @@ public actor Listener {
         var text = ""
         var plain: String?
         var other: String?
+        // A wake's own clip is heard without names that spell the wake phrase (wakeVocabulary).
+        let names = c.trigger == .wake && !c.commandPhase ? Self.wakeVocabulary(vocabulary) : vocabulary
         if clip.count >= timing.minClipSamples {
             // The second hearing starts with the first and gets a short grace after it.
             let heardToo: Task<String?, Never>? = second.map { s in
-                Task { [vocabulary] in await s.hear(clip, names: vocabulary) }
+                Task { await s.hear(clip, names: names) }
             }
             defer { heardToo?.cancel() }
-            if let r = await transcription({ [transcriber, vocabulary] in
-                try await transcriber.transcribeBoth(clip, vocabulary: vocabulary)
+            if let r = await transcription({ [transcriber] in
+                try await transcriber.transcribeBoth(clip, vocabulary: names)
             }) {
                 (text, plain) = r
                 plain = plain?.trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            if let heardToo, !text.isEmpty {
+            // A wake passed on words may find the phrase only in the second hearing, so it is
+            // waited for even when the transcript came back empty.
+            let wakeOnWords = c.trigger == .wake && !c.commandPhase && c.passedOnWords
+            if let heardToo, !text.isEmpty || wakeOnWords {
                 other = await bounded(timing.secondGrace, nil) { await heardToo.value }
                 other = other?.trimmingCharacters(in: .whitespacesAndNewlines)
             }
@@ -693,17 +886,29 @@ public actor Listener {
                 // The mic heard Earshot's own line.
                 falseWakes += 1
                 text = ""
-            } else if let rest = Self.stripWake(text) {
+            } else if let rest = Self.finishRemainder(text, plain: plain, second: other, passedOnWords: c.passedOnWords) {
                 text = rest
-                // The unboosted words lose the wake phrase too; without it they can't be compared.
-                plain = plain.flatMap(Self.stripWake)
-                other = other.map { Self.stripWake($0) ?? $0 }
+                // The other hearings lose the wake phrase too, by the same rule; without it they can't be compared.
+                plain = plain.flatMap(Self.wakeRemainder)
+                if plain == text { plain = nil }   // the command came from the unboosted words
+                other = other.map { Self.wakeRemainder($0) ?? $0 }
                 if text.isEmpty, !dropped, capture == nil, micOpen {
-                    // "Hey Earshot" alone: keep listening for the command.
-                    let next = Capture(trigger: .wake, start: ring.total, waitingForSpeech: true, commandPhase: true)
-                    capture = next
-                    phase = .capturing(.wake)
-                    scheduleTimeout(next.id, after: timing.wakeSilence)
+                    // "Hey Earshot" alone: keep listening for the command, from where the wake ended.
+                    await openCommandWindow(after: c, end: end, carryOver: true)
+                    return
+                }
+            } else if c.passedOnWords || Self.wakeWords(plain ?? text) != nil {
+                // A wake passed on words whose transcripts don't start with a greeting and the
+                // phrase written as such ("Okay, your shot. Approve it.", "Earshot, stop", or a
+                // mention cut off at the start, "Ear shot. To run."): none of its words are sent.
+                // It chimed, so the command is the next thing said, after the chime. The same for
+                // a wake passed on the strict score alone whose unboosted words have "Earshot"
+                // alone first or a sound-alike (not the literal tier, which finishRemainder took).
+                text = ""
+                plain = nil
+                other = nil
+                if !dropped, capture == nil, micOpen {
+                    await openCommandWindow(after: c, end: end, carryOver: false)
                     return
                 }
             } else {
@@ -723,6 +928,43 @@ public actor Listener {
         }
         await closeMicIfIdle()
         settlePhase()
+    }
+
+    /// After a wake that sent nothing, listens for the command, from where the wake ended.
+    /// `carryOver` (after "Hey Earshot" alone): speech begun or said while the wake was
+    /// being confirmed is the command. Without it (a wake passed on words whose transcripts
+    /// lack a greeting and the phrase, such as "Earshot" alone first or a sound-alike), only
+    /// speech that starts after the chime is, as in a follow-up window:
+    /// what went on during the confirm may be the rest of a sentence that was not to Earshot.
+    private func openCommandWindow(after c: Capture, end: Int, carryOver: Bool) async {
+        var next = Capture(trigger: .wake, start: max(end, ring.oldest), waitingForSpeech: true, commandPhase: true)
+        if carryOver {
+            if let said = c.after {
+                // The whole command was said while the wake was being confirmed.
+                next.start = said.lowerBound
+                next.waitingForSpeech = false
+                capture = next
+                phase = .capturing(.wake)
+                await finish(next, end: said.upperBound)
+                return
+            }
+            if let s = segmentStart {
+                // The command began while the wake was being confirmed, and its start
+                // edge went by. The wake's own segment ended at `end`, so this one is
+                // later: the capture starts with it, and its end edge or the cap ends it.
+                next.start = max(next.start, s)
+                next.waitingForSpeech = false
+            }
+        } else {
+            // The chime has played (showWake plays it before any finish). A segment still going
+            // started before it: its end edge finds the window waiting and is passed over.
+            // The settle runs from the chime: audio was held through the show and this clip's
+            // transcription, and a command said meanwhile would otherwise count as too soon.
+            next.acceptFrom = (c.chimedAt ?? .now) + timing.followUpSettle
+        }
+        capture = next
+        phase = .capturing(.wake)
+        scheduleTimeout(next.id, after: timing.wakeSilence)
     }
 
     /// A transcription's result, or nil when it failed or ran past `timing.transcribeLimit`.
@@ -767,14 +1009,14 @@ public actor Listener {
         guard capture?.id == c.id else { return }
         capture = nil
         lastCaptureEnd = ring.total
-        let head = ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
+        let head = c.cappedHead ?? ring.samples(from: c.start, to: c.start + timing.spotWindowSamples)
         ring.erase(upTo: ring.total)
         await dropSegment()
         var heard = true
         if c.trigger == .wake, !c.commandPhase {
             phase = .transcribing
             let text = await transcription { [transcriber] in try await transcriber.transcribe(head, vocabulary: []) } ?? ""
-            if repeatsOwnLine(text) || Self.stripWake(text) == nil {
+            if repeatsOwnLine(text) || Self.finishRemainder(text, passedOnWords: c.passedOnWords) == nil {
                 falseWakes += 1
                 heard = false
             }
@@ -789,10 +1031,11 @@ public actor Listener {
 
     /// Ends a capture without a command: a call started, or the hotkey was cancelled.
     private func drop(_ c: Capture) async {
-        guard capture?.id == c.id else { return }
+        guard let current = capture, current.id == c.id else { return }
         capture = nil
         ring.erase(upTo: ring.total)
-        await observer?.captureEnded(heard: false)
+        // A wake still being confirmed was never shown, so it never ends either.
+        if current.confirming { decide(c.id, passed: false) } else { await observer?.captureEnded(heard: false) }
     }
 
     private func scheduleTimeout(_ id: UUID, after: Duration) {
@@ -812,7 +1055,7 @@ public actor Listener {
     }
 
     private func settlePhase() {
-        if let c = capture { phase = .capturing(c.trigger); return }
+        if let c = capture, !c.confirming { phase = .capturing(c.trigger); return }
         phase = micOpen && armed ? .waiting : .off
     }
 
@@ -829,6 +1072,127 @@ public actor Listener {
         guard let m = text.prefixMatch(of: wakePrefix) else { return nil }
         return String(text[m.range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// How a text says the wake phrase at its start, when it does (see wakeWords(_:)).
+    public enum WakeWords: Sendable, Equatable {
+        /// A greeting, then the phrase written as such: "earshot", "earshots", "ear shot" or
+        /// "air shot". `remainder` is the words after it, as written (empty for the phrase
+        /// alone). Only this tier ever gives a command.
+        case literal(remainder: String)
+        /// "Earshot" or "ear shot" as the first word, standing apart ("Earshot, stop",
+        /// "Ear shot."). A noise gate that cuts the start of a mention leaves the same words
+        /// ("did you ask earshot to run the tests" heard as "Ear shot. To run."), so the words
+        /// after it are never a command: the wake may chime, and the command is the next thing said.
+        case bare
+        /// A greeting, then a word or two that sound like "earshot" but are spelled
+        /// otherwise ("hey your shot", "okay, you're shot", "hey, our shots"). Everyday
+        /// sentences sound the same ("Okay, your shot. Approve it."), so, as for bare, the
+        /// words after them are never a command.
+        case soundAlike
+    }
+
+    /// What recognizers wrote for "hey" and "okay" on the wake bench, besides the words
+    /// themselves. No verbs: "take your shot, run the test" is a sentence.
+    private static let greetings: Set<String> = ["hey", "hi", "high", "hay", "hate", "eight", "8", "a", "ok", "okay"]
+
+    /// Whether the text starts with the wake phrase, and in which tier. Three shapes pass:
+    /// - a greeting, then the phrase spelled "earshot", "earshots", "ear shot" or "air shot"
+    ///   in the next word or two: literal.
+    /// - a greeting, then a word or two that only sound like it: they end in "shot" (or
+    ///   "shots"), do not start with "h" ("hair shot", "her shot"), and their sound key is
+    ///   ARXT ("your shot", "year shot", "you're shot", "we're shot"): sound-alike. Only ARXT:
+    ///   "you shot" and "a shot" are AXT, and are everyday words ("hey, you shot the deploy").
+    /// - "Earshot" or "ear shot" as the first word, with no greeting, standing apart: a comma
+    ///   or a stop right after it, or nothing after it ("Earshot, stop", "Earshot."): bare. Run
+    ///   into a sentence it is a mention ("Earshot is listening"). Never later in the text:
+    ///   "did you ask earshot to run the tests" is about Earshot, not to it.
+    /// Some sentences still pass, since their words are the phrase's: "hey, your shot is
+    /// next" (sound-alike, so nothing of it is sent). Tuned on the wake bench's tune split
+    /// (earshot-probe wake-rescore).
+    public static func wakeWords(_ text: String) -> WakeWords? {
+        func soundsLikeEarshot(_ letters: String) -> Bool {
+            let l = letters.hasSuffix("shots") ? String(letters.dropLast()) : letters
+            return l.hasSuffix("shot") && !l.hasPrefix("h") && SoundsLike.key(l) == "ARXT"
+        }
+        let (tokens, words) = wakeTokens(text)
+        guard let first = words.first else { return nil }
+        let greeted = greetings.contains(first)
+        if greeted, let n = literalLength(words, at: 1) {
+            return .literal(remainder: remainder(text, after: tokens[n]))
+        }
+        for n in 1...2 where words.count >= n && words[..<n].joined() == "earshot" {
+            if words.count == n || ",.!?".contains(tokens[n - 1].last!) { return .bare }
+        }
+        for n in 1...2 where greeted && words.count > n {
+            if soundsLikeEarshot(words[1...n].joined()) { return .soundAlike }
+        }
+        return nil
+    }
+
+    /// How many words the phrase, spelled as such, takes from `words[i]` on, or nil.
+    private static func literalLength(_ words: [String], at i: Int) -> Int? {
+        guard i < words.count else { return nil }
+        if words[i] == "earshot" || words[i] == "earshots" { return 1 }
+        if i + 1 < words.count, words[i] == "ear" || words[i] == "air", words[i + 1] == "shot" { return 2 }
+        return nil
+    }
+
+    /// The words after the wake phrase in the literal tier (see wakeWords): trimmed, with
+    /// the punctuation right after the phrase dropped, empty for the phrase alone. Nil when
+    /// the text does not start with a greeting and the phrase written as such.
+    public static func wakeRemainder(_ text: String) -> String? {
+        guard case .literal(let rest)? = wakeWords(text) else { return nil }
+        return rest
+    }
+
+    /// The command in a finished wake's transcripts, or nil when none of them start with a
+    /// greeting and the phrase written as such (wakeRemainder). `text` is the boosted
+    /// transcript, `plain` the unboosted one (nil when the boost changed nothing, so `text` is
+    /// unboosted too) and `second` the second hearing's.
+    /// Whether there is a command is decided on the unboosted words, `plain ?? text`, and for a
+    /// wake passed on the confirmer's words also on `second`, never on the boosted words alone:
+    /// a session named "earshot" makes the boost write the phrase over words that only sound
+    /// like it ("Okay, your shot. Stop the build." became "Okay, earshot stop the blog").
+    /// The command is the boosted words after the phrase when they start with it too, so the
+    /// names in it are kept; otherwise the unboosted words', then the second hearing's.
+    /// Nil means this clip's words are not a command. For a wake passed on words, and for one
+    /// passed on the strict score alone whose unboosted words have "Earshot" alone first or a
+    /// sound-alike (wakeWords), the listener waits for the next; otherwise it is a false wake.
+    public static func finishRemainder(_ text: String, plain: String? = nil, second: String? = nil,
+                                       passedOnWords: Bool) -> String? {
+        if let rest = wakeRemainder(plain ?? text) { return wakeRemainder(text) ?? rest }
+        guard passedOnWords, let second else { return nil }
+        return wakeRemainder(second)
+    }
+
+    /// The names a wake's own clip is heard with: those whose letters spell the wake phrase
+    /// ("earshot", "Earshot Spike", "airshot") left out. With one, the boost writes the phrase
+    /// over words that only sound like it, and they would pass as the phrase written as such.
+    public static func wakeVocabulary(_ names: [String]) -> [String] {
+        names.filter { name in
+            let l = SoundsLike.letters(name)
+            return !l.contains("earshot") && !l.contains("airshot")
+        }
+    }
+
+    /// The text's words (those with a letter or digit), and each as the letters compared.
+    private static func wakeTokens(_ text: String) -> (tokens: [Substring], words: [String]) {
+        let tokens = text.split(whereSeparator: \.isWhitespace).filter { !SoundsLike.letters(String($0)).isEmpty }
+        return (tokens, tokens.map { SoundsLike.letters(String($0)) })
+    }
+
+    /// The text after `token` (one of its words), trimmed, with the punctuation right after it dropped,
+    /// so what follows the phrase keeps its own spelling.
+    private static func remainder(_ text: String, after token: Substring) -> String {
+        let after = text[token.endIndex...]
+        let skip = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        let start = after.unicodeScalars.firstIndex { !skip.contains($0) } ?? after.endIndex
+        return String(after[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether the words of a wake's head start with the wake phrase, in any tier (see
+    /// wakeWords): the confirm's rule, so "Earshot" alone first and a sound-alike may chime too.
+    public static func confirmsWake(_ text: String) -> Bool { wakeWords(text) != nil }
 
     /// The wake phrase anywhere in the text ("Hey, earshot needs your OK").
     public static func mentionsWake(_ text: String) -> Bool { text.contains(wakeAnywhere) }

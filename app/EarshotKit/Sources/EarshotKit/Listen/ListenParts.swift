@@ -17,8 +17,11 @@ public protocol SpeechGate: Sendable {
 
 /// Stage 3: "Hey Earshot" in the first seconds of a speech segment.
 public protocol WakeSpotter: Sendable {
-    /// sensitivity 1 (fewer false wakes) to 10 (fewer misses).
-    func heardWake(_ samples: [Float], sensitivity: Int) async -> Bool
+    /// How well the samples say the wake phrase, in CtcWakeSpotter's score space, or nil
+    /// when the spotter can't tell (not loaded, failed), which is no wake. The listener
+    /// compares it to CtcWakeSpotter.threshold(sensitivity) for a wake, and keeps it for a
+    /// wake no recognizer could judge (CtcWakeSpotter.unconfirmedThreshold).
+    func wakeScore(_ samples: [Float]) async -> Float?
 }
 
 /// Stage 4: the command as text.

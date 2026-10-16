@@ -5,13 +5,17 @@ import Testing
 
 @Suite struct FluidListeningTests {
     @Test func sensitivityMapsAroundTheDefaultThreshold() {
-        #expect(CtcWakeSpotter.threshold(5) == -6)
-        #expect(CtcWakeSpotter.threshold(1) == -5)     // stricter
-        #expect(CtcWakeSpotter.threshold(10) == -7.25) // looser
-        #expect(CtcWakeSpotter.threshold(99) == -7.25)
+        #expect(CtcWakeSpotter.threshold(5) == -8)
+        #expect(CtcWakeSpotter.threshold(1) == -7)     // stricter
+        #expect(CtcWakeSpotter.threshold(10) == -9.25) // looser
+        #expect(CtcWakeSpotter.threshold(99) == -9.25)
+        #expect(CtcWakeSpotter.threshold(-3) == -7)
+        // A wake no recognizer judged needs more than any sensitivity's threshold.
+        #expect(CtcWakeSpotter.unconfirmedThreshold == -5)
+        #expect((1...10).allSatisfy { CtcWakeSpotter.threshold($0) < CtcWakeSpotter.unconfirmedThreshold })
         // FluidAudio relaxes by 1 per token past 3; that is taken back.
-        #expect(CtcWakeSpotter.minScore(5, tokens: 6) == -3)
-        #expect(CtcWakeSpotter.minScore(5, tokens: 2) == -6)
+        #expect(CtcWakeSpotter.minScore(5, tokens: 6) == -5)
+        #expect(CtcWakeSpotter.minScore(5, tokens: 2) == -8)
         // The model gets a clip padded with zeros to its full 15 s.
         #expect(CtcShared.fullLength([1, 2]).count == 240_000)
         #expect(CtcShared.fullLength([1, 2]).suffix(3) == [0, 0, 0])
@@ -53,6 +57,113 @@ import Testing
         try await s.load()
         #expect(await s.heardWake(try spoken("Hey Earshot, what's everyone doing?"), sensitivity: 5))
         #expect(!(await s.heardWake(try spoken("Good morning everyone, the build passed."), sensitivity: 5)))
+    }
+
+    /// FluidAudio issue #991: the model read a buffer it never cleared, its output stopped
+    /// depending on the audio, and every sentence scored the same. This would have failed then.
+    @Test(.enabled(if: modelsOn)) func wakeScoresFollowTheAudio() async throws {
+        let s = CtcWakeSpotter()
+        try await s.load()
+        let wake = try #require(await s.wakeScore(try spoken("Hey Earshot, what's everyone doing?")))
+        let plain = [
+            "Good morning everyone, the build passed.",
+            "Please send the report to the whole team.",
+            "Hey there, nice shot.",
+        ]
+        var scores: [Float] = []
+        for text in plain { scores.append(try #require(await s.wakeScore(try spoken(text)))) }
+        #expect(Set(scores).count == scores.count)   // different sentences, different scores
+        #expect(scores.allSatisfy { $0.isFinite })
+        #expect(scores.allSatisfy { wake > $0 })
+        // Silence says nothing, and scores below the phrase too.
+        let silence = try #require(await s.wakeScore([Float](repeating: 0, count: 32_000)))
+        #expect(wake > silence)
+        // The same audio scores the same.
+        #expect(await s.wakeScore(try spoken("Good morning everyone, the build passed.")) == scores[0])
+    }
+
+    /// heardWake is wakeScore against the threshold, and agrees with FluidAudio's own filter
+    /// given `minScore`: the relaxation per token is taken back in the threshold, not in the score.
+    @Test(.enabled(if: modelsOn)) func heardWakeIsTheScoreAgainstTheThreshold() async throws {
+        let s = CtcWakeSpotter()
+        try await s.load()
+        let models = try #require(await CtcShared.shared.loadedModels())
+        let tokens = try await CtcShared.shared.tokens(CtcWakeSpotter.phrase)
+        let vocab = CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.phrase, ctcTokenIds: tokens)])
+        let fluid = CtcKeywordSpotter(models: models, blankId: models.vocabulary.count)
+        for text in ["Hey Earshot, what's everyone doing?", "Hey there, nice shot.", "Run the tests."] {
+            let audio = try spoken(text)
+            let score = try #require(await s.wakeScore(audio))
+            for sensitivity in [1, 5, 10] {
+                let theirs = try await fluid.spotKeywordsWithLogProbs(
+                    audioSamples: CtcShared.fullLength(audio), customVocabulary: vocab,
+                    minScore: CtcWakeSpotter.minScore(sensitivity, tokens: tokens.count))
+                #expect(await s.heardWake(audio, sensitivity: sensitivity) == (score >= CtcWakeSpotter.threshold(sensitivity)))
+                #expect(!theirs.detections.isEmpty == (score >= CtcWakeSpotter.threshold(sensitivity)), "\(text) at \(sensitivity)")
+            }
+        }
+    }
+
+    @Test(.enabled(if: modelsOn)) func theCtcHeadConfirmerReusesTheSpottersPass() async throws {
+        let s = CtcWakeSpotter()
+        try await s.load()
+        let audio = try spoken("Hey Earshot, what's everyone doing?")
+        _ = await s.wakeScore(audio)
+        #expect(await CtcShared.shared.recalled(audio) != nil)
+        let confirmer = CtcHeadConfirmer()
+        let text = try #require(await confirmer.headText(audio))
+        // Another clip is run fresh; asking again for the first gives the same words as the kept pass did.
+        let other = try #require(await confirmer.headText(try spoken("Good morning everyone.")))
+        #expect(await confirmer.headText(audio) == text)
+        #expect(other != text)
+    }
+
+    @Test func greedyDecodingCollapsesRepeatsAndDropsBlanks() {
+        let vocab = [0: "\u{2581}hey", 1: "\u{2581}ear", 2: "shot"]
+        let blank = 3
+        func frame(_ id: Int) -> [Float] { (0...3).map { $0 == id ? 0 : -9 } }
+        let frames = [0, 0, blank, 1, 1, blank, 2, 2, blank, 2].map(frame)
+        // A piece with no word mark joins the one before; the blank between the two "shot"s makes them two pieces.
+        #expect(CtcGreedy.text(logProbs: frames, vocabulary: vocab, blankId: blank) == "hey earshotshot")
+        #expect(CtcGreedy.text(logProbs: [], vocabulary: vocab, blankId: blank) == "")
+        #expect(CtcGreedy.text(logProbs: [frame(blank), frame(blank)], vocabulary: vocab, blankId: blank) == "")
+    }
+
+    @Test func theLastPassIsFoundByItsSamplesAndTrimmedToTheirFrames() async {
+        let shared = CtcShared()
+        let a = (0..<32_000).map { Float($0 % 97) / 97 }
+        var b = a
+        b[16_000] += 0.5
+        let frames = [[Float]](repeating: [0, 1], count: 188)
+        await shared.remember(a, logProbs: frames, frameDuration: 0.08)
+        #expect(await shared.recalled(a)?.count == 25)   // 2 s at 80 ms a frame
+        #expect(await shared.recalled(b) == nil)
+        #expect(await shared.recalled(Array(a.dropLast())) == nil)
+        await shared.remember(b, logProbs: frames, frameDuration: 0.08)
+        #expect(await shared.recalled(a) == nil)   // only the last clip is kept
+    }
+
+    @Test func confirmersThatAreNotReadyAnswerNilAndLoadNothing() async {
+        let head = (0..<32_000).map { Float($0 % 53) / 53 }
+        #expect(await CtcHeadConfirmer(shared: CtcShared()).headText(head) == nil)
+        let parakeet = ParakeetTranscriber(idle: .seconds(60)) { AsrManager(config: .default) }
+        #expect(await ParakeetHeadConfirmer(parakeet).headText(head) == nil)
+        #expect(await parakeet.loads == 0)
+        #expect(await AppleHeadConfirmer(AppleTranscriber()).headText(head) == nil)
+    }
+
+    @Test func parakeetHeadWordsComeFromTheLoadedModelWithNoVocabulary() async throws {
+        let seen = Collected<Int>()
+        let t = ParakeetTranscriber(idle: .seconds(60), load: { AsrManager(config: .default) }, run: { _, s in
+            await seen.add(s.count)
+            return ASRResult(text: "hey earshot what is up", confidence: 1, duration: 1, processingTime: 0.1)
+        })
+        let confirmer = ParakeetHeadConfirmer(t)
+        #expect(await confirmer.headText([0.1, 0.1]) == nil)   // not loaded: nil, and still not loaded
+        #expect(await t.loads == 0)
+        await t.prewarm()
+        #expect(await confirmer.headText([Float](repeating: 0.1, count: 32_000)) == "hey earshot what is up")
+        #expect(await seen.items == [40_000])
     }
 
     @Test(.enabled(if: modelsOn)) func theGateFindsSpeechAndItsEnd() async throws {
@@ -167,10 +278,39 @@ import Testing
             await t.unload()   // as the idle timer or memory pressure would
         }
         let text = try await t.transcribe([0, 0, 0], vocabulary: [])
-        #expect(text == "run the tests")
-        #expect(await t.isLoaded)   // still there right after: the unload was skipped
+        #expect(text == "run the tests")   // the model stayed under the transcription
         await unloads.value
-        #expect(await eventually { !(await t.isLoaded) })   // and the idle timer unloads it after
+        #expect(!(await t.isLoaded))   // and the unload was done as it ended
+    }
+
+    /// The idle timer firing during a wake confirm's run is not lost: the model is unloaded
+    /// when the run ends, and no later command is needed to unload it.
+    @Test func anIdleUnloadDuringAConfirmIsDoneWhenItEnds() async throws {
+        let t = ParakeetTranscriber(idle: .milliseconds(40), load: { AsrManager(config: .default) }, run: { _, _ in
+            try await Task.sleep(for: .milliseconds(200))
+            return ASRResult(text: "hey earshot", confidence: 1, duration: 1, processingTime: 0.1)
+        })
+        await t.prewarm()   // starts the idle timer, which fires during the run below
+        #expect(await t.isLoaded)
+        #expect(await t.transcribeIfLoaded([Float](repeating: 0.1, count: 32_000)) == "hey earshot")
+        #expect(!(await t.isLoaded))
+    }
+
+    /// With one run still going, an unload waits for the last one.
+    @Test func aPendingUnloadWaitsForTheLastRun() async throws {
+        let t = ParakeetTranscriber(idle: .seconds(60), load: { AsrManager(config: .default) }, run: { _, s in
+            try await Task.sleep(for: .milliseconds(s.count > 40_000 ? 300 : 100))
+            return ASRResult(text: "hey earshot", confidence: 1, duration: 1, processingTime: 0.1)
+        })
+        await t.prewarm()
+        async let long = t.transcribeIfLoaded([Float](repeating: 0.1, count: 64_000))
+        async let short = t.transcribeIfLoaded([Float](repeating: 0.1, count: 16_000))
+        try await Task.sleep(for: .milliseconds(30))
+        await t.unload()   // as memory pressure would, with both running
+        _ = await short
+        #expect(await t.isLoaded)   // the long run still holds it
+        _ = await long
+        #expect(!(await t.isLoaded))
     }
 
     @Test func theGateLoadsItselfOnTheFirstChunkAndDoesNotRetryAtOnce() async {
