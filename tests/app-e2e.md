@@ -66,6 +66,151 @@ playback within 3 seconds (a speaker in standby).
 | eval-listener | Not run: needs recordings of your voice (`eval-listener.sh record`) |
 | send-integration | Not run: Claude Code needs this folder trusted first (run `claude` here once) |
 
+## Wake word bench, 2026-10-15 (synthetic voices, no recordings of yours)
+
+Method (tests/wake/README.md): 30 voices (every English Kokoro voice plus say
+Samantha and Daniel) x 133 phrases (32 positives, 86 near-misses, 15 mentions) x 5 mic
+conditions (clean, quiet, noise gate 0.2, 0.4, 0.6): 19950 clips. The split is by
+voice, a third held out. Real human speech that must not wake: LibriSpeech
+test-clean, 2620 clips, 5.4 h. Each clip is cut into segments as the listener cuts
+them, the spotter scores each, and every fire goes through Apple's
+SpeechTranscriber, Parakeet and the CTC model's own words. `wake-rescore` then
+tries confirm rules on the saved text without running the audio again.
+
+Decision: the spotter fires at -8.0 at sensitivity 5 (-7.0 at 1, -9.25 at 10,
+0.25 a step). Apple's recognizer reads the fired window, and the wake passes
+when its words start with the wake phrase in one of two tiers
+(`Listener.wakeWords`, described below). Parakeet is asked only when Apple has
+no answer and Parakeet is already loaded. A wake that no recognizer could judge
+(no answer, or past the 0.75 s confirm limit) passes only at a spotter score of
+-5.0 or more. The CTC model's own words are no use as a confirm: 2 of 17007 of
+its looks passed.
+
+Results at -8.0 (sensitivity 5), Apple's confirm and the finish rule as shipped, from
+`wake-rescore ... --threshold -8` over 22570 files (19950 synthetic + 2620
+LibriSpeech), end to end block. Tune is 20 voices, holdout 10. False wakes are
+counted in two kinds: dispatch (words of the segment go out as a command, the
+dangerous kind) and window (a chime that sends nothing and only opens the command
+window).
+
+Positives woken (chime) by split and condition. The tool counts a positive as
+woken and does not split it into dispatch or window:
+
+| Split | Clean | Quiet | Gate 0.2 | Gate 0.4 | Gate 0.6 | All |
+|---|---|---|---|---|---|---|
+| tune (of 640 each) | 555 (87%) | 319 (50%) | 243 (38%) | 26 (4%) | 2 (0%) | 1145/3200 (36%) |
+| holdout (of 320 each) | 259 (81%) | 122 (38%) | 109 (34%) | 19 (6%) | 3 (1%) | 512/1600 (32%) |
+
+False wakes at -8.0:
+
+| Class (clips) | Dispatch tune | Dispatch holdout | Window tune | Window holdout |
+|---|---|---|---|---|
+| Near-miss (8600 tune, 4300 holdout) | 0 | 0 | 269 | 136 |
+| Mention (1500 tune, 750 holdout) | 0 | 0 | 6 | 2 |
+
+LibriSpeech (5.40 h): the spotter fires 142.6 times an hour; dispatch 0.00 an
+hour, window 0.00 an hour (0 false wakes of either kind).
+
+There are no dispatch false wakes at -8.0, -7.5 or -7.0. The 8 mention windows
+are 2 clips in the 0.6 gate and 6 in the 0.4 gate: the gate seems to cut the
+start of the sentence (an inference from what Apple heard), so Apple hears
+"Earshot, ..." with no greeting. That wake is bare: it chimes and opens the
+window and sends nothing of the segment.
+
+For comparison, at -7.5: 1043/3200 tune and 457/1600 holdout positives, 213 and
+108 near-miss windows, 4 and 2 mention windows, 70.6 fires an hour; at -7.0:
+884/3200 and 405/1600, 179 and 91 windows, 2 and 1 mention windows, 29.1 fires
+an hour. Dispatch false wakes are 0 and LibriSpeech dispatch and window are 0.00
+an hour at all three.
+
+The spotter alone, which the rule does not change:
+
+| | Clean positives | Quiet positives | Near-miss audible |
+|---|---|---|---|
+| Spotter alone at -6.0 (before the confirm) | 73% | 17% | 505/4800 |
+| Spotter alone at -5.0 (the no-answer fallback) | 52% | | 3% |
+
+The spotter alone at -8.0 would chime about 140 times an hour of speech (142.6
+fires an hour on LibriSpeech): that is why a wake no recognizer can judge needs
+-5.0 (0 audible an hour on LibriSpeech).
+
+Confirm latency (Apple, on fires at -8.0): 50.9 ms at the median, 58.6 ms at the
+95th percentile (Parakeet, loaded: 34.8 and 37.0 ms; -7.5 and -7.0 are within 0.5 ms of Apple's). `Timing.confirmLimit` went
+from 1.5 s to 0.75 s.
+
+FluidAudio: the padding fix for issue #991 is merged upstream (PR #1003, merge
+e05ab923) but not in a tagged release. An A/B of the 0.17.7 tag against e05ab923
+was identical on the tests, the parser eval, the hearing bench and the spotter's
+scores. Earshot stays on the 0.17.7 tag and moves to the first tag that includes
+e05ab923. `CtcShared.fullLength` keeps padding clips to 15 s either way: without
+it the scores move (309 of 1738 rows) and the thresholds were tuned with it.
+
+First safety review:
+
+- `Listener.wakeWords` takes no verb as a greeting (take, get, pay, my) and not
+  "you shot" or "a shot" (sound key AXT) as the phrase: "Take a shot, run the
+  test" fired the spotter at -7.9, Apple heard it word for word, and "Run the
+  test." went out as a command. Greetings are hey, hi, high, hay, hate, eight,
+  a, ok, okay.
+- wake-eval (`scripts/eval-listener.sh`) runs the listener's path: spotter at
+  sensitivity 5, Apple's confirm within the limit, the strict score with no
+  answer, then the finish rule on the transcripts.
+
+Second safety review: "your shot" and "earshot" have the same sound key (ARXT),
+so "Okay, your shot. Approve it." passed the confirm and sent "Approve it.",
+which can approve a pending permission prompt; and the finish looked for an
+earshot-like word anywhere in the first three, so "did you ask earshot to run
+the tests" sent "to run the tests". Now there are two tiers:
+
+- Literal: the phrase written as such ("earshot", "earshots", "ear shot", "air
+  shot"), right after a greeting or as the first word, never later. A bare
+  "Earshot" first needs a comma or a stop after it, or nothing after it, at the
+  confirm. Only this tier sends words as a command.
+- Sound-alike: a greeting, then a word or two that sound like ARXT and end in
+  "shot" but are spelled otherwise ("your shot", "you're shot", "year shot",
+  "we're shot", "our shots"). It may chime; nothing said with it is sent.
+- At finish, a wake passed on words (either tier) looks for the literal phrase,
+  at the start or after a greeting, in the boosted transcript, then the plain
+  one, then the second hearing (waited for even when Parakeet heard nothing).
+  Found, the words after it are the command (none: Earshot waits for it, as
+  after "Hey Earshot" alone). Not found, nothing of the segment is sent and
+  Earshot waits for the command the same way, the chime already played. A wake
+  passed on the strict score alone needs the literal phrase in the boosted
+  transcript, or it is a false wake.
+- wake-bench and wake-rescore count false wakes as dispatch or window, per class,
+  and their end to end block runs the finish rule with Parakeet's head text as
+  the boosted and plain transcript and Apple's as the second hearing (a
+  stand-in: live, the finish hears the whole command).
+
+Third safety review: the 5 mention dispatches above were "Earshot" first with no
+greeting, from a mention whose start the noise gate cut off, and a session named
+earshot let the boost write "earshot" over a sound-alike ("Okay, your shot. Stop
+the build." became "Okay, earshot stop the blog"). Now (the numbers above are
+from after this change):
+
+- Literal is only a greeting, then the phrase written as such. "Earshot" or "ear
+  shot" first with no greeting, standing apart ("Earshot, stop", "Ear shot. To
+  run."), is bare: like a sound-alike, it chimes and opens the command window but
+  sends nothing of its segment.
+- At finish the literal tier is decided on the unboosted hearings only: the plain
+  transcript (the boosted one when the boost changed nothing) and, for a wake
+  passed on words, the second hearing. The command is the boosted words after the
+  phrase when they have it too, else the unboosted words'. A wake passed on the
+  strict score alone follows the same rule on the unboosted transcript. A wake's
+  own clip is heard without names that spell the phrase ("earshot", "Earshot
+  Spike", "airshot").
+- After a window-only pass (bare, sound-alike, or a transcript without the
+  literal phrase), the window takes only speech that starts after the chime: a
+  sentence begun or said during the confirm is not the command. After "Hey
+  Earshot" alone a command said during the confirm is still kept.
+- The probe uses the same rule; its end to end stand-in takes Parakeet's head
+  text as the unboosted transcript.
+
+Left to do: the listening power run (`scripts/listen-power.sh`, needs sudo), and
+a check with a real voice in a real room (`scripts/eval-listener.sh record`).
+The noise-gate conditions 0.4 and 0.6 are mostly missed; how often a real mic
+does that is for the real voice check.
+
 ## Listening (plan 2)
 
 Release gate: the release waits for docs/superpowers/specs/2026-10-11-listening-probe.md (the Task 0 measurements) and the Task 21 eval output (`eval-parser.sh`, `eval-listener.sh`, the latency and power runs).
