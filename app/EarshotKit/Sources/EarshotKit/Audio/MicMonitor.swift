@@ -5,7 +5,9 @@ import Foundation
 /// Knows when another app captures from the mic, for example during a call
 /// or while you dictate. Follows Core Audio's process list with property
 /// listeners, so it costs nothing while nothing changes. Earshot itself and
-/// always-on listeners (Siri, Voice Control) do not count.
+/// always-on listeners (Siri, Voice Control) do not count, and neither does
+/// input from no input device: a screen recording with system audio or an
+/// app that records system audio (see MicProcess).
 public final class MicMonitor: MicSource, @unchecked Sendable {
     static let ignored = ["com.apple.corespeechd", "com.apple.SpeechRecognitionCore", "com.apple.speech.",
                           "com.apple.inputmethod.ironwood"]
@@ -54,15 +56,17 @@ public final class MicMonitor: MicSource, @unchecked Sendable {
         return stream
     }
 
-    /// Each app that captures now and whether it counts, for diagnostics.
+    /// Each app that runs audio input now and whether it counts, for
+    /// diagnostics. A screen recording shows as com.apple.replayd, not counted.
     public func appsUsingMic() -> [(bundleID: String, counts: Bool)] {
         queue.sync {
-            Self.processes().compactMap { p in
-                guard Self.uint(p, kAudioProcessPropertyIsRunningInput) != 0 else { return nil }
-                let id = Self.bundleID(p)
-                return (id, Self.pid(p) != ownPID && Self.counts(bundleID: id))
-            }
+            Self.inputProcesses().map { ($0.bundleID, $0.counts(ownPID: ownPID)) }
         }
+    }
+
+    /// Whether any of these processes holds the mic for another app.
+    static func busy(_ processes: [MicProcess], ownPID: pid_t) -> Bool {
+        processes.contains { $0.counts(ownPID: ownPID) }
     }
 
     // MARK: - on queue
@@ -72,6 +76,10 @@ public final class MicMonitor: MicSource, @unchecked Sendable {
             watched.insert(p)
             var addr = Self.address(kAudioProcessPropertyIsRunningInput)
             AudioObjectAddPropertyListenerBlock(p, &addr, queue) { [weak self] _, _ in self?.refresh() }
+            // A screen recording that adds the mic keeps input running and
+            // changes only the devices.
+            var devices = Self.address(kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+            AudioObjectAddPropertyListenerBlock(p, &devices, queue) { [weak self] _, _ in self?.refresh() }
         }
     }
 
@@ -83,27 +91,52 @@ public final class MicMonitor: MicSource, @unchecked Sendable {
     }
 
     private func compute() -> Bool {
-        Self.processes().contains { p in
-            Self.uint(p, kAudioProcessPropertyIsRunningInput) != 0 && Self.pid(p) != ownPID
-                && Self.counts(bundleID: Self.bundleID(p))
-        }
+        Self.busy(Self.inputProcesses(), ownPID: ownPID)
     }
 
     // MARK: - Core Audio helpers
 
-    static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
-                                   mElement: kAudioObjectPropertyElementMain)
+    static func address(_ selector: AudioObjectPropertySelector,
+                        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    }
+
+    /// The processes that run audio input now, with the devices they use.
+    static func inputProcesses() -> [MicProcess] {
+        processes().compactMap { p in
+            guard uint(p, kAudioProcessPropertyIsRunningInput) != 0 else { return nil }
+            return MicProcess(pid: pid(p), bundleID: bundleID(p), runningInput: true,
+                              inputDevices: objects(p, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)?
+                                  .map { device($0) })
+        }
+    }
+
+    /// A device and, for an aggregate, its active sub-devices (two levels at
+    /// most). What Core Audio does not answer stays nil, and counts.
+    static func device(_ id: AudioObjectID, depth: Int = 0) -> MicDevice {
+        let transport = uint(id, kAudioDevicePropertyTransportType)
+        var d = MicDevice(transport: transport,
+                          inputStreams: objects(id, kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeInput)?.count)
+        if depth < 2, transport == kAudioDeviceTransportTypeAggregate || transport == kAudioDeviceTransportTypeAutoAggregate {
+            d.subdevices = objects(id, kAudioAggregateDevicePropertyActiveSubDeviceList)?.map { device($0, depth: depth + 1) }
+        }
+        return d
+    }
+
+    /// An array of object IDs, or nil when Core Audio does not answer.
+    static func objects(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID]? {
+        var addr = address(selector, scope: scope)
+        var size = UInt32(0)
+        guard AudioObjectGetPropertyDataSize(object, &addr, 0, nil, &size) == noErr else { return nil }
+        guard size > 0 else { return [] }
+        var list = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(object, &addr, 0, nil, &size, &list) == noErr else { return nil }
+        return Array(list.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
     }
 
     static func processes() -> [AudioObjectID] {
-        var addr = address(kAudioHardwarePropertyProcessObjectList)
-        var size = UInt32(0)
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return [] }
-        var list = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &list) == noErr else { return [] }
-        return list
+        objects(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList) ?? []
     }
 
     static func uint(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32 {
