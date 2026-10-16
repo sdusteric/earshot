@@ -103,6 +103,31 @@ final class Box<T>: @unchecked Sendable {
         #expect(await player.played == ["While you were away: Blog needs you. Billing service finished."])
     }
 
+    /// A wait you dismissed in Activity before you left is not in the recap,
+    /// even when the plugin says again that the session needs you.
+    @Test func theRecapLeavesADismissedWaitOut() async throws {
+        let player = FakePlayer()
+        let speech = SpeechOut(synth: FakeSynth(), player: player, mic: FakeMic(), ducker: FakeDucker())
+        let p = path()
+        let box = DismissalsBox()
+        let sessions = SessionStore()
+        let core = EarshotCore(socketPath: p, speech: speech, sessions: sessions, events: EventLog(), dismissals: box)
+        try await core.start()
+        defer { core.stop() }
+        _ = try send(p, #"{"v":1,"type":"status","session":"b","state":"needs","name":"blog"}"#)
+        #expect(await eventually { await sessions.sessions.first?.state == .needs })
+        var d = Dismissals()
+        d.dismiss("b")
+        box.set(d)
+        await core.wentAway(at: Date().addingTimeInterval(-3600))
+        _ = try send(p, #"{"v":1,"type":"say","text":"Blog still needs your OK.","kind":"need","session":"b","name":"blog","muted":true}"#)
+        _ = try send(p, #"{"v":1,"type":"say","text":"Done.","kind":"done","session":"a","name":"docs","muted":true}"#)
+        try await Task.sleep(for: .milliseconds(100))
+        let recap = await core.cameBack(speak: true)
+        #expect(recap?.text == "While you were away: Docs finished.")
+        #expect(recap?.sessions == ["a"])
+    }
+
     @Test func noRecapWhenItMayNotSpeak() async throws {
         let player = FakePlayer()
         let speech = SpeechOut(synth: FakeSynth(), player: player, mic: FakeMic(), ducker: FakeDucker())

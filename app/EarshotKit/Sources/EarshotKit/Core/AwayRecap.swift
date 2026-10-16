@@ -77,6 +77,17 @@ public struct AwayRecap: Sendable {
         return Recap(text: text, sessions: Set(items.map(\.session)), since: leftAt)
     }
 
+    /// The same, from the sessions as the store lists them. A wait you
+    /// dismissed in Activity reads as open, as it does there, so the recap
+    /// never says a dismissed session needs you. A wait that began after the
+    /// dismissal is news again.
+    public mutating func back(at now: Date, sessions: [SessionInfo], dismissals: Dismissals) -> Recap? {
+        let list = dismissals.apply(sessions)
+        let states = Dictionary(list.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        let names = Dictionary(list.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        return back(at: now, states: states, names: names)
+    }
+
     /// The change as it stands, given the session's state now (nil: unknown).
     /// nil when it is no longer news.
     static func current(_ change: Change, state: SessionState?) -> Change? {
@@ -126,7 +137,7 @@ actor AwayBook {
     private var recap = AwayRecap()
     func left(at date: Date) { recap.left(at: date) }
     func note(_ line: SpokenLine) { recap.note(line) }
-    func back(at date: Date, states: [String: SessionState], names: [String: String]) -> AwayRecap.Recap? {
-        recap.back(at: date, states: states, names: names)
+    func back(at date: Date, sessions: [SessionInfo], dismissals: Dismissals) -> AwayRecap.Recap? {
+        recap.back(at: date, sessions: sessions, dismissals: dismissals)
     }
 }

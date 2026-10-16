@@ -9,7 +9,8 @@ that need the real app, real audio and a person.
 swift test --package-path app/EarshotKit
 EARSHOT_TEST_DUCK=1 swift test --package-path app/EarshotKit --filter TapDuckerTests
 EARSHOT_TEST_KOKORO=1 swift test --package-path app/EarshotKit --filter EngineTests
-EARSHOT_TEST_MIC_HOG=<path to a program that opens the mic for N seconds> swift test --package-path app/EarshotKit --filter seesAnotherAppOpenTheMic
+# compile once: swiftc -O tests/mic-hog.swift -o /tmp/mic-hog (opens the default input for N seconds)
+EARSHOT_TEST_MIC_HOG=/tmp/mic-hog swift test --package-path app/EarshotKit --filter seesAnotherAppOpenTheMic
 bash tests/stuck-and-levels.sh
 bash tests/app-handoff.sh
 bash tests/engines.sh
@@ -205,6 +206,58 @@ from after this change):
   Earshot" alone a command said during the confirm is still kept.
 - The probe uses the same rule; its end to end stand-in takes Parakeet's head
   text as the unboosted transcript.
+
+### Experiment, 2026-10-16: a second spotter term, "earshot" alone (not adopted)
+
+The question: a noise gate that cuts the start of a wake loses the "Hey", and
+the spotter's only phrase is "hey earshot". Would a second term, "earshot"
+alone, with its own threshold, catch those wakes? Its fire would be window only
+(it chimes and opens the command window, never sends the words said with it),
+so dispatch false wakes stay 0 by construction.
+
+Method: wake-bench now records the second term's score on the same pass of the
+model (the bare column, `CtcWakeSpotter.wakeScores`; the listener does not use
+it, and the phrase's scores are unchanged, 70 of 70 rows identical to the
+earlier run). Run with `--confirmers apple` in 10 fresh processes of up to 1000
+files: the gated positives (gate 0.2, 0.4 and 0.6, 2880), all mentions (2250), a
+fixed random sample of 1500 near-misses and all of LibriSpeech (2620, 5.40 h).
+`wake-rescore ... --threshold -8 --bare B` holds the phrase at -8.0 (sensitivity
+5) with Apple's confirm and the listener's rule, and adds a bare fire wherever
+the phrase did not fire: it passes only on Apple's words (any tier), never on no
+answer, and counts as window.
+
+The bare threshold was chosen on tune: -8.5 is the lowest where the tune
+near-miss windows rise by under 1 point (33 to 42 of 968, +0.9 points; -8.75
+and -9.0 are +1.0 and +1.1).
+
+Positives woken, shipped wake against the bare term at -8.5:
+
+| Split | Gate 0.2 | Gate 0.4 | Gate 0.6 |
+|---|---|---|---|
+| tune (of 640 each), shipped | 243 (38.0%) | 26 (4.1%) | 2 (0.3%) |
+| tune, with "earshot" at -8.5 | 268 (41.9%) | 36 (5.6%) | 3 (0.5%) |
+| holdout (of 320 each), shipped | 109 (34.1%) | 19 (5.9%) | 3 (0.9%) |
+| holdout, with "earshot" at -8.5 | 119 (37.2%) | 21 (6.6%) | 3 (0.9%) |
+
+False wakes at -8.5 against shipped: near-miss window tune 33 to 42 of 968,
+holdout 17 to 22 of 532 (+0.9 points each); mention window tune 6 to 8 of 1500,
+holdout 2 to 2 of 750; dispatch 0 everywhere; LibriSpeech 0.00 an hour of either
+kind, but the spotter fires 253.2 times an hour instead of 142.6, so Apple's
+confirm runs 78% more often on speech. Across the sweep, gate 0.4 (both splits)
+goes from 45 to at most 61 of 960 (bare -9.0, near-miss tune +1.1 points) and
+gate 0.6 from 5 to 6.
+
+Decision: not adopted. The conditions the term was for barely move (gate 0.4 +10
+of 640 on tune and +2 of 320 on holdout, gate 0.6 +1 and 0), for as many extra
+near-miss chimes and a 78% busier confirm. The spotter is not what misses these
+wakes. At -8.0 the phrase alone already fires on 412 of 960 gate 0.4 positives
+and 271 of 960 gate 0.6, but only 45 and 5 wake: Apple hears the cut wake as
+"your shot", "for shot" or "shot, tell ..." (no greeting, so no tier passes), or
+"Earshot tell ..." with no comma (not bare), and at 0.6 the head is often the
+command alone ("tell the ...", "how many ..."). A gain here would have to come
+from the confirm rule, at the cost of the window false wakes those shapes
+bring. The bench keeps the bare column and the sweep (tests/wake/README.md, The
+bare term) to measure such a change.
 
 Left to do: the listening power run (`scripts/listen-power.sh`, needs sudo), and
 a check with a real voice in a real room (`scripts/eval-listener.sh record`).

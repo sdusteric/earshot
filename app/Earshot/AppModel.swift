@@ -140,6 +140,7 @@ final class AppModel {
             }
         }
         core = live.core
+        live.core.dismissals.set(dismissals)
         ducker = live.ducker
         mic = live.mic
         speakLevel = live.speakLevel
@@ -159,7 +160,7 @@ final class AppModel {
             answer: { [weak self] id, session, allow in self?.answer(approvalID: id, session: session, allow: allow) })
         bannerPoster = poster
         Task {
-            await live.core.banners.connect(show: { await poster.show($0) }, remove: { poster.remove($0) })
+            await live.core.banners.connect(show: { poster.show($0) }, remove: { poster.remove($0) })
             notificationsDenied = await BannerPoster.denied()
             notificationsUndecided = await BannerPoster.undecided()
         }
@@ -188,7 +189,13 @@ final class AppModel {
         Task { for await list in await live.core.sessions.changes() { knownRaw = list; applyDismissals(); await listeningChanged() } }
         // While a session works, Kokoro stays loaded, so the line that ends a long turn isn't a cold load.
         Task { for await list in await live.core.sessions.changes() { await live.synth.sessionsWorking(list.contains { $0.state == .working }) } }
-        Task { for await list in await live.core.approvals.changes() { approvals = list } }
+        Task {
+            for await list in await live.core.approvals.changes() {
+                approvals = list
+                // A banner posted before its prompt arrived gets Allow and Deny now.
+                poster.approvalsChanged()
+            }
+        }
         Task { for await s in await live.core.speech.stateChanges() { speechState = s; updateActivity() } }
         Task {
             let stack = await ListenStack.live(core: live.core, history: history) { box.value }
@@ -215,6 +222,8 @@ final class AppModel {
             Task { for await text in await stack.loop.heardLines() { caption = OrbCaption(kind: .heard, text: text) } }
             Task {
                 for await r in await stack.dispatcher.receipts() {
+                    // A receipt for an older send never replaces a newer one's line.
+                    if let kept = receipts[r.session], kept.sent > r.sent { continue }
                     receipts[r.session] = r
                     // The card has said what became of the answer: let it go shortly.
                     if let at = answered[r.session], r.sent >= at { releaseCard(r.session, at, after: .seconds(4)) }
@@ -375,16 +384,24 @@ final class AppModel {
         return d
     }
 
+    /// Saves them, and hands them to the kit, so the roll call and the recap read them too.
     private func saveDismissals() {
         UserDefaults.standard.set(try? JSONEncoder().encode(dismissals), forKey: Self.dismissalsKey)
+        core?.dismissals.set(dismissals)
     }
 
-    /// Takes a waiting session off Waiting on You, the recap and the panel
-    /// until it asks something new. It is not stopped and nothing is sent.
+    /// Takes a waiting session off Waiting on You, the recap, the roll call and
+    /// the panel until it asks something new. It is not stopped and nothing is
+    /// sent. Its held "needs you" lines and its banner go, as for an answered wait.
     func dismiss(_ id: String) {
         dismissals.dismiss(id)
         saveDismissals()
         applyDismissals()
+        guard let core else { return }
+        Task {
+            await core.speech.sessionAnswered(id)
+            await core.banners.sessionChanged(id, to: .open)
+        }
     }
 
     /// Puts a dismissed session back on Waiting on You.
@@ -406,7 +423,7 @@ final class AppModel {
     }
 
     /// What you typed in the session view, sent to that session. Returns the
-    /// line Earshot would have said ("Sent to blog.", "Queued, blog is busy.").
+    /// line Earshot would have said ("Sent to blog.", "Queued. Blog will see it when it finishes.").
     /// What became of it arrives later in `receipts`. `answering` is a waiting
     /// card's answer: the brief keeps that card up until the receipt.
     func send(_ text: String, toSession id: String, answering: Bool = false) async -> String {
@@ -414,8 +431,8 @@ final class AppModel {
         let at = Date()
         if answering { answered[id] = at }
         let line = await stack.dispatcher.send(typed: text, toSession: id).line ?? ""
-        // Only "Sent to" has a receipt coming, and not always (a background
-        // session resumes without one): keep the card 10 seconds at most.
+        // A "Sent to" receipt comes within seconds: keep the card 10 seconds at most. A queued
+        // reply's receipt can take minutes, and one still waiting on your OK has none.
         if answering { releaseCard(id, at, after: line.hasPrefix("Sent") ? .seconds(10) : .zero) }
         return line
     }

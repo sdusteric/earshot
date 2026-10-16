@@ -82,6 +82,28 @@ func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, 
         #expect(s.id == "e")
     }
 
+    /// After a relaunch the sessions still open go by the names they had, even
+    /// though the list is in another order and a title has changed.
+    @Test func namesStayAcrossARelaunch() async {
+        let url = FileManager.default.temporaryDirectory.appending(path: "names-\(UUID().uuidString)/session-names.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        func launch(_ agents: [AgentEntry]) async -> [String: String] {
+            let d = SessionDirectory(runner: FakeRunner(agents), store: SessionStore(namesURL: url), labeler: labeler,
+                                     claudeJSON: "/nonexistent")
+            await d.refresh()
+            return Dictionary(uniqueKeysWithValues: await d.sessions.map { ($0.id, $0.name) })
+        }
+        let before = await launch([agent("a", "reflow", name: "reflow-d5", startedAt: 1_790_000_000_000),
+                                   agent("b", "reflow", name: "Project status and milestones", startedAt: 1_790_000_100_000)])
+        #expect(before == ["a": "Reflow", "b": "Reflow milestones"])
+        let after = await launch([agent("b", "reflow", name: "Project status", startedAt: 1_790_000_100_000),
+                                  agent("a", "reflow", name: "Retry queue", startedAt: 1_790_000_000_000),
+                                  agent("c", "reflow", name: "Docs", startedAt: 1_790_000_200_000)])
+        #expect(after["a"] == "Reflow")
+        #expect(after["b"] == "Reflow milestones")
+        #expect(Set(after.values).count == 3)
+    }
+
     /// The real sessions, as `claude agents --json` listed them.
     static let realAgents = [
         agent("wedding", "wedding", name: "Create guest confirmation email with event details", kind: "background", startedAt: 1),

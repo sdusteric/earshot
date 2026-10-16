@@ -125,6 +125,37 @@ import Testing
         r.note(line("Done.", .done, "a", "blog", at: 100))
         #expect(r.back(at: at(11 * 60), states: [:], names: [:])?.since == at(0))
     }
+
+    func info(_ id: String, _ name: String, _ state: SessionState, since s: TimeInterval) -> SessionInfo {
+        var i = SessionInfo(id: id, name: name, state: state, detail: nil, updated: at(s), project: nil, title: nil)
+        i.since = at(s)
+        return i
+    }
+
+    /// A wait you dismissed in Activity is not news when you come back.
+    @Test func aDismissedWaitIsNotSaid() {
+        var r = AwayRecap()
+        r.left(at: at(0))
+        // The plugin said again that blog needs you, about the wait you dismissed.
+        r.note(line("Blog still needs your OK.", .need, "a", "blog", at: 120))
+        r.note(line("Fixed the rounding bug.", .done, "b", "billing service", at: 60))
+        var d = Dismissals()
+        d.dismiss("a", now: at(-30))
+        let recap = r.back(at: at(15 * 60), sessions: [info("a", "blog", .needs, since: -60),
+                                                       info("b", "billing service", .done, since: 60)], dismissals: d)
+        #expect(recap?.text == "While you were away: Billing service finished.")
+        #expect(recap?.sessions == ["b"])
+    }
+
+    @Test func aWaitThatBeganAfterTheDismissalIsSaid() {
+        var r = AwayRecap()
+        r.left(at: at(0))
+        r.note(line("Hey, blog needs your OK.", .need, "a", "blog", at: 120))
+        var d = Dismissals()
+        d.dismiss("a", now: at(-30))
+        let recap = r.back(at: at(15 * 60), sessions: [info("a", "blog", .needs, since: 120)], dismissals: d)
+        #expect(recap?.text == "While you were away: Blog needs you.")
+    }
 }
 
 @Suite struct BannerBookTests {
@@ -209,4 +240,5 @@ import Testing
         try? await Task.sleep(for: .milliseconds(300))
         #expect(await posted.banners.isEmpty)
     }
+
 }

@@ -57,6 +57,32 @@ public enum BannerApproval {
     public static func body(_ a: OpenApproval) -> String {
         a.what.isEmpty ? "Wants your OK." : "Wants \(a.what)."
     }
+
+    /// A banner still in Notification Center: its session, and the prompt its
+    /// buttons answer (nil: it has none).
+    public struct Shown: Sendable, Equatable {
+        public let session: String
+        public let approval: String?
+
+        public init(session: String, approval: String?) {
+            self.session = session; self.approval = approval
+        }
+    }
+
+    /// The banners to post again, with buttons, now that the prompts are
+    /// `open`: a banner posted before its session's prompt reached Earshot has
+    /// none, and one whose prompt closed answers nothing. Each gets the
+    /// session's one open prompt, by the same rule as `match`. A banner whose
+    /// buttons answer a prompt that is still open is left alone.
+    public static func repost(shown: [Shown], open: [OpenApproval]) -> [(session: String, approval: OpenApproval)] {
+        var out: [(session: String, approval: OpenApproval)] = []
+        for b in shown where !out.contains(where: { $0.session == b.session }) {
+            if let id = b.approval, open.contains(where: { $0.id == id && $0.session == b.session }) { continue }
+            guard let a = match(session: b.session, open: open) else { continue }
+            out.append((b.session, a))
+        }
+        return out
+    }
 }
 
 /// Posts the banners. The app connects the poster; until then, and while the

@@ -18,6 +18,8 @@ public final class EarshotCore: Sendable {
     public let availability: ListenAvailability
     /// Notifications for a session that needs you while Earshot can't speak.
     public let banners: Banners
+    /// Waits you dismissed in Activity: the recap and the roll call read them as open.
+    public let dismissals: DismissalsBox
     private let away = AwayBook()
     private let server: LineServer
     private let inbox: AsyncStream<AppMessage>.Continuation
@@ -25,13 +27,14 @@ public final class EarshotCore: Sendable {
 
     public init(socketPath: String = EarshotCore.socketPath, speech: SpeechOut, sessions: SessionStore, events: EventLog,
                 approvals: ApprovalBook = ApprovalBook(), availability: ListenAvailability = ListenAvailability(),
-                banners: Banners = Banners()) {
+                banners: Banners = Banners(), dismissals: DismissalsBox = DismissalsBox()) {
         self.speech = speech
         self.sessions = sessions
         self.events = events
         self.approvals = approvals
         self.availability = availability
         self.banners = banners
+        self.dismissals = dismissals
         let (stream, inbox) = AsyncStream<AppMessage>.makeStream()
         self.stream = stream
         self.inbox = inbox
@@ -125,13 +128,12 @@ public final class EarshotCore: Sendable {
     public func wentAway(at date: Date = Date()) async { await away.left(at: date) }
 
     /// You came back. After 10 minutes or more away with something changed,
-    /// the recap is queued (when `speak` allows it) and returned.
+    /// the recap is queued (when `speak` allows it) and returned. A wait you
+    /// dismissed in Activity is not news.
     @discardableResult
     public func cameBack(at date: Date = Date(), speak: Bool) async -> AwayRecap.Recap? {
         let list = await sessions.sessions
-        let states = Dictionary(list.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
-        let names = Dictionary(list.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
-        guard let recap = await away.back(at: date, states: states, names: names), speak else { return nil }
+        guard let recap = await away.back(at: date, sessions: list, dismissals: dismissals.current), speak else { return nil }
         await events.add("recap")
         await speech.sayRecap(recap)
         return recap
@@ -154,7 +156,8 @@ public final class EarshotCore: Sendable {
         })
         let fullScreen = FullScreenWatch { config().quietInFullScreen }
         let speech = SpeechOut(synth: synth, player: player, mic: mic, quiet: fullScreen, ducker: ducker)
-        let core = EarshotCore(speech: speech, sessions: SessionStore(), events: EventLog(),
+        // Names are kept in a file, so a session goes by the same name after a relaunch.
+        let core = EarshotCore(speech: speech, sessions: SessionStore(namesURL: SessionStore.defaultNamesURL), events: EventLog(),
                                banners: Banners { config().banner })
         return (core, ducker, mic, synth, player.level, fullScreen)
     }

@@ -29,12 +29,15 @@ public actor Dispatcher {
         }
     }
 
-    /// What became of a prompt sent to an idle session, once watchReceipt knows.
+    /// What became of a prompt, once Earshot knows: sent to an idle session
+    /// (watchReceipt), queued behind a busy one (watchQueued), or a background
+    /// session resumed with it (watchResume).
     public struct Receipt: Sendable, Equatable {
         public enum Result: Sendable, Equatable {
             /// It started working on the prompt (or stopped on a prompt of its own).
             case started
             /// Claude Code answered and the session stayed idle: it didn't pick it up.
+            /// A queued prompt: its session's turn ended and no new one began.
             case missed
             /// The session closed after the send.
             case closed
@@ -86,6 +89,12 @@ public actor Dispatcher {
     private let say: @Sendable (String) async -> Void
     private let receiptTimeout: Duration
     private let pollInterval: Duration
+    /// How long a reply queued behind a busy session is watched for its start.
+    private let queuedTimeout: Duration
+    /// Waits you dismissed in Activity: what Earshot says reads them as open.
+    private let dismissals: @Sendable () -> Dismissals
+    /// The one watch per session on a queued reply; a newer queued reply takes it over.
+    private var queuedWatches: [String: UUID] = [:]
     private var misses = 0
     /// Claude Code versions whose sockets did not work, for this run only.
     private var brokenVersions: Set<String> = []
@@ -97,10 +106,12 @@ public actor Dispatcher {
 
     public init(directory: SessionDirectory, store: SessionStore, transport: any SessionTransport, runner: any ClaudeRunner,
                 approvals: ApprovalBook, say: @escaping @Sendable (String) async -> Void,
-                receiptTimeout: Duration = .seconds(5), pollInterval: Duration = .seconds(1)) {
+                dismissals: @escaping @Sendable () -> Dismissals = { Dismissals() },
+                receiptTimeout: Duration = .seconds(5), pollInterval: Duration = .seconds(1),
+                queuedTimeout: Duration = .seconds(600)) {
         self.directory = directory; self.store = store; self.transport = transport; self.runner = runner
-        self.approvals = approvals; self.say = say; self.receiptTimeout = receiptTimeout
-        self.pollInterval = pollInterval
+        self.approvals = approvals; self.say = say; self.dismissals = dismissals; self.receiptTimeout = receiptTimeout
+        self.pollInterval = pollInterval; self.queuedTimeout = queuedTimeout
     }
 
     private func freshOpener(_ n: Int) -> Int {
@@ -120,10 +131,11 @@ public actor Dispatcher {
             return await askStopAll()
         case .status(nil):
             await directory.refresh(ifOlderThan: 2)
-            return Outcome(line: RollCall.line(await directory.sessions, now: Date()))
+            return Outcome(line: RollCall.line(await directory.sessions, now: Date(), dismissals: dismissals()))
         case .greet:
             await directory.refresh(ifOlderThan: 2)
-            return Outcome(line: RollCall.greeting(await directory.sessions, now: Date(), pick: freshOpener))
+            return Outcome(line: RollCall.greeting(await directory.sessions, now: Date(), dismissals: dismissals(),
+                                                   pick: freshOpener))
         case .answer(let allow, let target):
             return await answer(allow: allow, target: target)
         case .start(let project, let prompt):
@@ -210,7 +222,7 @@ public actor Dispatcher {
     private func act(_ c: Command, on s: LiveSession) async -> Outcome {
         switch c {
         case .send(_, let prompt): return await send(prompt, to: s)
-        case .status: return Outcome(line: RollCall.sentence(s, now: Date()), spokeAbout: s.id)
+        case .status: return Outcome(line: RollCall.sentence(s, now: Date(), dismissals: dismissals()), spokeAbout: s.id)
         case .stop(_, let now): return await stop(s, now: now)
         default: return Outcome(line: Self.didntGetIt)
         }
@@ -240,18 +252,44 @@ public actor Dispatcher {
         if s.waiting || s.state == .needs {
             return Outcome(line: "Queued. \(Self.upper(s.name)) is still waiting on your OK.", spokeAbout: s.id)
         }
-        if s.busy || s.state == .working {
-            return Outcome(line: "Queued, \(s.name) is busy.", spokeAbout: s.id)
-        }
         let session = s
+        // The list can be 2 s old. The plugin's status, when it came after the
+        // list and says the turn ended, is the newer word: the reply runs now.
+        let live = await store.sessions.first { $0.id == s.id }
+        let listedAt = await directory.listedAt
+        let endedSinceListed = live.map { info in
+            Self.turnEnded(info.state) && listedAt.map { info.updated >= $0 } ?? true
+        } ?? false
+        if s.busy || s.state == .working, !endedSinceListed {
+            // Claude Code takes it up when the current turn ends; the receipt says when.
+            let token = UUID()
+            queuedWatches[s.id] = token
+            // Working at the send, by the plugin's word, else by Claude Code's list.
+            let wasWorking = live.map { Self.turnBegan($0.state) } ?? true
+            // Subscribed before the reply returns, so no status after the send is missed.
+            let changes = await store.changes()
+            Task {
+                await self.watchQueued(session, sentAt: sentAt, wasWorking: wasWorking, token: token, changes: changes)
+            }
+            return Outcome(line: Self.queuedLine(s.name), spokeAbout: s.id)
+        }
+        // This receipt is the newer word: a queued watch from before says nothing.
+        queuedWatches[s.id] = nil
         Task { await self.watchReceipt(session, sentAt: sentAt) }
         return Outcome(line: "Sent to \(s.name).", spokeAbout: s.id)
     }
 
+    static func queuedLine(_ name: String) -> String { "Queued. \(upper(name)) will see it when it finishes." }
+
     /// `claude --resume <id> --bg "<prompt>"`, with no other flags, continues the same session.
     private func resume(_ s: LiveSession, _ prompt: String) async -> Outcome {
+        let sentAt = Date()
         let r = await runner.run(["--resume", s.id, "--bg", prompt], cwd: s.cwd.isEmpty ? nil : s.cwd, timeout: .seconds(15))
-        return r.status == 0 ? Outcome(line: "Sent to \(s.name).", spokeAbout: s.id) : Outcome(line: "Couldn't reach \(s.name).")
+        guard r.status == 0 else { return Outcome(line: "Couldn't reach \(s.name).") }
+        queuedWatches[s.id] = nil
+        let session = s
+        Task { await self.watchResume(session, sentAt: sentAt) }
+        return Outcome(line: "Sent to \(s.name).", spokeAbout: s.id)
     }
 
     /// Every receipt watchReceipt settles, for the line under a reply field.
@@ -267,9 +305,107 @@ public actor Dispatcher {
     private func dropReceipts(_ id: UUID) { receiptConts[id] = nil }
 
     private func watchReceipt(_ s: LiveSession, sentAt: Date) async {
-        let result = await checkReceipt(s, sentAt: sentAt)
-        let r = Receipt(session: s.id, name: s.name, sent: sentAt, result: result)
-        receiptConts.values.forEach { $0.yield(r) }
+        publish(Receipt(session: s.id, name: s.name, sent: sentAt, result: await checkReceipt(s, sentAt: sentAt)))
+    }
+
+    private func publish(_ r: Receipt) { receiptConts.values.forEach { $0.yield(r) } }
+
+    /// A background session resumed with the prompt: started once Claude Code
+    /// lists it working or waiting, or the plugin says it works. A resumed
+    /// session may not be listed at once, so missing from the list is not
+    /// closed here. Watched three receipt timeouts at most, then unknown. Never
+    /// said, and never counted as a miss: resuming doesn't use the socket.
+    private func watchResume(_ s: LiveSession, sentAt: Date) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + receiptTimeout * 3
+        var result = Receipt.Result.unknown
+        while clock.now < deadline {
+            if await received(s.id, after: sentAt) { result = .started; break }
+            await directory.refresh()
+            if await directory.lastRefreshSucceeded, let now = await directory.session(s.id), now.busy || now.waiting {
+                result = .started
+                break
+            }
+            try? await Task.sleep(for: pollInterval)
+        }
+        publish(Receipt(session: s.id, name: s.name, sent: sentAt, result: result))
+    }
+
+    private enum QueuedEvent: Sendable { case store([SessionInfo]), tick }
+
+    /// A reply queued behind a busy session: Claude Code takes it up when the
+    /// turn ends. The plugin's statuses show that turn end (done, idle or
+    /// failed) and the next one begin: started. Claude Code's list, read at most
+    /// every ten polls (and shared with other refreshes), shows a session that
+    /// closed. A turn that ended with nothing begun a receipt timeout later,
+    /// with Claude Code listing the session idle, is a miss. When the plugin's
+    /// last word at the send was a turn end (`wasWorking` false: Claude Code's
+    /// list had not caught up), the turn it was queued behind had ended
+    /// already, so a turn that begins after the send is the reply's: started.
+    /// One watch per session, with one poll, for queuedTimeout at most; then
+    /// unknown. A later send to the session ends it without a receipt. Never
+    /// said aloud and never counted toward the broken mark, which is about idle sends.
+    private func watchQueued(_ s: LiveSession, sentAt: Date, wasWorking: Bool, token: UUID,
+                             changes: AsyncStream<[SessionInfo]>) async {
+        let result = await checkQueued(s, sentAt: sentAt, wasWorking: wasWorking, token: token, changes: changes)
+        guard queuedWatches[s.id] == token else { return }   // a newer queued reply took over
+        queuedWatches[s.id] = nil
+        publish(Receipt(session: s.id, name: s.name, sent: sentAt, result: result))
+    }
+
+    private func checkQueued(_ s: LiveSession, sentAt: Date, wasWorking: Bool, token: UUID,
+                             changes: AsyncStream<[SessionInfo]>) async -> Receipt.Result {
+        let clock = ContinuousClock()
+        let deadline = clock.now + queuedTimeout
+        let (events, cont) = AsyncStream<QueuedEvent>.makeStream()
+        let feed = Task { for await list in changes { cont.yield(.store(list)) } }
+        let ticker = Task { [pollInterval] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: pollInterval)
+                cont.yield(.tick)
+            }
+        }
+        defer { feed.cancel(); ticker.cancel(); cont.finish() }
+        let listEvery = Self.seconds(pollInterval * 10)
+        var ticks = 0
+        // When the plugin said the turn ended, and when Claude Code was last asked about it (or the end).
+        var ended: (at: Date, by: ContinuousClock.Instant)?
+        for await e in events {
+            guard queuedWatches[s.id] == token else { return .unknown }
+            if clock.now >= deadline { return .unknown }
+            switch e {
+            case .store(let list):
+                guard let info = list.first(where: { $0.id == s.id }), info.updated >= sentAt else { continue }
+                if let end = ended {
+                    if Self.turnBegan(info.state), info.updated >= end.at { return .started }
+                } else if Self.turnEnded(info.state) {
+                    ended = (info.updated, clock.now)
+                } else if !wasWorking, Self.turnBegan(info.state) {
+                    return .started
+                }
+            case .tick:
+                ticks += 1
+                if let end = ended, clock.now >= end.by + receiptTimeout {
+                    // The turn ended a while ago with nothing begun: ask Claude Code now.
+                    await directory.refresh()
+                    guard await directory.lastRefreshSucceeded else { ended = (end.at, clock.now); continue }
+                    guard let now = await directory.session(s.id) else { return .closed }
+                    return now.busy || now.waiting ? .started : .missed
+                }
+                guard ticks % 10 == 0 else { continue }
+                await directory.refresh(ifOlderThan: listEvery)
+                if await directory.lastRefreshSucceeded, await directory.session(s.id) == nil { return .closed }
+            }
+        }
+        return .unknown
+    }
+
+    /// The plugin's states that end a turn, and the ones that show a new one began.
+    static func turnEnded(_ s: SessionState) -> Bool { [.done, .open, .failed].contains(s) }
+    static func turnBegan(_ s: SessionState) -> Bool { [.working, .needs, .reply].contains(s) }
+
+    static func seconds(_ d: Duration) -> TimeInterval {
+        Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
     }
 
     /// An idle session that got the prompt starts working: the plugin's

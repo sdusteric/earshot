@@ -21,7 +21,11 @@ public enum RollCall {
     }
 
     /// hour: the local hour now, for the late-night note (nil: from the clock).
-    public static func line(_ sessions: [LiveSession], now: Date, hour: Int? = nil) -> String {
+    /// A wait you dismissed in Activity reads as open here too, so the roll
+    /// call never says a dismissed session needs you.
+    public static func line(_ sessions: [LiveSession], now: Date, hour: Int? = nil,
+                            dismissals: Dismissals = Dismissals()) -> String {
+        let sessions = dismissals.apply(sessions)
         guard !sessions.isEmpty else { return "No Claude sessions are open." }
         let total = sessions.count
         let head = "\(count(total)) session\(total == 1 ? "" : "s")."
@@ -41,7 +45,10 @@ public enum RollCall {
         return parts.joined(separator: " ")
     }
 
-    public static func sentence(_ s: LiveSession, now: Date) -> String {
+    /// One session's sentence. Pass the dismissals for a session said on its
+    /// own ("how's billing?"); line and greeting apply them already.
+    public static func sentence(_ s: LiveSession, now: Date, dismissals: Dismissals = Dismissals()) -> String {
+        let s = dismissals.apply(s)
         let n = title(s.name)
         let waited = s.since.map { now.timeIntervalSince($0) } ?? 0
         switch effectiveState(s) {
@@ -70,8 +77,11 @@ public enum RollCall {
     /// "How are you doing?": a short answer, then only what matters. Unlike
     /// the roll call it doesn't list every session. pick(n) chooses one of n
     /// ways to open, so Earshot doesn't say the same words every time.
+    /// Dismissed waits read as open, as in the roll call.
     public static func greeting(_ sessions: [LiveSession], now: Date, hour: Int? = nil,
+                                dismissals: Dismissals = Dismissals(),
                                 pick: (Int) -> Int = { Int.random(in: 0..<$0) }) -> String {
+        let sessions = dismissals.apply(sessions)
         let hour = hour ?? Calendar.current.component(.hour, from: now)
         let ordered = sessions.sorted { (rank($0), $0.since ?? now) < (rank($1), $1.since ?? now) }
         let attention = ordered.filter { needsYou($0) }

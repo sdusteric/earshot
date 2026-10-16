@@ -116,6 +116,8 @@ public actor SessionDirectory {
     }
 
     public var sessions: [LiveSession] { list }
+    /// When `claude agents` last answered, or nil before it has.
+    public var listedAt: Date? { refreshedAt }
     public func session(_ id: String) -> LiveSession? { list.first { $0.id == id } }
 
     /// Refreshes unless the list is younger than this: the wake word already

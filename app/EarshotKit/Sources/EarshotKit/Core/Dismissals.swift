@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Sessions you dismissed while they waited on you. A dismissed session reads
 /// as open everywhere a waiting one would stand out (Waiting on You, the
@@ -32,6 +33,10 @@ public struct Dismissals: Sendable, Equatable, Codable {
         return out
     }
 
+    /// The lists as the app shows them.
+    public func apply(_ list: [SessionInfo]) -> [SessionInfo] { list.map { apply($0) } }
+    public func apply(_ list: [LiveSession]) -> [LiveSession] { list.map { apply($0) } }
+
     /// A session missing from both lists may only be missing from one check;
     /// its dismissal is dropped after this long. Session ids are never reused.
     public static let keepGone: TimeInterval = 7 * 86_400
@@ -57,4 +62,16 @@ public struct Dismissals: Sendable, Equatable, Codable {
     private static func waits(_ s: LiveSession) -> Bool {
         s.waiting || s.state == .needs || s.state == .reply
     }
+}
+
+/// The app's dismissals, for the parts of Earshot that speak about who needs
+/// you (the roll call, the greeting, the recap), so a dismissed wait reads as
+/// open there exactly as in Activity. The app sets it whenever they change.
+public final class DismissalsBox: Sendable {
+    private let value: Mutex<Dismissals>
+
+    public init(_ d: Dismissals = Dismissals()) { value = Mutex(d) }
+
+    public var current: Dismissals { value.withLock { $0 } }
+    public func set(_ d: Dismissals) { value.withLock { $0 = d } }
 }

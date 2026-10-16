@@ -142,6 +142,34 @@ import Testing
         #expect(SpokenNames.names([a2], keeping: n) == ["a": "Reflow"])
     }
 
+    /// Two sessions that were given the same name (remembered from an earlier
+    /// launch, say): the one that started first keeps it, whatever the order listed.
+    @Test func theOlderSessionKeepsAClashingName() {
+        let newer = SpokenNames.Entry(id: "n", project: "reflow", title: "Retry queue", label: "", started: Date(timeIntervalSince1970: 200))
+        let older = SpokenNames.Entry(id: "o", project: "reflow", title: "Docs", label: "", started: Date(timeIntervalSince1970: 100))
+        let n = SpokenNames.names([newer, older], keeping: ["n": "Reflow", "o": "Reflow"])
+        #expect(n["o"] == "Reflow")
+        #expect(n["n"] == "Reflow retry")
+        // With no start times, the order listed decides, as before.
+        let a = SpokenNames.Entry(id: "a", project: "reflow", title: "", label: "")
+        let b = SpokenNames.Entry(id: "b", project: "reflow", title: "Retry queue", label: "")
+        let m = SpokenNames.names([a, b], keeping: ["a": "Reflow", "b": "Reflow"])
+        #expect(m["a"] == "Reflow")
+        #expect(m["b"] == "Reflow retry")
+    }
+
+    /// A name kept in this run beats a remembered one, however old the
+    /// remembered session; a remembered name that is free is reused.
+    @Test func aKeptNameBeatsARememberedOne() {
+        let older = SpokenNames.Entry(id: "o", project: "reflow", title: "", label: "", started: Date(timeIntervalSince1970: 100))
+        let newer = SpokenNames.Entry(id: "n", project: "reflow", title: "Retry queue", label: "", started: Date(timeIntervalSince1970: 200))
+        let n = SpokenNames.names([older, newer], keeping: ["n": "Reflow"], remembered: ["o": "Reflow"])
+        #expect(n["n"] == "Reflow")
+        #expect(n["o"] != "Reflow")
+        let m = SpokenNames.names([older, newer], keeping: ["n": "Reflow"], remembered: ["o": "Reflow docs"])
+        #expect(m == ["n": "Reflow", "o": "Reflow docs"])
+    }
+
     @Test(arguments: [
         ("Fix the flaky invoice test session", "reflow", ["flaky", "flaky invoice", "flaky invoice test"]),
         ("What's next", "finebrief", ["what's next"]),

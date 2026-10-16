@@ -24,14 +24,16 @@ actor FakeTransport: SessionTransport {
     }()
     let secret = "0123456789abcdef0123456789abcdef"
 
-    func make(_ agents: [AgentEntry], claudeJSON: String = "/nonexistent", poll: Duration = .seconds(1)) -> (Dispatcher, FakeRunner, ApprovalBook) {
+    func make(_ agents: [AgentEntry], claudeJSON: String = "/nonexistent", poll: Duration = .seconds(1),
+              queued: Duration = .seconds(5), dismissals: DismissalsBox = DismissalsBox()) -> (Dispatcher, FakeRunner, ApprovalBook) {
         let runner = FakeRunner(agents)
         let directory = SessionDirectory(runner: runner, store: store, labeler: Labeler(model: nil, liveDir: NSTemporaryDirectory()),
                                          claudeJSON: claudeJSON)
         let book = ApprovalBook(stateDir: approvalsDir, isAlive: { _ in true })
         let said = self.said
         let d = Dispatcher(directory: directory, store: store, transport: transport, runner: runner, approvals: book,
-                           say: { await said.add($0) }, receiptTimeout: .milliseconds(200), pollInterval: poll)
+                           say: { await said.add($0) }, dismissals: { dismissals.current },
+                           receiptTimeout: .milliseconds(200), pollInterval: poll, queuedTimeout: queued)
         return (d, runner, book)
     }
 
@@ -52,7 +54,7 @@ actor FakeTransport: SessionTransport {
 
     @Test func aBusySessionIsQueued() async {
         let (d, _, _) = make([agent("a", "billing-service", status: "busy")])
-        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Queued, Billing service is busy.")
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Queued. Billing service will see it when it finishes.")
     }
 
     @Test func aSessionOnAPromptSaysItStillWaits() async {
@@ -246,15 +248,230 @@ actor FakeTransport: SessionTransport {
         #expect(await got.items.first?.line == nil)
     }
 
-    /// A queued send has no receipt: the session is busy or waits on you.
-    @Test func aQueuedSendHasNoReceipt() async {
-        let (d, _, _) = make([agent("a", "billing-service", status: "busy")])
+    /// A reply queued behind a busy session: its receipt comes once the turn
+    /// ends and the session starts on it.
+    @Test func aQueuedReplyHasAReceiptWhenTheSessionStartsOnIt() async {
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
         let got = Collected<Dispatcher.Receipt>()
         let stream = await d.receipts()
         Task { for await r in stream { await got.add(r) } }
-        #expect(await d.send(typed: "x", toSession: "a").line == "Queued, Billing service is busy.")
-        try? await Task.sleep(for: .milliseconds(400))
+        let before = Date()
+        #expect(await d.send(typed: "x", toSession: "a").line == "Queued. Billing service will see it when it finishes.")
+        // Progress on the turn it is on is not the start.
+        await store.apply(.init(session: "a", state: .working, detail: "still on it", name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(100))
         #expect(await got.items.isEmpty)
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        let r = await got.items.first
+        #expect(r?.result == .started)
+        #expect((r?.sent ?? .distantPast) >= before)
+        #expect(r?.line == "Billing service started working.")
+        #expect(await said.items.isEmpty)
+    }
+
+    /// The turn ended and nothing began: Claude Code is asked, and an idle session didn't pick it up.
+    /// Not said aloud, and not a miss toward the broken mark.
+    @Test func aQueuedReplyWhoseTurnEndsWithNothingBegunIsMissed() async {
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setAgents([agent("a", "billing-service")])
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .missed)
+        #expect(await got.items.first?.line == "Billing service didn't pick it up.")
+        #expect(await said.items.isEmpty)
+    }
+
+    /// Claude Code lists it busy when asked after the turn ended: it is on it,
+    /// though the plugin never said so.
+    @Test func aQueuedReplyListedBusyAfterTheTurnEndedStarted() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+    }
+
+    @Test func aQueuedReplyToASessionThatClosedSaysSo() async {
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setAgents([])
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .closed)
+        #expect(await got.items.first?.line == "Billing service has closed.")
+    }
+
+    /// The watch is bounded: a turn still going at the end leaves the receipt unknown, with no line.
+    @Test func aQueuedReplyStillWaitingAtTheEndIsUnknown() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20),
+                             queued: .milliseconds(150))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .unknown)
+        #expect(await got.items.first?.line == nil)
+    }
+
+    /// One watch per session: a newer queued reply takes it over, so the start is told once, for it.
+    @Test func aNewerQueuedReplyTakesTheWatchOver() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        try? await Task.sleep(for: .milliseconds(30))
+        let second = Date()
+        _ = await d.send(typed: "y", toSession: "a")
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await got.items.count == 1)
+        #expect((await got.items.first?.sent ?? .distantPast) >= second)
+    }
+
+    /// A reply queued behind a prompt waits on your OK, not on the session: no receipt.
+    @Test func aReplyQueuedBehindAPromptHasNoReceipt() async {
+        await store.apply(.init(session: "a", state: .needs, detail: "needs your OK", name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service", status: "waiting")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await got.items.isEmpty)
+    }
+
+    /// A background session resumed with the reply: started once Claude Code lists it working.
+    @Test func aResumedBackgroundSessionHasAReceipt() async {
+        let (d, runner, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "keep going", toSession: "g").line == "Sent to Wedding.")
+        await runner.setAgents([agent("g", "wedding", pid: 40, kind: "background", status: "busy")])
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+        #expect(await got.items.first?.line == "Wedding started working.")
+        #expect(await said.items.isEmpty)
+    }
+
+    /// Not listed working within the bound: unknown, with nothing said and no line.
+    @Test func aResumeNeverSeenWorkingIsUnknown() async {
+        let (d, _, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "keep going", toSession: "g")
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .unknown)
+        #expect(await got.items.first?.line == nil)
+        #expect(await said.items.isEmpty)
+    }
+
+    /// Claude Code's list still says busy (it is up to 2 s old), but the plugin
+    /// said the turn ended after that list was read: the reply runs at once, so
+    /// it is sent, and its start is the receipt.
+    @Test func aReplyThatRanAtOnceIsReportedStarted() async {
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        _ = await d.run(.status(target: nil))          // list read: busy
+        // The turn ends just before the send; the list is not read again (younger than 2 s).
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        await runner.setAgents([agent("a", "billing-service", status: "idle")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "run the tests", toSession: "a").line == "Sent to Billing service.")
+        await runner.setAgents([agent("a", "billing-service", status: "busy")])
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(100))
+        await store.apply(.init(session: "a", state: .done, detail: "tests pass", name: "billing service"))
+        await runner.setAgents([agent("a", "billing-service", status: "idle")])
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+        #expect(await said.items.isEmpty)
+    }
+
+    /// The plugin said the turn ended, but Claude Code still listed the session
+    /// busy after that: queued. The turn that begins after the send is the
+    /// reply's, and its own end is not taken for the end of the turn before.
+    @Test func aQueuedReplyThatRanAtOnceIsReportedStarted() async {
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(10))
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "run the tests", toSession: "a").line
+            == "Queued. Billing service will see it when it finishes.")
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        await store.apply(.init(session: "a", state: .done, detail: "tests pass", name: "billing service"))
+        await runner.setAgents([agent("a", "billing-service", status: "idle")])
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+    }
+
+    /// A queued reply's watch ends when a later reply is sent to the idle
+    /// session: only the later one has a receipt, so it is never replaced.
+    @Test func aLaterSendEndsAQueuedWatch() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20),
+                             queued: .milliseconds(600))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "first", toSession: "a").line?.hasPrefix("Queued") == true)
+        // The turn ends; the plugin says so after the list was read, so the next reply is sent.
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        let second = Date()
+        #expect(await d.send(typed: "second", toSession: "a").line == "Sent to Billing service.")
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        try? await Task.sleep(for: .milliseconds(800))
+        let items = await got.items
+        #expect(items.count == 1)
+        #expect((items.first?.sent ?? .distantPast) >= second)
+    }
+
+    @Test func aFailedResumeHasNoReceipt() async {
+        let (d, runner, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)], poll: .milliseconds(20))
+        await runner.setResult("--resume", RunResult(status: 1))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "keep going", toSession: "g").line == "Couldn't reach Wedding.")
+        try? await Task.sleep(for: .milliseconds(800))
+        #expect(await got.items.isEmpty)
+    }
+
+    // MARK: Dismissed waits
+
+    /// A wait you dismissed in Activity reads as open in what Earshot says about it.
+    @Test func theRollCallLeavesADismissedWaitOut() async {
+        await store.apply(.init(session: "a", state: .needs, detail: "needs your OK", name: "billing service"))
+        let box = DismissalsBox()
+        let (d, _, _) = make([agent("a", "billing-service", status: "waiting")], dismissals: box)
+        #expect(await d.run(.status(target: nil)).line?.contains("Billing service needs your OK.") == true)
+        var dismissed = Dismissals()
+        dismissed.dismiss("a")
+        box.set(dismissed)
+        #expect(await d.run(.status(target: nil)).line == "One session. It's idle. Nothing needs you.")
+        #expect(await d.run(.status(target: "billing")).line == "Billing service is idle.")
+        #expect(await d.run(.greet).line?.contains("nothing needs you") == true)
     }
 
     @Test func afterTwoMissesTheSocketIsSkippedAndTheBrokenLineIsSaidOnce() async {

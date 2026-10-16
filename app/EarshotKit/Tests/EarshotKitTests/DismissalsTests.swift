@@ -75,4 +75,24 @@ struct DismissalsTests {
         let back = try JSONDecoder().decode(Dismissals.self, from: JSONEncoder().encode(d))
         #expect(back == d)
     }
+
+    @Test func listsReadDismissedWaitsAsOpen() {
+        var d = Dismissals()
+        d.dismiss("w", now: t0.addingTimeInterval(60))
+        #expect(d.apply([known("w", .needs, since: t0), known("x", .needs, since: t0)]).map(\.state) == [.open, .needs])
+        #expect(d.apply([live("w", waiting: true), live("x", waiting: true)]).map(\.waiting) == [false, true])
+    }
+
+    /// The box the app fills, for the roll call and the recap.
+    @Test func theBoxHoldsWhatTheAppSetLast() {
+        let box = DismissalsBox()
+        #expect(box.current == Dismissals())
+        var d = Dismissals()
+        d.dismiss("w", now: t0)
+        box.set(d)
+        #expect(box.current.isDismissed("w"))
+        d.restore("w")
+        box.set(d)
+        #expect(!box.current.isDismissed("w"))
+    }
 }

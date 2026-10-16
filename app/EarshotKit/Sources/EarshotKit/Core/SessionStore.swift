@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public struct SessionInfo: Sendable, Equatable, Identifiable {
     public let id: String
@@ -21,6 +22,10 @@ public struct SessionInfo: Sendable, Equatable, Identifiable {
 /// recap and the lines Earshot says all call a session the same thing. The
 /// plugin's own name for it ("the tax export session") is kept only to find
 /// it in the plugin's lines.
+///
+/// With a `namesURL` the given names are also kept in a file only you can
+/// read, by session id, so a session keeps its name when the app relaunches.
+/// An entry stays a day after its session was last seen, then goes.
 public actor SessionStore {
     /// Sessions quiet this long count as closed, as the plugin's live files do.
     public static let maxAge: TimeInterval = 6 * 3600
@@ -34,7 +39,91 @@ public actor SessionStore {
     private var conts: [UUID: AsyncStream<[SessionInfo]>.Continuation] = [:]
     private let clock: @Sendable () -> Date
 
-    public init(clock: @escaping @Sendable () -> Date = Date.init) { self.clock = clock }
+    /// How long a name is kept for a session that is no longer seen.
+    public static let nameKeep: TimeInterval = 24 * 3600
+    /// A name that is still in use is written again only when its time is this far behind.
+    static let nameRefresh: TimeInterval = 3600
+
+    private let namesURL: URL?
+    /// The names read from the file or written to it: what a session was called, and when it was last seen.
+    private var remembered: [String: RememberedName] = [:]
+    /// What the file holds now.
+    private var onDisk: [String: RememberedName] = [:]
+    private let log = Logger(subsystem: "com.earshot.app", category: "sessions")
+
+    struct RememberedName: Codable, Equatable, Sendable {
+        var name: String
+        /// Seconds since 1970.
+        var seen: Double
+    }
+
+    private struct NamesFile: Codable {
+        var version = 1
+        var names: [String: RememberedName]
+    }
+
+    public static var defaultNamesURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Earshot/session-names.json")
+    }
+
+    /// `namesURL`: where the given names are kept between launches. Without
+    /// one, names last until quit.
+    public init(clock: @escaping @Sendable () -> Date = Date.init, namesURL: URL? = nil) {
+        self.clock = clock
+        self.namesURL = namesURL
+        if let namesURL {
+            let cutoff = clock().timeIntervalSince1970 - Self.nameKeep
+            let loaded = Self.readNames(namesURL).filter { $0.value.seen > cutoff && !$0.value.name.isEmpty }
+            remembered = loaded
+            onDisk = loaded
+        }
+    }
+
+    private static func readNames(_ url: URL) -> [String: RememberedName] {
+        guard let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(NamesFile.self, from: data) else { return [:] }
+        return file.names
+    }
+
+    /// The names given in this run, and the ones remembered for other sessions.
+    /// A given name beats a remembered one (see SpokenNames.names).
+    private func names(_ entries: [SpokenNames.Entry]) -> [String: String] {
+        SpokenNames.names(entries, keeping: given,
+                          remembered: remembered.filter { given[$0.key] == nil }.mapValues(\.name))
+    }
+
+    /// Notes the names in use and writes the file when something changed.
+    private func saveNames() {
+        guard let namesURL else { return }
+        let now = clock().timeIntervalSince1970
+        let cutoff = now - Self.nameKeep
+        // A name a live session holds now is no longer remembered for another,
+        // so that one never takes it back, even after a relaunch.
+        let held = Set(given.values.map(SpokenNames.key))
+        var next = remembered.filter { $0.value.seen > cutoff && (given[$0.key] != nil || !held.contains(SpokenNames.key($0.value.name))) }
+        for (id, name) in given {
+            let old = next[id]
+            // The time moves only now and then: a status message is not a write.
+            let seen = old.map { $0.name == name && now - $0.seen < Self.nameRefresh ? $0.seen : now } ?? now
+            next[id] = RememberedName(name: name, seen: seen)
+        }
+        remembered = next
+        guard next != onDisk else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: namesURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(NamesFile(names: next)) else { return }
+        let tmp = namesURL.appendingPathExtension("tmp")
+        guard fm.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            log.error("couldn't save the session names")
+            return
+        }
+        _ = try? fm.replaceItemAt(namesURL, withItemAt: tmp)
+        if !fm.fileExists(atPath: namesURL.path) { try? fm.moveItem(at: tmp, to: namesURL) }
+        onDisk = next
+    }
 
     /// Applies a status. Returns the state the session had before, or nil
     /// when the status was older than one already applied and was ignored.
@@ -60,10 +149,11 @@ public actor SessionStore {
                                                since: old.map { $0.state == status.state ? $0.since : now } ?? now)
             // A session `claude agents` has not listed yet is named now, beside the others.
             if given[status.session] == nil {
-                given.merge(SpokenNames.names(namingEntries(), keeping: given)) { _, new in new }
+                given.merge(names(namingEntries())) { _, new in new }
             }
         }
         prune()
+        saveNames()
         let list = sessions
         conts.values.forEach { $0.yield(list) }
         return before ?? .open
@@ -99,8 +189,9 @@ public actor SessionStore {
             listed = listed.filter { !ids.contains($0.id) } + entries
         }
         let before = byID.keys.map { given[$0] }
-        let names = SpokenNames.names(namingEntries(), keeping: given)
-        given = complete ? names : given.merging(names) { _, new in new }
+        let named = names(namingEntries())
+        given = complete ? named : given.merging(named) { _, new in new }
+        saveNames()
         if byID.keys.map({ given[$0] }) != before {
             let list = sessions
             conts.values.forEach { $0.yield(list) }

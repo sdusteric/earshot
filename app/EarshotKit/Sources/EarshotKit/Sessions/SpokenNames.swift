@@ -148,12 +148,24 @@ public enum SpokenNames {
     /// - A name in `keeping` stays while its session lives and no other session
     ///   has it already, so names do not change on a refresh. A new session
     ///   takes a name no other has, which may not be the shortest.
-    public static func names(_ entries: [Entry], keeping previous: [String: String] = [:]) -> [String: String] {
+    ///   When two sessions in `keeping` have the same name, the one that
+    ///   started first keeps it and the other is named again (a session with
+    ///   no start time counts as newest, then the order listed).
+    /// - A name in `remembered` (from an earlier launch, or a session that
+    ///   closed and came back) is reused only when no name in `keeping` has
+    ///   it, so a session back from earlier never renames one that has gone
+    ///   by that name all along. Clashes among them go by age, as above.
+    public static func names(_ entries: [Entry], keeping previous: [String: String] = [:],
+                             remembered: [String: String] = [:]) -> [String: String] {
         let fresh = freshNames(entries)
         var out: [String: String] = [:]
         var taken = Set<String>()
-        for e in entries {
-            if let p = previous[e.id], out[e.id] == nil, taken.insert(key(p)).inserted { out[e.id] = p }
+        let oldestFirst = entries.enumerated().sorted { ($0.element.started ?? .distantFuture, $0.offset) < ($1.element.started ?? .distantFuture, $1.offset) }
+            .map(\.element)
+        for kept in [previous, remembered] {
+            for e in oldestFirst {
+                if let p = kept[e.id], out[e.id] == nil, taken.insert(key(p)).inserted { out[e.id] = p }
+            }
         }
         for e in entries where out[e.id] == nil {
             let base = fresh[e.id] ?? capitalized(e.project)

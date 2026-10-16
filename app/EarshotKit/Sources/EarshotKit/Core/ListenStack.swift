@@ -39,7 +39,9 @@ public struct ListenStack: Sendable {
                                         // Said later, not as a reply (a session didn't pick a prompt up).
                                         await history?.add(HistoryEntry(kind: .said, text: text, lineKind: .confirm))
                                         await speech.enqueue(SpokenLine(text: text, kind: .confirm, session: ""))
-                                    })
+                                    },
+                                    // What it says about who needs you reads dismissed waits as open, as Activity does.
+                                    dismissals: { [box = core.dismissals] in box.current })
         let loop = VoiceLoop(followUps: listener, parser: CommandParser(model: FoundationCommandModel()), dispatcher: dispatcher,
                              directory: directory, approvals: core.approvals, speech: speech, chimes: chimes, events: core.events,
                              history: history, canListen: { [availability = core.availability] in availability.canListen })
