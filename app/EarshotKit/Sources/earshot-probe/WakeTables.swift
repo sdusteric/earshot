@@ -84,6 +84,8 @@ func endToEndOutcome(apple: Heard, parakeet: Heard, score: Float?) -> WakeOutcom
 struct RescoreRow {
     let file: String, cls: String, condition: String, split: String
     let score: Float?
+    /// The score of "earshot" alone (CtcWakeSpotter.barePhrase), nil in a TSV without the column.
+    var bare: Float? = nil
     /// What each look heard, by look name ("apple", "parakeet"), as wake-bench writes it.
     let texts: [String: String]
     let ms: [String: Double]
@@ -98,6 +100,8 @@ struct WakeTables {
     let libriHours: Double
     let splits: [String], conditions: [String]
     var rows: [RescoreRow] { files.flatMap { $0 } }
+    /// Whether a segment fires at threshold `t`: its phrase score reaches it (bareSweep sweeps the bare score instead).
+    var fires: (RescoreRow, Float) -> Bool = { r, t in (r.score ?? -.infinity) >= t }
 
     init(files: [[RescoreRow]], libriHours: Double) {
         self.files = files
@@ -110,7 +114,7 @@ struct WakeTables {
 
     /// A segment's outcome at threshold `t`: nil when the spotter does not fire or the wake does not pass.
     private func at(_ r: RescoreRow, _ t: Float, _ outcome: (RescoreRow) -> WakeOutcome?) -> WakeOutcome? {
-        guard let s = r.score, s >= t else { return nil }
+        guard fires(r, t) else { return nil }
         return outcome(r)
     }
 
@@ -152,12 +156,12 @@ struct WakeTables {
                     cols += [knowsDispatch ? "\(n.dispatch)/\(n.all)" : "-", "\(knowsDispatch ? n.window : n.woken)/\(n.all)"]
                 }
             }
-            let fired = libri.filter { ($0.score ?? -.infinity) >= t }
+            let fired = libri.filter { fires($0, t) }
             let o = libri.compactMap { at($0, t, outcome) }
             cols.append(perHour(fired.count))
             cols.append(knowsDispatch ? perHour(o.filter { $0 == .dispatch }.count) : "-")
             cols.append(perHour(knowsDispatch ? o.filter { $0 == .window }.count : o.count))
-            let ms = rows.filter { ($0.score ?? -.infinity) >= t }.compactMap { r in msLooks.compactMap { r.ms[$0] }.max() }.sorted()
+            let ms = rows.filter { fires($0, t) }.compactMap { r in msLooks.compactMap { r.ms[$0] }.max() }.sorted()
             cols.append(percentile(ms, 0.5).map { String(format: "%.1f", $0) } ?? "-")
             cols.append(percentile(ms, 0.95).map { String(format: "%.1f", $0) } ?? "-")
             print(cols.joined(separator: "\t"))
@@ -182,7 +186,43 @@ struct WakeTables {
         for r in rows where ["nearmiss", "mention", "librispeech"].contains(r.cls) {
             guard let o = at(r, t, outcome) else { continue }
             let heard = looks.map { "\($0): \(r.texts[$0] ?? "-")" }.joined(separator: " | ")
-            print("false wake\t\(o == .dispatch ? "dispatch" : "window")\t\(r.cls)\t\(r.split)\t\(r.file)\t\(scoreText(r.score))\t\(heard)")
+            let bare = r.bare.map { "\tbare \(scoreText($0))" } ?? ""
+            print("false wake\t\(o == .dispatch ? "dispatch" : "window")\t\(r.cls)\t\(r.split)\t\(r.file)\t\(scoreText(r.score))\(bare)\t\(heard)")
         }
+    }
+}
+
+// MARK: - The bare term (an experiment)
+
+/// A second spotter term, "earshot" alone (CtcWakeSpotter.barePhrase), for a wake whose
+/// "Hey" a noise gate cut. A segment fires when the phrase scores at least `phraseAt` (the
+/// shipped wake, `main`) or, failing that, the bare term scores at least the swept threshold.
+/// A bare fire passes only when `look`'s words pass the confirm (Listener.confirmsWake, any
+/// tier; no answer never passes it) and is window only, whatever the words: it chimes and
+/// opens the command window and sends nothing of the segment, so it never dispatches.
+func bareOutcome(_ r: RescoreRow, phraseAt t: Float, look: String, main: (RescoreRow) -> WakeOutcome?) -> WakeOutcome? {
+    if (r.score ?? -.infinity) >= t { return main(r) }
+    guard let w = r.heard(look).words, Listener.confirmsWake(w) else { return nil }
+    return .window
+}
+
+extension WakeTables {
+    /// Whether any row has a bare score (a TSV from before the column has none).
+    var hasBare: Bool { rows.contains { $0.bare != nil } }
+
+    /// The wake table with the phrase held at `t` and the bare term's threshold swept
+    /// (bareOutcome), then positives by split and condition at each of `detail`, and with
+    /// `list` the near-misses, mentions and LibriSpeech segments woken at the first of them.
+    /// The first row of the sweep, a bare threshold no segment reaches, is the shipped wake.
+    func bareSweep(phraseAt t: Float, thresholds: [Float], detail: [Float], look: String,
+                   list: Bool = false, main: @escaping (RescoreRow) -> WakeOutcome?) {
+        var sweep = self
+        sweep.fires = { r, b in (r.score ?? -.infinity) >= t || (r.bare ?? -.infinity) >= b }
+        let outcome = { (r: RescoreRow) in bareOutcome(r, phraseAt: t, look: look, main: main) }
+        sweep.table("bare term \"\(CtcWakeSpotter.barePhrase)\" (window only), phrase at \(t), second look: \(look); "
+                    + "the threshold column is the bare term's (inf: the shipped wake)",
+                    thresholds: [.infinity] + thresholds, msLooks: [look], outcome)
+        for b in detail { sweep.positives(at: b, label: " (bare term; phrase at \(t))", outcome) }
+        if list, let b = detail.first { sweep.listFalse(at: b, looks: [look], outcome) }
     }
 }

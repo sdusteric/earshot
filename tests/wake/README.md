@@ -33,10 +33,12 @@ Other flags: `--confirmers ctc,apple,parakeet` (default all three) and
 
 How the run goes:
 
-- Segments are cut as the listener cuts them, and the spotter scores each one.
-  A segment that scores under -9.5 (the floor of the sweep, under -9.25, the
-  threshold at sensitivity 10) is not run through the confirmers; it is
-  recorded as not fired.
+- Segments are cut as the listener cuts them, and the spotter scores each one,
+  for "hey earshot" (the score column) and, on the same pass of the model, for
+  "earshot" alone (the bare column, `CtcWakeSpotter.barePhrase`; the listener
+  does not use it). A segment whose two scores are both under -9.5 (the floor of
+  the sweep, under -9.25, the threshold at sensitivity 10) is not run through
+  the confirmers; it is recorded as not fired.
 - Each confirmer is held to the listener's confirm limit
   (`Listener.Timing().confirmLimit`, 0.75 s). A look that takes longer counts
   as no answer. The pass column is the listener's confirm: words pass by
@@ -149,3 +151,17 @@ that the listener's rule or the end to end rule wakes at T, with its kind and
 what was heard. The shipped setting is the `wakeWords (both tiers), second
 look: apple` block at -8.0; the end to end block is what a wake costs and
 catches once the command is finished.
+
+## The bare term
+
+With a bare column (TSVs from before it have none) and Apple's look, the
+report and wake-rescore end with the bare term's sweep: the phrase held at -8.0
+(or `--threshold T`) with the listener's rule, and "earshot" alone firing a
+segment the phrase did not, at each bare threshold. A bare fire passes only on
+Apple's words (`Listener.confirmsWake`, any tier; no answer never passes it) and
+is counted as window, whatever the words: it would chime and open the command
+window, never send. The first row (inf) is the shipped wake. `--bare B` adds the
+positives by split and condition at B and lists every negative woken there.
+Measured on 2026-10-16 and not adopted (tests/app-e2e.md, the wake section):
+
+    earshot-probe wake-rescore RESULTS/*.out.tsv --threshold -8 --bare -8.5

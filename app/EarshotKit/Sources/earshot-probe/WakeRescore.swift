@@ -1,7 +1,7 @@
 import EarshotKit
 import Foundation
 
-/// wake-rescore TSV... [--threshold T]
+/// wake-rescore TSV... [--threshold T] [--bare B]
 ///
 /// The per-segment output of wake-bench (--out) read again, with each look's pass worked out
 /// anew from the text it heard, so a confirm rule can be tried without running the audio.
@@ -24,7 +24,12 @@ import Foundation
 ///   --threshold T: only that row, then positives by split and condition at T, and the
 ///                  near-miss, mention and LibriSpeech segments that the listener's rule and
 ///                  the end to end rule wake at T, with their kind and what was heard.
-let wakeRescoreUsage = "usage: earshot-probe wake-rescore TSV... [--threshold T]"
+/// With a bare column (the score of "earshot" alone) it ends with the bare term's sweep
+/// (WakeTables.bareSweep): the phrase at T (default -8.0) with Apple's confirm and the
+/// listener's rule, and "earshot" alone, window only, at each bare threshold.
+///   --bare B:      then positives by split and condition at B, and every near-miss, mention
+///                  and LibriSpeech segment woken at B.
+let wakeRescoreUsage = "usage: earshot-probe wake-rescore TSV... [--threshold T] [--bare B]"
 
 /// LibriSpeech test-clean as the bench ran it (tests/wake/librispeech.sh): the TSV has no lengths.
 let libriHours = 5.40
@@ -32,6 +37,7 @@ let libriHours = 5.40
 func wakeRescore(_ args: [String]) throws {
     var paths: [String] = []
     var only: Float?
+    var bareAt: Float?
     var bad = false
     var i = 0
     while i < args.count {
@@ -39,6 +45,10 @@ func wakeRescore(_ args: [String]) throws {
         case "--threshold" where i + 1 < args.count:
             only = Float(args[i + 1])
             bad = bad || only == nil
+            i += 1
+        case "--bare" where i + 1 < args.count:
+            bareAt = Float(args[i + 1])
+            bad = bad || bareAt == nil
             i += 1
         case let flag where flag.hasPrefix("--"): bad = true
         default: paths.append(args[i])
@@ -66,10 +76,9 @@ func wakeRescore(_ args: [String]) throws {
                 if let t = col("\(l)_text") { texts[l] = t }
                 if let m = col("\(l)_ms").flatMap(Double.init) { ms[l] = m }
             }
-            let s = col("score") ?? "nil"
-            let score: Float? = s == "nil" ? nil : s == "-inf" ? -.infinity : Float(s)
+            func score(_ s: String?) -> Float? { s == nil || s == "nil" ? nil : s == "-inf" ? -.infinity : Float(s!) }
             rows.append(RescoreRow(file: file, cls: cls, condition: col("condition") ?? "", split: col("split") ?? "",
-                                   score: score, texts: texts, ms: ms))
+                                   score: score(col("score")), bare: score(col("bare")), texts: texts, ms: ms))
         }
     }
     var byFile: [String: [RescoreRow]] = [:]
@@ -113,4 +122,12 @@ func wakeRescore(_ args: [String]) throws {
             tables.listFalse(at: t, looks: lookNames, outcome)
         }
     }
+
+    if tables.hasBare {
+        tables.bareSweep(phraseAt: only ?? -8.0, thresholds: bareThresholds, detail: bareAt.map { [$0] } ?? [], look: "apple",
+                         list: bareAt != nil) { lookOutcome($0.heard("apple"), score: $0.score, rule: tierRule) }
+    }
 }
+
+/// The bare term's thresholds the sweep prints.
+let bareThresholds = Array(stride(from: -3.0, through: Double(bareSweepFloor), by: -0.25)).map(Float.init)

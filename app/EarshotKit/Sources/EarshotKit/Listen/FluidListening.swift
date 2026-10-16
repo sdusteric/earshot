@@ -298,11 +298,17 @@ enum CtcGreedy {
 /// listener spots when the segment reaches 1.5 s, or when it ends sooner).
 public actor CtcWakeSpotter: WakeSpotter {
     public static let phrase = "hey earshot"
-    private let flight = SingleFlight<(spotter: CtcKeywordSpotter, vocab: CustomVocabularyContext)> {
+    /// The phrase without its greeting, scored on the same pass for the wake bench
+    /// (wakeScores): a noise gate that cuts the start of a segment can leave only "Earshot".
+    /// The listener does not use it (tests/app-e2e.md, the wake section, has the measurement).
+    public static let barePhrase = "earshot"
+    private let flight = SingleFlight<(spotter: CtcKeywordSpotter, vocab: CustomVocabularyContext, bare: CustomVocabularyContext)> {
         let models = try await CtcShared.shared.models(for: .spotter)
         let tokens = try await CtcShared.shared.tokens(CtcWakeSpotter.phrase)
+        let bareTokens = try await CtcShared.shared.tokens(CtcWakeSpotter.barePhrase)
         return (CtcKeywordSpotter(models: models, blankId: models.vocabulary.count),
-                CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.phrase, ctcTokenIds: tokens)]))
+                CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.phrase, ctcTokenIds: tokens)]),
+                CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.barePhrase, ctcTokenIds: bareTokens)]))
     }
     private var failures = FailureLog()
     private let log = Logger(subsystem: "com.earshot.app", category: "wake")
@@ -373,13 +379,23 @@ public actor CtcWakeSpotter: WakeSpotter {
     /// on the phrase's length. The model's output is kept in CtcShared for the head
     /// confirmer, which reads the same clip.
     public func wakeScore(_ samples: [Float]) async -> Float? {
-        guard await flight.isLoaded, let (spotter, vocab) = try? await flight.get() else { return nil }
+        await wakeScores(samples, bare: false)?.phrase
+    }
+
+    /// wakeScore, and with `bare` also the score of barePhrase alone, read off the same
+    /// pass of the model (no second run). The bare score is -infinity when not asked for.
+    public func wakeScores(_ samples: [Float], bare: Bool = true) async -> (phrase: Float, bare: Float)? {
+        guard await flight.isLoaded, let (spotter, vocab, bareVocab) = try? await flight.get() else { return nil }
         do {
             let r = try await spotter.spotKeywordsWithLogProbs(audioSamples: CtcShared.fullLength(samples), customVocabulary: vocab,
                                                                minScore: Self.keepAll)
             await CtcShared.shared.remember(samples, logProbs: r.logProbs, frameDuration: r.frameDuration)
             // No detection at all means the clip had fewer frames than the phrase has tokens.
-            return r.detections.map(\.score).max() ?? -.infinity
+            let phrase = r.detections.map(\.score).max() ?? -.infinity
+            guard bare, !r.logProbs.isEmpty else { return (phrase, -.infinity) }
+            let b = spotter.spotKeywordsFromLogProbs(logProbs: r.logProbs, frameDuration: r.frameDuration,
+                                                     customVocabulary: bareVocab, minScore: Self.keepAll)
+            return (phrase, b.detections.map(\.score).max() ?? -.infinity)
         } catch {
             if failures.shouldLog() { log.error("the wake spotter failed: \(error.localizedDescription, privacy: .public)") }
             return nil

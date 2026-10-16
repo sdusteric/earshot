@@ -11,15 +11,17 @@ import Foundation
 ///             file, label (1 wake, 0 not), class (positive, nearmiss, mention, librispeech),
 ///             voice, condition, split (tune, holdout, neg), text
 ///   --out OUT.tsv: one row per speech segment: file, label, class, voice, condition, split, seg,
-///             score, then for each confirmer its text ("(nil)" when it could not tell,
-///             "(timeout)" past the listener's confirm limit, "(skipped)" when the score is below
-///             the sweep floor so no threshold fires on it), whether the wake passes it (yes/no,
+///             score, bare (the score of CtcWakeSpotter.barePhrase, "earshot" alone, on the same
+///             pass), then for each confirmer its text ("(nil)" when it could not tell,
+///             "(timeout)" past the listener's confirm limit, "(skipped)" when both scores are below
+///             their sweep floors so no threshold fires on it), whether the wake passes it (yes/no,
 ///             as the listener passes it: the text by Listener.confirmsWake, and nil or a timeout
 ///             only when the score reaches CtcWakeSpotter.unconfirmedThreshold) and its ms.
 ///             A file with no speech segment has one row with seg -1 and no score.
 ///             A name ending in manifest.tsv is refused, so a manifest is never overwritten.
 ///   --confirmers: which second looks to run (default all three); each runs on every segment's
-///             window that scores at least the sweep floor, so the sweep can cut at any threshold.
+///             window that scores at least the sweep floor, or whose bare score reaches its own
+///             floor, so the sweep can cut at any threshold.
 ///             Each look is held to Listener.Timing().confirmLimit, as the listener holds it.
 ///             Parakeet is kept loaded the whole run: its column is the best case, since live it
 ///             is loaded only after a command, and when it is not a confirm has no answer and the
@@ -32,12 +34,17 @@ import Foundation
 /// run, end to end: false wakes in two kinds, dispatch (a greeting and the phrase written as
 /// such with words after it, which would go out as a command) and window (a chime that only
 /// opens the command window). The end to end block is a stand-in: Parakeet's head text is the
-/// unboosted transcript and Apple's the second hearing (see endToEndOutcome).
+/// unboosted transcript and Apple's the second hearing (see endToEndOutcome). With apple run,
+/// the report ends with the bare term's sweep (WakeTables.bareSweep, an experiment the
+/// listener does not ship).
 let wakeBenchUsage = "usage: earshot-probe wake-bench MANIFEST... [--out OUT.tsv] [--confirmers ctc,apple,parakeet] [--limit N]"
 
 /// No threshold in the report's sweep is below this, so a segment that scores under it is
 /// not run through the confirmers: nothing would fire on it.
 let sweepFloor: Float = -9.5
+
+/// The same for the bare score ("earshot" alone): a segment under both floors is not looked at.
+let bareSweepFloor: Float = -9.5
 
 func wakeBench(_ args: [String]) async throws {
     var manifestPaths: [String] = []
@@ -105,7 +112,7 @@ func wakeBench(_ args: [String]) async throws {
     var rows: [[BenchRow]] = []     // per file
     var seconds: [String: Double] = [:]   // per class, audio length
     var skipped = 0
-    var out = "file\tlabel\tclass\tvoice\tcondition\tsplit\tseg\tscore"
+    var out = "file\tlabel\tclass\tvoice\tcondition\tsplit\tseg\tscore\tbare"
     for c in confirmers { out += "\t\(c.name)_text\t\(c.name)_pass\t\(c.name)_ms" }
     out += "\n"
     for (n, f) in files.enumerated() {
@@ -122,11 +129,12 @@ func wakeBench(_ args: [String]) async throws {
         if confirmerNames.contains("parakeet") { await parakeet.prewarm() }
         let windows = await segmentWindows(audio, gate: gate, timing: timing)
         for (seg, window) in windows.enumerated() {
-            let score = await spotter.wakeScore(window)
+            let scores = await spotter.wakeScores(window)
+            let score = scores?.phrase, bare = scores?.bare
             var looks: [Look] = []
             for c in confirmers {
-                // Under the floor no threshold fires: not a fire, so not looked at.
-                guard let score, score >= sweepFloor else { looks.append(.notRun); continue }
+                // Under both floors no threshold fires: not a fire, so not looked at.
+                guard let score, let bare, score >= sweepFloor || bare >= bareSweepFloor else { looks.append(.notRun); continue }
                 let t0 = ContinuousClock.now
                 let answer = await benchBounded(timing.confirmLimit, String??.none) { .some(await c.confirmer.headText(window)) }
                 let d = ContinuousClock.now - t0
@@ -137,11 +145,11 @@ func wakeBench(_ args: [String]) async throws {
                 guard let answer else { looks.append(Look(text: nil, passes: strict, ms: elapsed, ran: true, timedOut: true)); continue }
                 looks.append(Look(text: answer, passes: answer.map(Listener.confirmsWake) ?? strict, ms: elapsed, ran: true, timedOut: false))
             }
-            fileRows.append(BenchRow(seg: seg, score: score, looks: looks))
+            fileRows.append(BenchRow(seg: seg, score: score, bare: bare, looks: looks))
         }
         rows.append(fileRows)
-        for r in fileRows { out += f.tsv(seg: r.seg, score: r.score, looks: r.looks) }
-        if fileRows.isEmpty { out += f.tsv(seg: -1, score: nil, looks: confirmers.map { _ in Look.notRun }) }
+        for r in fileRows { out += f.tsv(seg: r.seg, score: r.score, bare: r.bare, looks: r.looks) }
+        if fileRows.isEmpty { out += f.tsv(seg: -1, score: nil, bare: nil, looks: confirmers.map { _ in Look.notRun }) }
         if (n + 1) % 100 == 0 { print("  \(n + 1)/\(files.count)") }
     }
     if let outPath {
@@ -171,8 +179,8 @@ struct BenchFile {
         return out
     }
 
-    func tsv(seg: Int, score: Float?, looks: [Look]) -> String {
-        var s = "\(file)\t\(label)\t\(cls)\t\(voice)\t\(condition)\t\(split)\t\(seg)\t\(scoreText(score))"
+    func tsv(seg: Int, score: Float?, bare: Float?, looks: [Look]) -> String {
+        var s = "\(file)\t\(label)\t\(cls)\t\(voice)\t\(condition)\t\(split)\t\(seg)\t\(scoreText(score))\t\(scoreText(bare))"
         for l in looks { s += "\t\(l.cell)\t\(l.passes ? "yes" : "no")\t\(String(format: "%.1f", l.ms))" }
         return s + "\n"
     }
@@ -227,6 +235,8 @@ func benchBounded<T: Sendable>(_ limit: Duration, _ fallback: T,
 struct BenchRow {
     let seg: Int
     let score: Float?
+    /// The score of "earshot" alone (CtcWakeSpotter.barePhrase) on the same window.
+    let bare: Float?
     let looks: [Look]
 }
 
@@ -277,12 +287,12 @@ func report(_ files: [BenchFile], _ rows: [[BenchRow]], _ confirmers: [String], 
     let libriHours = (seconds["librispeech"] ?? 0) / 3600
     // The same rows wake-rescore reads from the TSV, so both print the same tables.
     let grouped: [[RescoreRow]] = zip(files, rows).map { f, fileRows in
-        func row(_ score: Float?, _ texts: [String: String], _ ms: [String: Double]) -> RescoreRow {
-            RescoreRow(file: f.file, cls: f.cls, condition: f.condition, split: f.split, score: score, texts: texts, ms: ms)
+        func row(_ score: Float?, _ bare: Float?, _ texts: [String: String], _ ms: [String: Double]) -> RescoreRow {
+            RescoreRow(file: f.file, cls: f.cls, condition: f.condition, split: f.split, score: score, bare: bare, texts: texts, ms: ms)
         }
-        guard !fileRows.isEmpty else { return [row(nil, [:], [:])] }
+        guard !fileRows.isEmpty else { return [row(nil, nil, [:], [:])] }
         return fileRows.map { r in
-            row(r.score, Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.cell))),
+            row(r.score, r.bare, Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.cell))),
                 Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.ms))))
         }
     }
@@ -307,9 +317,14 @@ func report(_ files: [BenchFile], _ rows: [[BenchRow]], _ confirmers: [String], 
         let nils = all.filter { $0.looks[l].text == nil && !$0.looks[l].timedOut }.count
         let ms = all.map { $0.looks[l].ms }.sorted()
         let best = l == parakeetIndex ? " (best case: always loaded; live it is loaded only after a command, and then a confirm passes)" : ""
-        print("\n\(name): ran on \(all.count) segments scoring at least \(sweepFloor); no answer on \(nils), timed out on \(timeouts) (these pass only at \(CtcWakeSpotter.unconfirmedThreshold)); ms over those: p50 \(ms.isEmpty ? "-" : String(format: "%.1f", percentile(ms, 0.5)!)), p95 \(ms.isEmpty ? "-" : String(format: "%.1f", percentile(ms, 0.95)!))")
+        print("\n\(name): ran on \(all.count) segments scoring at least \(sweepFloor) (or bare \(bareSweepFloor)); no answer on \(nils), timed out on \(timeouts) (these pass only at \(CtcWakeSpotter.unconfirmedThreshold)); ms over those: p50 \(ms.isEmpty ? "-" : String(format: "%.1f", percentile(ms, 0.5)!)), p95 \(ms.isEmpty ? "-" : String(format: "%.1f", percentile(ms, 0.95)!))")
         byLook("second look: \(name)\(best), the listener's rule (both tiers)", msLooks: [name]) { r in
             lookOutcome(r.heard(name), score: r.score, rule: tierRule)
+        }
+    }
+    if confirmers.contains("apple"), tables.hasBare {
+        tables.bareSweep(phraseAt: CtcWakeSpotter.threshold(5), thresholds: bareThresholds, detail: [], look: "apple") {
+            lookOutcome($0.heard("apple"), score: $0.score, rule: tierRule)
         }
     }
     if confirmers.contains("apple"), confirmers.contains("parakeet") {
