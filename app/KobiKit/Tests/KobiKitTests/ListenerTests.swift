@@ -1442,7 +1442,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
         #expect(await eventually { await l.currentPhase == .capturing(.wake) })
-        #expect(await st.vocabularies == [["blog"]])
+        // The wake's clip is transcribed after its chime: wait for it.
+        #expect(await eventually { await st.vocabularies == [["blog"]] })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await heard.items.isEmpty)
         #expect(await chimes.played == [.listening])
