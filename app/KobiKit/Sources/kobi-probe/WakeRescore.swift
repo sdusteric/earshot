@@ -9,24 +9,27 @@ import Foundation
 /// window), and for
 /// apple, parakeet and the two OR'd, it prints the wake table: positives woken by split and by
 /// condition, then near-miss, mention and collision files that wake by split, LibriSpeech spotter
-/// fires and false wakes per hour. False wakes are counted in two kinds: "dispatch", a
-/// greeting and the phrase written as such with words after it, which would send them as a
-/// command (the dangerous kind), and "window", a chime that sends nothing of the segment and
-/// only opens the command window ("Kobi" alone first, or the phrase alone).
+/// fires and false wakes per hour. False wakes are counted in three kinds: "dispatch", a
+/// greeting and the phrase standing apart with words after it, which would send them as a
+/// command (the dangerous kind), "carry", the phrase alone, which opens the command window
+/// with carry-over (speech begun during the confirm is the command), and "window", a chime
+/// that sends nothing of the segment and only opens the command window to speech after it
+/// ("Kobi" alone first).
 /// Collisions ("Hey Kobe", which sounds the same as "Hey Kobi") are counted the same way but
 /// are not false wakes: they are expected to wake. In the confirm-only tables the head's own
 /// words stand in for what the finish sends, and a look with no answer (passed on the strict
 /// score) counts as window.
-/// Then the same table end to end (endToEndOutcome): Apple's confirm, then the finish rule
-/// with Parakeet's head text as the unboosted transcript and Apple's as the second
-/// hearing, a stand-in for the finished command's transcripts.
+/// Then the same table end to end (endToEndOutcome): Apple's confirm on the head, then the
+/// finish rule on the whole segment's hearings (the full columns), Parakeet's as the unboosted
+/// transcript and Apple's as the second hearing, as the listener's finish decides.
 /// A file is woken at T when any of its segments scores at least T and passes; it dispatches
 /// when any of them dispatches. A look with no answer ("(nil)") or past the confirm limit
 /// ("(timeout)") passes only when the segment scored CtcWakeSpotter.unconfirmedThreshold or
 /// more, as in the listener.
 ///   --threshold T: only that row, then positives by split and condition at T, and the
 ///                  near-miss, mention and LibriSpeech segments that the listener's rule and
-///                  the end to end rule wake at T, with their kind and what was heard.
+///                  the end to end rule wake at T, with their kind and what was heard, and the
+///                  end to end outcome per near-miss, mention and collision phrase.
 ///   --spotter S:   which score fires a segment: phrase ("hey kobi"), other ("hey kobe") or
 ///                  max (the higher of the two). Default: the listener's (CtcWakeSpotter.score).
 /// With a bare column (the score of "kobi" alone) it ends with the bare term's sweep
@@ -69,6 +72,7 @@ func wakeRescore(_ args: [String]) throws {
         exit(2)
     }
     let lookNames = ["apple", "parakeet"]
+    let fullNames = ["full_parakeet", "full_apple"]
     var rows: [RescoreRow] = []
     for path in paths {
         var header: [String: Int] = [:]
@@ -81,7 +85,7 @@ func wakeRescore(_ args: [String]) throws {
             func col(_ name: String) -> String? { header[name].flatMap { $0 < p.count ? p[$0] : nil } }
             guard let file = col("file"), let cls = col("class") else { continue }
             var texts: [String: String] = [:], ms: [String: Double] = [:]
-            for l in lookNames {
+            for l in lookNames + fullNames {
                 if let t = col("\(l)_text") { texts[l] = t }
                 if let m = col("\(l)_ms").flatMap(Double.init) { ms[l] = m }
             }
@@ -97,7 +101,7 @@ func wakeRescore(_ args: [String]) throws {
                 }
             }
             rows.append(RescoreRow(file: file, cls: cls, condition: col("condition") ?? "", split: col("split") ?? "",
-                                   score: fired, bare: score(col("bare")), texts: texts, ms: ms))
+                                   text: col("text") ?? "", score: fired, bare: score(col("bare")), texts: texts, ms: ms))
         }
     }
     var byFile: [String: [RescoreRow]] = [:]
@@ -132,13 +136,15 @@ func wakeRescore(_ args: [String]) throws {
 
     // End to end, as the listener runs a wake (endToEndOutcome). Needs the Parakeet column.
     if rows.contains(where: { $0.texts["parakeet"] != nil }) {
-        let outcome = { (r: RescoreRow) in endToEndOutcome(apple: r.heard("apple"), parakeet: r.heard("parakeet"), score: r.score) }
-        tables.table("end to end: apple's confirm, then the finish rule with parakeet's head text as the unboosted "
-                     + "transcript and apple's as the second hearing (a stand-in for the finished command's)",
-                     thresholds: thresholds, msLooks: ["apple"], outcome)
+        let full = rows.contains { $0.texts["full_parakeet"] != nil }
+        tables.table("end to end: apple's confirm, then the finish rule on "
+                     + (full ? "the whole segment's hearings, parakeet's as the unboosted transcript and apple's as the second hearing"
+                        : "the heads (no full columns): parakeet's as the unboosted transcript and apple's as the second hearing"),
+                     thresholds: thresholds, msLooks: ["apple"], endToEndOutcome)
         if let t = only {
-            tables.positives(at: t, label: "", outcome)
-            tables.listFalse(at: t, looks: lookNames, outcome)
+            tables.positives(at: t, label: "", endToEndOutcome)
+            tables.listFalse(at: t, looks: lookNames + (full ? fullNames : []), endToEndOutcome)
+            tables.byPhrase(at: t, endToEndOutcome)
         }
     }
 

@@ -18,6 +18,13 @@ import Foundation
 ///             no threshold fires on it), whether the wake passes it (yes/no, as the listener passes
 ///             it: the text by Listener.confirmsWake, and nil or a timeout only when the listener's
 ///             score, CtcWakeSpotter.score, reaches CtcWakeSpotter.unconfirmedThreshold) and its ms.
+///             With apple and parakeet both run, then the finish's hearings of the whole segment,
+///             as the listener's finish hears a wake's clip (from the segment's start to its end,
+///             with no session names): full_parakeet_text (Parakeet, "" when it heard nothing),
+///             full_parakeet_ms, full_apple_text (Apple's second hearing, "(nil)" when it heard
+///             nothing) and full_apple_ms, both run at once as in the listener. "(toolong)" when
+///             the segment runs past the length cap (the listener drops it as too long), and
+///             "(skipped)" when the looks were not run. Last, the manifest's text.
 ///             A file with no speech segment has one row with seg -1 and no score.
 ///             A name ending in manifest.tsv is refused, so a manifest is never overwritten.
 ///   --confirmers: which second looks to run (default all three); each runs on every segment's
@@ -32,10 +39,11 @@ import Foundation
 /// chunks, a segment starts one chunk before the VAD's start, and it is spotted once, when it
 /// is `spotAtSamples` long or ends sooner, on its first `spotWindowSamples`.
 /// The report is wake-rescore's tables (WakeTables), per look and, with apple and parakeet both
-/// run, end to end: false wakes in two kinds, dispatch (a greeting and the phrase written as
-/// such with words after it, which would go out as a command) and window (a chime that only
-/// opens the command window). The end to end block is a stand-in: Parakeet's head text is the
-/// unboosted transcript and Apple's the second hearing (see endToEndOutcome). With apple run,
+/// run, end to end: false wakes in three kinds, dispatch (a greeting and the phrase standing
+/// apart with words after it, which would go out as a command), carry (the phrase alone: the
+/// command window opens, and speech begun during the confirm is the command) and window (a
+/// chime that only opens the command window to speech after it). The end to end block decides
+/// as the listener's finish does, on the whole segment's hearings (see endToEndOutcome). With apple run,
 /// the report ends with the bare term's sweep (WakeTables.bareSweep, an experiment the
 /// listener does not ship).
 let wakeBenchUsage = "usage: kobi-probe wake-bench MANIFEST... [--out OUT.tsv] [--confirmers ctc,apple,parakeet] [--limit N]"
@@ -113,9 +121,12 @@ func wakeBench(_ args: [String]) async throws {
     var rows: [[BenchRow]] = []     // per file
     var seconds: [String: Double] = [:]   // per class, audio length
     var skipped = 0
+    // The finish's hearings of the whole segment, as the listener's: Parakeet, and Apple as the second hearing.
+    let hearsFull = confirmerNames.contains("apple") && confirmerNames.contains("parakeet")
     var out = "file\tlabel\tclass\tvoice\tcondition\tsplit\tseg\tscore\tother\tbare"
     for c in confirmers { out += "\t\(c.name)_text\t\(c.name)_pass\t\(c.name)_ms" }
-    out += "\n"
+    if hearsFull { out += "\tfull_parakeet_text\tfull_parakeet_ms\tfull_apple_text\tfull_apple_ms" }
+    out += "\ttext\n"
     for (n, f) in files.enumerated() {
         let audio: [Float]
         do { audio = try AudioConverter().resampleAudioFile(f.url) } catch {
@@ -128,8 +139,9 @@ func wakeBench(_ args: [String]) async throws {
         var fileRows: [BenchRow] = []
         // Parakeet's idle timer is not touched by a confirm, so the bench renews it: the column is the best case.
         if confirmerNames.contains("parakeet") { await parakeet.prewarm() }
-        let windows = await segmentWindows(audio, gate: gate, timing: timing)
-        for (seg, window) in windows.enumerated() {
+        let segments = await speechSegments(audio, gate: gate, timing: timing)
+        for (seg, segment) in segments.enumerated() {
+            let window = segment.window
             let scores = await spotter.wakeScores(window)
             var looks: [Look] = []
             for c in confirmers {
@@ -148,11 +160,17 @@ func wakeBench(_ args: [String]) async throws {
                 guard let answer else { looks.append(Look(text: nil, passes: strict, ms: elapsed, ran: true, timedOut: true)); continue }
                 looks.append(Look(text: answer, passes: answer.map(Listener.confirmsWake) ?? strict, ms: elapsed, ran: true, timedOut: false))
             }
-            fileRows.append(BenchRow(seg: seg, scores: scores, looks: looks))
+            var full: FullHearing?
+            if hearsFull, looks.contains(where: \.ran) {
+                full = await hearWhole(segment, parakeet: parakeet, apple: appleTranscriber, timing: timing)
+            }
+            fileRows.append(BenchRow(seg: seg, scores: scores, looks: looks, full: full))
         }
         rows.append(fileRows)
-        for r in fileRows { out += f.tsv(seg: r.seg, scores: r.scores, looks: r.looks) }
-        if fileRows.isEmpty { out += f.tsv(seg: -1, scores: nil, looks: confirmers.map { _ in Look.notRun }) }
+        for r in fileRows { out += f.tsv(seg: r.seg, scores: r.scores, looks: r.looks, full: hearsFull ? r.full ?? .notRun : nil) }
+        if fileRows.isEmpty {
+            out += f.tsv(seg: -1, scores: nil, looks: confirmers.map { _ in Look.notRun }, full: hearsFull ? .notRun : nil)
+        }
         if (n + 1) % 100 == 0 { print("  \(n + 1)/\(files.count)") }
     }
     if let outPath {
@@ -182,17 +200,51 @@ struct BenchFile {
         return out
     }
 
-    func tsv(seg: Int, scores: CtcWakeSpotter.WakeScores?, looks: [Look]) -> String {
+    func tsv(seg: Int, scores: CtcWakeSpotter.WakeScores?, looks: [Look], full: FullHearing?) -> String {
         var s = "\(file)\t\(label)\t\(cls)\t\(voice)\t\(condition)\t\(split)\t\(seg)\t"
             + "\(scoreText(scores?.phrase))\t\(scoreText(scores?.other))\t\(scoreText(scores?.bare))"
         for l in looks { s += "\t\(l.cell)\t\(l.passes ? "yes" : "no")\t\(String(format: "%.1f", l.ms))" }
-        return s + "\n"
+        if let full {
+            s += "\t\(tsvCell(full.parakeet))\t\(String(format: "%.1f", full.parakeetMs))"
+                + "\t\(tsvCell(full.apple))\t\(String(format: "%.1f", full.appleMs))"
+        }
+        return s + "\t\(tsvCell(text))\n"
     }
 }
 
 func scoreText(_ s: Float?) -> String {
     guard let s else { return "nil" }
     return s.isFinite ? String(format: "%.3f", s) : (s < 0 ? "-inf" : "inf")
+}
+
+/// A text as a TSV cell: tabs and line breaks as spaces.
+func tsvCell(_ text: String) -> String {
+    text.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
+}
+
+/// The finish's hearings of a whole segment, as the TSV writes them (see wake-bench's --out).
+struct FullHearing {
+    let parakeet: String, parakeetMs: Double
+    let apple: String, appleMs: Double
+
+    static let notRun = FullHearing(parakeet: "(skipped)", parakeetMs: 0, apple: "(skipped)", appleMs: 0)
+    static let tooLong = FullHearing(parakeet: "(toolong)", parakeetMs: 0, apple: "(toolong)", appleMs: 0)
+}
+
+/// The whole segment heard as the listener's finish hears a wake's clip: Parakeet and Apple's
+/// second hearing at once, with no session names. A segment past the length cap is dropped as
+/// too long, and one shorter than Timing.minClipSamples is not transcribed (an empty transcript).
+func hearWhole(_ segment: SpeechSegment, parakeet: ParakeetTranscriber, apple: AppleTranscriber,
+               timing: Listener.Timing) async -> FullHearing {
+    guard let clip = segment.clip else { return .tooLong }
+    guard clip.count >= timing.minClipSamples else { return FullHearing(parakeet: "", parakeetMs: 0, apple: "(nil)", appleMs: 0) }
+    func ms(_ d: Duration) -> Double { Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15 }
+    let t0 = ContinuousClock.now
+    async let second: (String?, Double) = { (await apple.hear(clip, names: []), ms(ContinuousClock.now - t0)) }()
+    let text = (try? await parakeet.transcribeBoth(clip, vocabulary: []).text) ?? ""
+    let parakeetMs = ms(ContinuousClock.now - t0)
+    let (heard, appleMs) = await second
+    return FullHearing(parakeet: text, parakeetMs: parakeetMs, apple: heard ?? "(nil)", appleMs: appleMs)
 }
 
 struct Look {
@@ -209,7 +261,7 @@ struct Look {
     /// The text column as the TSV has it, which wake-rescore reads back (see Heard).
     var cell: String {
         !ran ? "(skipped)" : timedOut ? "(timeout)"
-            : text.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") } ?? "(nil)"
+            : text.map(tsvCell) ?? "(nil)"
     }
 }
 
@@ -241,25 +293,43 @@ struct BenchRow {
     /// The spotter's scores on the window: "hey kobi", "hey kobe" and "kobi" alone.
     let scores: CtcWakeSpotter.WakeScores?
     let looks: [Look]
+    /// The finish's hearings of the whole segment, when the looks ran (apple and parakeet both run).
+    var full: FullHearing?
 }
 
 // MARK: - Segments
 
-/// The windows the listener would spot in this audio, one per speech segment. The audio is followed
-/// by two seconds of silence, as a mic would go on sending, so the VAD ends the last segment.
-func segmentWindows(_ audio: [Float], gate: SileroGate, timing: Listener.Timing) async -> [[Float]] {
+/// A speech segment as the listener cuts it: the window it spots on, and the clip a wake's finish
+/// hears, from the segment's start to the VAD's end. Nil when the segment is as long as the length
+/// cap (Timing.maxCommandSamples) or longer: the listener drops a wake's capture that long as too
+/// long, and hears only its head. The segments are cut the same either way, since only a wake's
+/// capture is capped.
+struct SpeechSegment {
+    let window: [Float]
+    let clip: [Float]?
+}
+
+/// The segments the listener would spot in this audio. The audio is followed by two seconds of
+/// silence, as a mic would go on sending, so the VAD ends the last segment.
+func speechSegments(_ audio: [Float], gate: SileroGate, timing: Listener.Timing) async -> [SpeechSegment] {
     await gate.reset()
     var energy = EnergyGate()
     var chunker = Chunker()
     let all = audio + [Float](repeating: 0, count: 32_000)
-    var windows: [[Float]] = []
+    var segments: [SpeechSegment] = []
     var total = 0
     var segmentStart: Int?
     var spotted = false
+    var window: [Float] = []
 
     func spot(at s: Int) {
         spotted = true
-        windows.append(Array(all[s..<min(s + timing.spotWindowSamples, total)]))
+        window = Array(all[s..<min(s + timing.spotWindowSamples, total)])
+    }
+    func end(at s: Int) {
+        if !spotted { spot(at: s) }
+        segments.append(SpeechSegment(window: window, clip: total - s >= timing.maxCommandSamples ? nil : Array(all[s..<total])))
+        segmentStart = nil
     }
     for chunk in chunker.push(all) {
         total += chunk.count
@@ -270,12 +340,13 @@ func segmentWindows(_ audio: [Float], gate: SileroGate, timing: Listener.Timing)
             segmentStart = max(0, total - 2 * chunk.count)
             spotted = false
         }
-        if let s = segmentStart, !spotted, total - s >= timing.spotAtSamples || edge == .end { spot(at: s) }
-        if edge == .end { segmentStart = nil }
+        guard let s = segmentStart else { continue }
+        if !spotted, total - s >= timing.spotAtSamples || edge == .end { spot(at: s) }
+        if edge == .end { end(at: s) }
     }
     // Audio ended inside a segment (the VAD saw no end): the listener would spot what there is.
-    if let s = segmentStart, !spotted { spot(at: s) }
-    return windows
+    if let s = segmentStart { end(at: s) }
+    return segments
 }
 
 // MARK: - Report
@@ -291,19 +362,25 @@ func report(_ files: [BenchFile], _ rows: [[BenchRow]], _ confirmers: [String], 
     // The same rows wake-rescore reads from the TSV, so both print the same tables.
     let grouped: [[RescoreRow]] = zip(files, rows).map { f, fileRows in
         func row(_ s: CtcWakeSpotter.WakeScores?, _ texts: [String: String], _ ms: [String: Double]) -> RescoreRow {
-            RescoreRow(file: f.file, cls: f.cls, condition: f.condition, split: f.split, score: s.map(CtcWakeSpotter.score),
-                       bare: s?.bare, texts: texts, ms: ms)
+            RescoreRow(file: f.file, cls: f.cls, condition: f.condition, split: f.split, text: f.text,
+                       score: s.map(CtcWakeSpotter.score), bare: s?.bare, texts: texts, ms: ms)
         }
         guard !fileRows.isEmpty else { return [row(nil, [:], [:])] }
         return fileRows.map { r in
-            row(r.scores, Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.cell))),
-                Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.ms))))
+            var texts = Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.cell)))
+            var ms = Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.ms)))
+            if let full = r.full {
+                (texts["full_parakeet"], texts["full_apple"]) = (tsvCell(full.parakeet), tsvCell(full.apple))
+                (ms["full_parakeet"], ms["full_apple"]) = (full.parakeetMs, full.appleMs)
+            }
+            return row(r.scores, texts, ms)
         }
     }
     let tables = WakeTables(files: grouped, libriHours: libriHours)
     print("\n\(files.count) files, \(tables.rows.filter { $0.score != nil }.count) segments, LibriSpeech \(String(format: "%.2f", libriHours)) h of audio")
-    print("false wakes in two kinds: dispatch (a greeting and the phrase written as such with words after it: they would go out as a command) "
-          + "and window (a chime that sends nothing of the segment and only opens the command window)")
+    print("false wakes in three kinds: dispatch (a greeting and the phrase standing apart with words after it: they would go out as a command), "
+          + "carry (the phrase alone: the command window opens, and speech begun during the confirm is the command) "
+          + "and window (a chime that sends nothing of the segment and only opens the command window to speech after it)")
 
     let parakeetIndex = confirmers.firstIndex(of: "parakeet")
     func byLook(_ title: String, msLooks: [String], knowsDispatch: Bool = true, _ outcome: (RescoreRow) -> WakeOutcome?) {
@@ -332,9 +409,7 @@ func report(_ files: [BenchFile], _ rows: [[BenchRow]], _ confirmers: [String], 
         }
     }
     if confirmers.contains("apple"), confirmers.contains("parakeet") {
-        byLook("end to end: apple's confirm, then the finish rule with parakeet's head text as the unboosted "
-               + "transcript and apple's as the second hearing (a stand-in for the finished command's)", msLooks: ["apple"]) { r in
-            endToEndOutcome(apple: r.heard("apple"), parakeet: r.heard("parakeet"), score: r.score)
-        }
+        byLook("end to end: apple's confirm, then the finish rule on the whole segment's hearings, parakeet's as the "
+               + "unboosted transcript and apple's as the second hearing", msLooks: ["apple"], endToEndOutcome)
     }
 }
