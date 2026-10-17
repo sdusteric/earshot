@@ -112,7 +112,10 @@ its color or hide it in Settings, under Listening.
 has a recap, search, and replay. Click the orb to talk.
 
 **Voice commands.** Hold Right Option (the default hotkey), say "Hey Kobi"
-(the wake word, off by default), or click the orb in Activity. You can:
+(the wake word, off by default), or click the orb in Activity. "Hey Kobe"
+sounds the same and wakes it too. Say the command in the same breath ("Hey
+Kobi, stop billing"), or after the chime. "Kobi" alone, with no greeting, only
+chimes: say the command after it. You can:
 
 - send a session a prompt: "tell billing service to run the tests"
 - ask what is going on: "what's everyone doing?" or "what's billing doing?"

@@ -69,7 +69,8 @@ playback within 3 seconds (a speaker in standby).
 
 ## Wake word bench, 2026-10-15 (synthetic voices, no recordings of yours)
 
-Kobi wake: part 2. This bench and its reviews measured "Hey Earshot"; part 2 measures "Hey Kobi".
+This bench, its reviews and the experiment after it measured "Hey Earshot", the wake
+phrase before the app was renamed Kobi. "Hey Kobi" is measured in the next section.
 
 Method (tests/wake/README.md): 30 voices (every English Kokoro voice plus say
 Samantha and Daniel) x 133 phrases (32 positives, 86 near-misses, 15 mentions) x 5 mic
@@ -265,6 +266,35 @@ Left to do: the listening power run (`scripts/listen-power.sh`, needs sudo), and
 a check with a real voice in a real room (`scripts/eval-listener.sh record`).
 The noise-gate conditions 0.4 and 0.6 are mostly missed; how often a real mic
 does that is for the real voice check.
+
+## Wake word bench, 2026-10-17 ("Hey Kobi")
+
+The same method (tests/wake/README.md has the full tables): 30 voices x 122
+phrases (32 positives, 62 near-misses, 18 mentions, 10 collisions) x 5
+conditions, 18300 clips, a third of the voices held out, and LibriSpeech
+test-clean (5.4 h). Collisions are names said the same as "Kobi" ("Hey Kobe,
+run the tests", "Hey Coby, stop"): they wake, and are reported apart.
+
+Decisions:
+
+- The spotter scores "hey kobi" and "hey kobe" on one pass and wakes on the
+  higher. Apple's recognizer wrote "Kobe" for most "Kobi"s and "Kobi" almost
+  never, with or without "Kobi" as contextual text.
+- Literal: a greeting (hey, hi, high, hay, hate, eight, 8, a, i, k, ok, okay),
+  then "kobi", "kobe" or "koby". Window only: the name first, standing apart.
+  No sound-alike tier: "Colby" won 30 tune positives for 169 near-miss windows.
+- Sensitivity 5 stays at -8.0. The strict score for a wake no recognizer could
+  judge goes from -5.0 to -4.0 (clean positives 52%, near-misses 2%,
+  LibriSpeech 0 an hour, on the spotter alone).
+
+At -8.0, end to end, positives that chime (tune + holdout, of 960 each), with
+"Hey Earshot" at -8.0 in brackets: clean 919 (814), quiet 764 (441), gate 0.2
+462 (352), gate 0.4 64 (45), gate 0.6 5 (5). Of the positives with a greeting
+and a command, 97% in clean and 84% in quiet sent the command in the same
+breath. Dispatch false wakes: 0 of 9300 near-misses, 0 of 2700 mentions, 0.00
+an hour on LibriSpeech. Window false wakes: 13 of 9300 near-misses, 22 of 2700
+mentions (20 in the gates), 0.00 an hour on LibriSpeech. Collisions woke 645
+of 1500, 308 of them dispatching.
 
 ## Listening (plan 2)
 

@@ -1,4 +1,4 @@
-# Kobi wake: part 2 (the session named earshot)
+# earshot is a session name here (see cases.tsv), not the wake word.
 wedding
 guest confirmation email
 blog
