@@ -1075,10 +1075,11 @@ public actor Listener {
         /// `remainder` is the words after it, as written (empty for the phrase alone).
         /// Only this tier ever gives a command.
         case literal(remainder: String)
-        /// The name as the first word, standing apart ("Kobe, stop", "Kobi."). A
-        /// noise gate that cuts the start of a mention leaves the same words ("did you ask
-        /// kobi to run the tests" heard as "Kobe. To run."), so the words after it are never
-        /// a command: the wake may chime, and the command is the next thing said.
+        /// The name as the first word, standing apart ("Kobe, stop", "Kobi."), or after a weak
+        /// greeting, run into the sentence ("A Kobe steak"). A noise gate that cuts the start
+        /// of a mention leaves the same words ("did you ask kobi to run the tests" heard as
+        /// "Kobe. To run."), and "Kobe" is a common word, so the words after it are never a
+        /// command: the wake may chime, and the command is the next thing said.
         case bare
     }
 
@@ -1086,6 +1087,13 @@ public actor Listener {
     /// words themselves ("K Kobe" for "Okay Kobi", "I Kobe" for "Hi Kobi"). No verbs: "take
     /// Kobe to the vet" is a sentence.
     private static let greetings: Set<String> = ["hey", "hi", "high", "hay", "hate", "eight", "8", "a", "i", "k", "ok", "okay"]
+
+    /// Greetings that start ordinary sentences too ("a Kobe steak", "eight Kobe sliders"): after
+    /// them the name sends what follows only when it stands apart. After hey, hi, ok and okay it
+    /// sends it run into the sentence too: recognizers write real commands with no comma ("Hey
+    /// Kobe pause.", "Okay Kobe status."), and requiring one after those cost 25 of 440 tune
+    /// commands in clean and 20 in quiet on the wake bench, for no near-miss or mention dispatch.
+    static let weakGreetings: Set<String> = ["high", "hay", "hate", "eight", "8", "a", "i", "k"]
 
     /// How recognizers write "Kobi" when they get it right. Apple's recognizer writes "Kobe"
     /// for most of them, and almost never "Kobi"; "Koby" now and then. "Kobe" is said the
@@ -1095,7 +1103,10 @@ public actor Listener {
     static let nameSpellings: Set<String> = ["kobi", "kobe", "koby"]
 
     /// Whether the text starts with the wake phrase, and in which tier. Two shapes pass:
-    /// - a greeting, then "Kobi" (nameSpellings) as the next word: literal.
+    /// - a greeting, then "Kobi" (nameSpellings) as the next word: literal. After a weak
+    ///   greeting (weakGreetings) only when the name stands apart, as below; run into the
+    ///   sentence ("A Kobe beef burger, please.") it is bare. Dropping it instead cost 6 tune
+    ///   positives' chimes and saved no near-miss or mention window.
     /// - "Kobi" as the first word, with no greeting, standing apart: a comma or a stop right
     ///   after it, or nothing after it ("Kobi, stop", "Kobe."): bare. Run into a sentence it
     ///   is a mention ("Kobi is listening", "Kobe beef is expensive"). Never later in the
@@ -1107,7 +1118,10 @@ public actor Listener {
         let (tokens, words) = wakeTokens(text)
         guard let first = words.first else { return nil }
         if greetings.contains(first), words.count > 1, nameSpellings.contains(words[1]) {
-            return .literal(remainder: remainder(text, after: tokens[1]))
+            if !weakGreetings.contains(first) || words.count == 2 || ",.!?".contains(tokens[1].last!) {
+                return .literal(remainder: remainder(text, after: tokens[1]))
+            }
+            return .bare
         }
         if nameSpellings.contains(first), words.count == 1 || ",.!?".contains(tokens[0].last!) { return .bare }
         return nil

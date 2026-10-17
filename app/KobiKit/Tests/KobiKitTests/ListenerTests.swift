@@ -1413,6 +1413,24 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await st.clips.last?.contains(2) == false)
     }
 
+    /// "A Kobe beef burger, please." heard word for word: "a" and the name run into the sentence
+    /// chime and open the window, and nothing of it is sent.
+    @Test func aKobeBurgerSendsNothing() async {
+        await spotter.setHit(-7.0)
+        let words = "A Kobe beef burger, please."
+        let l = await make(transcriber: ScriptTranscriber(fixed: words), second: FakeSecondHearing(words: words),
+                           confirmer: FakeConfirmer(words: words))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await heard.items.isEmpty)
+        #expect(await chimes.played == [.listening])
+        #expect(await eventually { await chimes.played == [.listening, .closed] })
+        #expect(await heard.items.isEmpty)
+    }
+
     /// A session named kobe would make the boost write the name over "Okay, Colby." The wake's
     /// own clip is heard without it, so the unboosted words are all there is, they lack the name,
     /// nothing is sent, and the window opens for the command.

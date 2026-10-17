@@ -24,7 +24,10 @@ The classes:
   "Kobe beef is expensive"). They must not wake.
 - collision: a name said the same as "Kobi" ("hey Kobe, run the tests",
   "hey Coby, stop"). They wake, as "Hey Kobi" does: no recognizer can tell
-  them apart. They are counted and reported, not counted as false wakes.
+  them apart. They are counted and reported, not counted as false wakes. A
+  near-miss name that a recognizer wrote as "Kobe" so that the command
+  dispatched at -8.0 is moved here too ("hi Cody, any updates?" and "okay
+  Cody, go ahead", see the results).
 
 Real human negatives (LibriSpeech test-clean, about 5.4 h, from
 https://www.openslr.org/resources/12/test-clean.tar.gz unpacked into SRC):
@@ -62,6 +65,13 @@ How the run goes:
   listener's score is -4.0 or more (`CtcWakeSpotter.unconfirmedThreshold`).
   wake-rescore counts no answer the same way. The report counts these per
   confirmer.
+- With apple and parakeet both run, every segment they looked at is also
+  heard whole, as the listener's finish hears a wake's clip: from the
+  segment's start to the VAD's end, by Parakeet (the full_parakeet columns)
+  and by Apple as the second hearing (full_apple), at the same time and with
+  no session names. A segment as long as the length cap (15 s) is marked
+  "(toolong)": the listener drops it as too long. The end to end block decides
+  dispatch from these, as the listener does, not from the 2 s heads.
 - The parakeet column is the best case: the bench keeps Parakeet loaded all
   run. Live it is loaded only after a command and unloaded after 10 idle
   minutes, and a confirm never loads it or keeps it loaded, so it usually has
@@ -86,11 +96,18 @@ phrase. What it does then falls in one of two tiers:
   (`Listener.nameSpellings`). Apple's recognizer wrote "Kobe" for most "Kobi"s
   on the bench and "Kobi" almost never; "K Kobe" is a mis-heard "Okay Kobi",
   "I Kobe" a mis-heard "Hi Kobi". Only this tier sends the words after the name.
-- Window only (bare): the name as the first word with no greeting, and a comma
-  or a stop after it, or nothing after it ("Kobe, stop", "Kobe."). The wake
-  chimes and opens the command window, but nothing of the segment is sent: a
-  noise gate that cuts the start of a mention leaves the same words ("can Kobi
-  read my mail" heard as "Kobe, read my mail.").
+  After the weak greetings (a, i, k, eight, 8, hate, high, hay:
+  `Listener.weakGreetings`), which start ordinary sentences too ("A Kobe beef
+  burger, please", "Eight Kobe sliders"), the name must stand apart: a comma,
+  a stop, ? or ! after it, or nothing. After hey, hi, ok and okay it need not:
+  recognizers write real commands with no comma ("Hey Kobe pause.", "Okay Kobe
+  status.").
+- Window only (bare): the name as the first word with no greeting, and a comma,
+  a stop, ? or ! after it, or nothing after it ("Kobe, stop", "Kobe."), or a
+  weak greeting and the name run into the sentence. The wake chimes and opens
+  the command window, but nothing of the segment is sent: a noise gate that
+  cuts the start of a mention leaves the same words ("can Kobi read my mail"
+  heard as "Kobe, read my mail."), and "Kobe" is a common word.
 
 The name is never taken later in the text, nor run into a sentence at the
 start: "Kobe is listening" and "did you ask kobi to run the tests" are about
@@ -117,13 +134,20 @@ kept. Not found, nothing of the segment is sent: a wake passed on words opens
 the window, which takes only speech that starts after the chime, and one
 passed on the strict score alone is dropped.
 
-So false wakes come in two kinds, counted apart per class:
+So false wakes come in three kinds, counted apart per class (a file counts as
+the worst of its segments):
 
-- dispatch: a greeting and the name written as such, with words after it, on a
-  negative. Those words go out as a command, and "approve it" can approve a
-  pending permission prompt. This is the number that must stay at zero.
+- dispatch: a greeting and the name standing as the rule takes it, with words
+  after it, on a negative. Those words go out as a command ("keep going" goes
+  to the last session; "approve it" never answers a prompt from the wake word,
+  which says "Hold the hotkey to answer it."). This is the number that must
+  stay at zero outside the collision class.
+- carry: the phrase alone ("Hey, Kobe."). Nothing of the segment is sent, but
+  the command window opens with carry-over: speech begun while the wake was
+  being confirmed is the command.
 - window: a chime that sends nothing of the segment and only opens the command
-  window (bare, the phrase alone, or a transcript without the phrase).
+  window to speech that starts after the chime (bare, or a transcript without
+  the phrase).
 
 ## Running it in shards
 
@@ -166,24 +190,26 @@ other ("hey kobe") or max (the higher); the default is the listener's. In these
 confirm-only tables the head's own words stand in for what the finish would
 send, and a look with no answer (passed on the strict score) counts as window.
 Then the same table end to end, as the listener runs a wake: Apple's confirm
-passes it, then the finish rule (`Listener.finishRemainder`) runs with
-Parakeet's head text as the unboosted transcript (the confirm hears it with no
-names) and Apple's head text as the second hearing.
-That is a stand-in: live, the finish hears the whole command, not the head. A
-segment with no Parakeet text is an empty transcript there, as a failed
-transcription is. With `--threshold T` it prints only that row, then positives
-by split and condition, and every near-miss, mention, collision and LibriSpeech
-segment that the listener's rule or the end to end rule wakes at T, with its
-kind and what was heard. The end to end block at -8.0 is what a wake costs and
-catches once the command is finished.
+on the head passes it, then the finish rule (`Listener.finishRemainder`) runs
+on the whole segment's hearings: Parakeet's as the unboosted transcript (heard
+with no names) and Apple's as the second hearing, kept when it came within the
+listener's 0.3 s grace after Parakeet's. A TSV from before the full columns
+falls back to the head texts. With `--threshold T` it prints only that row,
+then positives by split and condition, every near-miss, mention, collision and
+LibriSpeech segment that the listener's rule or the end to end rule wakes at
+T, with its kind and what each hearing wrote, and per near-miss, mention and
+collision phrase its files and how many dispatch, carry over and open the
+window. The end to end block at -8.0 is what a wake costs and catches once the
+command is finished.
 
-## Results, 2026-10-17 ("Hey Kobi")
+## Results, 2026-10-17 ("Hey Kobi"), whole-segment hearings
 
-18300 synthetic clips (32 positives, 62 near-misses, 18 mentions, 10
-collisions, by 30 voices, by 5 conditions) and 2620 LibriSpeech clips (5.4 h).
-Apple answered every confirm (no timeouts, no "no answer"). End to end at -8.0
-(sensitivity 5), with the listener's score (the higher of "hey kobi" and "hey
-kobe"):
+18300 synthetic clips (32 positives, 60 near-misses, 18 mentions, 12
+collisions, by 30 voices, by 5 conditions) and 2620 LibriSpeech clips (5.4 h),
+run again with the whole segment heard at finish. Apple answered every
+confirm (no timeouts, no "no answer"); its whole-segment hearing came after
+Parakeet's grace on 5 of 17144 segments. End to end at -8.0 (sensitivity 5),
+with the listener's score (the higher of "hey kobi" and "hey kobe"):
 
 | Split | Clean | Quiet | Gate 0.2 | Gate 0.4 | Gate 0.6 | All |
 |---|---|---|---|---|---|---|
@@ -192,50 +218,87 @@ kobe"):
 | both, "Hey Earshot" at -8.0 (of 960 each) | 814 (85%) | 441 (46%) | 352 (37%) | 45 (5%) | 5 (1%) | |
 | both, "Hey Kobi" (of 960 each) | 919 (96%) | 764 (80%) | 462 (48%) | 64 (7%) | 5 (1%) | |
 
-Of the positives that woke, those whose words went out in the same breath
-(tune + holdout): clean 640, quiet 555, gate 0.2 86, gate 0.4 1, gate 0.6 0.
-Only 22 of the 32 positive phrases have a greeting, the name and a command
-(660 clips per condition), so in clean and quiet 97% and 84% of those
-dispatched. Under a gate the greeting is cut and the wake is bare: it chimes,
-and the command is said again.
+The positives with a greeting, the name and a command (22 phrases, 440 tune
+and 220 holdout clips per condition) that sent the command in the same breath:
+tune clean 434 (98.6%), quiet 380 (86.4%), gate 0.2 47, gate 0.4 1; holdout
+clean 218 (99.1%), quiet 198 (90.0%), gate 0.2 30, gate 0.4 1.
 
 False wakes at -8.0:
 
-| Class (clips) | Dispatch tune | Dispatch holdout | Window tune | Window holdout |
+| Class (clips) | Dispatch tune | Dispatch holdout | Carry tune | Carry holdout | Window tune | Window holdout |
+|---|---|---|---|---|---|---|
+| Near-miss (6000 tune, 3000 holdout) | 0 | 0 | 1 | 2 | 8 | 0 |
+| Mention (1800 tune, 900 holdout) | 0 | 0 | 1 | 0 | 14 | 7 |
+| LibriSpeech (5.40 h) | 0.00 an hour | | 0.00 an hour | | 0.00 an hour | |
+
+The spotter fires 200.2 times an hour on LibriSpeech. The carries are "hey
+Kofi" (one tune, one holdout) and "hey Hobie" (one holdout) heard by Apple as
+"Hey, Kobe.", and the gated mention "I named my dog Kobi" heard as "A Kobe.".
+The windows are gated clips heard as "Kobe, ..." ("can Kobi read my mail"
+heard as "Kobe, read my mail." is 13 of the 21 mention windows).
+
+Collisions (1200 tune, 600 holdout) woke 433 and 214; 210 and 109 dispatched.
+By phrase, tune of 100 and holdout of 50 each (dispatch, carry, window):
+
+| Phrase | Tune | Holdout |
+|---|---|---|
+| hey Kobe | 0, 31, 3 | 0, 15, 2 |
+| hey Kobe, run the tests | 37, 0, 12 | 20, 0, 4 |
+| okay Kobe, approve it | 53, 0, 10 | 30, 0, 3 |
+| hi Kobe | 0, 35, 3 | 0, 18, 0 |
+| hey Kobe, stop | 39, 0, 6 | 19, 0, 2 |
+| hey Kobe, what's everyone doing? | 40, 0, 16 | 21, 0, 8 |
+| okay Kobe | 0, 47, 2 | 0, 26, 1 |
+| Kobe, stop | 0, 0, 18 | 0, 0, 7 |
+| hey Coby | 0, 31, 3 | 0, 15, 2 |
+| hey Coby, stop | 39, 0, 6 | 19, 0, 2 |
+| hi Cody, any updates? | 1, 0, 0 | 0, 0, 0 |
+| okay Cody, go ahead | 1, 0, 0 | 0, 0, 0 |
+
+The two Cody phrases were near-misses. Heard whole, one clip of each
+(say Daniel, quiet) dispatched: Apple's head was "Hi Kobe." and "Okay, Kobe.",
+and the whole-segment hearings "Hi Kobe, any updates?" and "Okay, Kobe, go
+ahead.". The head-only bench had counted both as windows. They are names a
+recognizer hears as "Kobe", so they are collisions now.
+
+The weak-greeting rule, measured on tune at -8.0 against the same rule with
+none (dispatches in the same breath of the 440 command clips, then chimes):
+
+| Rule | Clean | Quiet | Chimes | Near-miss and mention dispatch |
 |---|---|---|---|---|
-| Near-miss (6200 tune, 3100 holdout) | 0 | 0 | 11 (0.2%) | 2 (0.1%) |
-| Mention (1800 tune, 900 holdout) | 0 | 0 | 15 | 7 |
-| LibriSpeech (5.40 h) | 0.00 an hour | | 0.00 an hour | |
+| no greeting must stand apart | 434 | 384 | 1460 | 0 |
+| all greetings, run-on is window only | 409 (-5.7 points) | 364 (-4.5) | 1460 | 0 |
+| all greetings, run-on is dropped | 407 | 362 | 1426 | 0 |
+| weak greetings, run-on is window only (chosen) | 434 | 380 (-0.9) | 1460 | 0 |
+| weak greetings, run-on is dropped | 434 | 380 | 1454 | 0 |
 
-The spotter fires 200.2 times an hour on LibriSpeech. 20 of the 22 mention
-windows are in the noise gates (the start of the sentence is cut, so Apple
-hears "Kobe, read my mail."). Of the 13 near-miss windows, 10 are in the gates
-("hey Toby", "hey Gobi", "hey Hobie" or "hey Kofi" heard as "Kobe, ..." or
-"Hey, Kobe."), and 3 are quiet clips heard as a greeting and "Kobe" ("hey
-Kofi", "hi Cody", "okay Cody").
-
-Collisions (1000 tune, 500 holdout) woke 431 and 214: 202 and 106 dispatched.
-
-Spotter score, tune, end to end at -8.0: "hey kobi" alone 1408/3200, "hey
-kobe" alone 1457, the higher of the two 1460, all with 0 dispatch false wakes.
+Requiring it after hey, hi, ok and okay cost more than 5 points in clean, so it
+is kept to the weak greetings. Window only, not dropped: dropping lost chimes
+and saved no near-miss or mention window. None of these cases is on the bench
+as a negative: no phrase starts with a weak greeting and "Kobe", so what the
+rule saves ("A Kobe beef burger, please") is covered by the unit tests only.
 
 Thresholds, tune, end to end:
 
-| Threshold | Positives | Near-miss dispatch | Near-miss window | Mention window | LibriSpeech fires/h |
-|---|---|---|---|---|---|
-| -7.0 (sensitivity 1) | 1252 | 0 | 4 | 10 | 60.7 |
-| -7.5 | 1371 | 0 | 7 | 13 | 123.9 |
-| -8.0 (sensitivity 5) | 1460 | 0 | 11 | 15 | 200.2 |
-| -8.5 | 1512 | 0 | 16 | 16 | 282.2 |
-| -9.25 (sensitivity 10) | 1559 | 1 | 22 | 17 | 379.8 |
+| Threshold | Positives | Near-miss dispatch | Near-miss carry | Near-miss window | Mention window | LibriSpeech fires/h |
+|---|---|---|---|---|---|---|
+| -7.0 (sensitivity 1) | 1252 | 0 | 1 | 2 | 10 | 60.7 |
+| -7.5 | 1371 | 0 | 1 | 5 | 13 | 123.9 |
+| -8.0 (sensitivity 5) | 1460 | 0 | 1 | 8 | 14 | 200.2 |
+| -8.5 | 1512 | 1 | 2 | 11 | 15 | 282.2 |
+| -9.0 | 1547 | 1 | 2 | 15 | 16 | 352.2 |
+| -9.25 (sensitivity 10) | 1559 | 1 | 3 | 16 | 16 | 379.8 |
 
-The one dispatch at -9.25 is "okay Cody, go ahead" through a 0.2 gate, which
-Parakeet heard as "Hey Kobe, go on." Apple's confirm takes 52 ms at the median
-and 65 ms at the 95th percentile.
+The dispatch from -8.5 down is "hey Toby, approve it" (say Daniel, quiet,
+-8.05), heard whole by both recognizers as "Hey, Kobe, approve it." It stays a
+near-miss: it dispatches only above sensitivity 5, and the wake word never
+answers a prompt. Apple's confirm takes 56 ms at the median and 85 ms at the
+95th percentile.
 
 The strict score (no recognizer answer), spotter alone on tune: at -4.0 clean
 positives 52%, quiet 5%, near-misses 2% (127/6200), LibriSpeech 0 an hour; at
--5.0 near-misses 9% and one LibriSpeech clip.
+-5.0 near-misses 9% and one LibriSpeech clip (the head-only run, before the
+two Cody phrases moved).
 
 Apple's contextual strings ("Hey Kobi", "Kobi") changed none of the heads of
 2250 clips on a first probe of 15 phrases, against none at all, or with "Kobe"

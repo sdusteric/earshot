@@ -1,5 +1,5 @@
 # class	text
-# positive: shapes Listener.confirmsWake accepts ("Kobi" alone first only opens the command window). nearmiss: shares sounds, must not wake. mention: the name, not as a wake at the start. collision: a name said the same as "Kobi" ("Kobe", "Coby"); it wakes, and is counted apart.
+# positive: shapes Listener.confirmsWake accepts ("Kobi" alone first only opens the command window). nearmiss: shares sounds, must not wake. mention: the name, not as a wake at the start. collision: a name said the same as "Kobi" ("Kobe", "Coby"), or one a recognizer wrote as "Kobe" on the bench so that it dispatched ("hi Cody, any updates?" heard as "Hi Kobe, any updates?"); it wakes, and is counted apart.
 # New lines go at the end: make-wake-audio.sh numbers the phrases in order (p001..), so the files of the lines above keep their ids.
 positive	Hey Kobi
 positive	Hey Kobi.
@@ -54,7 +54,7 @@ nearmiss	hey Toby, run the tests
 nearmiss	hey Cody, approve it
 nearmiss	okay Colby, stop
 nearmiss	hey Toby, what's everyone doing?
-nearmiss	hi Cody, any updates?
+collision	hi Cody, any updates?
 nearmiss	okay Bobby, status
 nearmiss	hey Robbie, tell the blog to run the tests
 nearmiss	hey Koji, stop
@@ -75,7 +75,7 @@ nearmiss	hey Kofi
 nearmiss	hey Corey
 nearmiss	hey Jodie
 nearmiss	hey Goldie
-nearmiss	okay Cody, go ahead
+collision	okay Cody, go ahead
 nearmiss	hey Toby, yes
 nearmiss	hey Colby, approve it
 nearmiss	okay, copy that

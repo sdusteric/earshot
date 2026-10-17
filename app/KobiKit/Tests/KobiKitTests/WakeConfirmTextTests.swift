@@ -20,6 +20,29 @@ import Testing
         if case .literal? = Listener.wakeWords(head) {} else { Issue.record("not literal: \(head)") }
     }
 
+    /// After a weak greeting (a, i, k, eight, 8, hate, high, hay: words that start ordinary
+    /// sentences too), the name sends what follows only when it stands apart: a comma, a stop,
+    /// ? or ! after it, or nothing. Run into the sentence it is window only, as the name alone
+    /// first is: "Kobe" is a common word ("a Kobe steak"). After hey, hi, ok and okay the name
+    /// run into the sentence still sends it: recognizers often write a real command with no
+    /// comma ("Hey Kobe pause.", "Okay Kobe status."), and requiring one cost 25 of 440 tune
+    /// commands in clean and 20 in quiet on the wake bench (5.7 and 4.5 points).
+    @Test(arguments: ["A Kobe beef burger, please.", "Eight Kobe sliders, please.", "A Kobe Bryant jersey for my son.",
+                      "A Kobe steak, medium rare.", "8 Kobe sliders.", "I Kobe is listening.", "K Kobe what time is it"])
+    func aWeakGreetingRunIntoTheSentenceIsWindowOnly(_ head: String) {
+        #expect(Listener.wakeWords(head) == .bare)
+        #expect(Listener.wakeRemainder(head) == nil)
+        #expect(Listener.finishRemainder(head, plain: head, second: head, passedOnWords: true) == nil)
+        #expect(Listener.finishRemainder(head, passedOnWords: false) == nil)
+        #expect(Listener.stripWake(head) != nil)
+    }
+
+    @Test func aStrongGreetingRunIntoTheSentenceStillSends() {
+        #expect(Listener.wakeWords("Hey Kobe pause.") == .literal(remainder: "pause."))
+        #expect(Listener.wakeWords("Okay Kobe status.") == .literal(remainder: "status."))
+        #expect(Listener.wakeWords("A Kobe, status.") == .literal(remainder: "status."))
+    }
+
     /// The name first with no greeting, standing apart, passes the confirm but never sends its
     /// words: a mention whose start a noise gate cut off reads the same ("can Kobi read my
     /// mail" heard as "Kobe, read my mail.").

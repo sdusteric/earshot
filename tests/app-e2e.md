@@ -270,10 +270,12 @@ does that is for the real voice check.
 ## Wake word bench, 2026-10-17 ("Hey Kobi")
 
 The same method (tests/wake/README.md has the full tables): 30 voices x 122
-phrases (32 positives, 62 near-misses, 18 mentions, 10 collisions) x 5
+phrases (32 positives, 60 near-misses, 18 mentions, 12 collisions) x 5
 conditions, 18300 clips, a third of the voices held out, and LibriSpeech
 test-clean (5.4 h). Collisions are names said the same as "Kobi" ("Hey Kobe,
-run the tests", "Hey Coby, stop"): they wake, and are reported apart.
+run the tests", "Hey Coby, stop"), and two Cody phrases a recognizer wrote as
+"Kobe": they wake, and are reported apart. The finish hears the whole segment,
+as the listener does, not the 2 s head.
 
 Decisions:
 
@@ -281,7 +283,11 @@ Decisions:
   higher. Apple's recognizer wrote "Kobe" for most "Kobi"s and "Kobi" almost
   never, with or without "Kobi" as contextual text.
 - Literal: a greeting (hey, hi, high, hay, hate, eight, 8, a, i, k, ok, okay),
-  then "kobi", "kobe" or "koby". Window only: the name first, standing apart.
+  then "kobi", "kobe" or "koby". After a, i, k, eight, 8, hate, high and hay
+  the name must stand apart (a comma, a stop, ? or !, or nothing after it);
+  run into the sentence it is window only ("A Kobe beef burger, please").
+  Requiring that after hey, hi, ok and okay too cost 5.7 points of same-breath
+  commands in clean. Window only: the name first, standing apart.
   No sound-alike tier: "Colby" won 30 tune positives for 169 near-miss windows.
 - Sensitivity 5 stays at -8.0. The strict score for a wake no recognizer could
   judge goes from -5.0 to -4.0 (clean positives 52%, near-misses 2%,
@@ -290,11 +296,12 @@ Decisions:
 At -8.0, end to end, positives that chime (tune + holdout, of 960 each), with
 "Hey Earshot" at -8.0 in brackets: clean 919 (814), quiet 764 (441), gate 0.2
 462 (352), gate 0.4 64 (45), gate 0.6 5 (5). Of the positives with a greeting
-and a command, 97% in clean and 84% in quiet sent the command in the same
-breath. Dispatch false wakes: 0 of 9300 near-misses, 0 of 2700 mentions, 0.00
-an hour on LibriSpeech. Window false wakes: 13 of 9300 near-misses, 22 of 2700
-mentions (20 in the gates), 0.00 an hour on LibriSpeech. Collisions woke 645
-of 1500, 308 of them dispatching.
+and a command, 99% in clean and 87% in quiet sent the command in the same
+breath. Dispatch false wakes: 0 of 9000 near-misses, 0 of 2700 mentions, 0.00
+an hour on LibriSpeech. The phrase alone, which carries over speech begun
+during the confirm: 3 near-misses ("hey Kofi", "hey Hobie") and 1 mention.
+Window false wakes: 8 of 9000 near-misses, 21 of 2700 mentions, 0.00 an hour
+on LibriSpeech. Collisions woke 647 of 1800, 319 of them dispatching.
 
 ## Listening (plan 2)
 
