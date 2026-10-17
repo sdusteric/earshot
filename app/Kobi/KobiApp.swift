@@ -10,14 +10,20 @@ struct KobiApp: App {
     @State private var orb: OrbPanel?
     @State private var dock = DockPresence()
     @Environment(\.openWindow) private var openWindow
+    private let oldAppWatch: NSObjectProtocol
 
     init() {
         // A client hanging up must never kill the app.
         signal(SIGPIPE, SIG_IGN)
         // Another Kobi already runs.
         if !SingleInstance.claim() { exit(0) }
-        // Once, after the rename: Earshot's config, history and settings, before anything reads them.
-        Migration().run()
+        // Earshot must not run next to Kobi: both would hold the hotkey and hear "Hey Kobi".
+        // Asked to quit at every launch, and whenever it starts while Kobi runs.
+        let old = Migration.quitOldApp()
+        oldAppWatch = Migration.quitOldAppWhenItStarts()
+        // After the rename: Earshot's config, history and settings, before anything reads them,
+        // until a run finishes cleanly.
+        Migration().run(quitOld: { old })
         _model = State(initialValue: AppModel())
     }
 
