@@ -80,7 +80,7 @@ public actor Listener {
         /// The longest the second look at a wake may take (see WakeConfirmer). One that
         /// runs past it is taken as no answer: the wake passes only on a strict spotter
         /// score (CtcWakeSpotter.unconfirmedThreshold). Apple's recognizer answers in about
-        /// 51 ms (59 ms at the 95th percentile) on the wake bench.
+        /// 52 ms (65 ms at the 95th percentile) on the wake bench.
         public var confirmLimit: Duration = .milliseconds(750)
 
         public init(wakeSilence: Duration = .seconds(8), followUp: Duration = .seconds(6),
@@ -740,7 +740,7 @@ public actor Listener {
     /// wakeWords. The finish decides what is a command, from the transcripts. Nil (no recognizer could tell, or the
     /// confirm was too slow) passes only when the score reaches
     /// CtcWakeSpotter.unconfirmedThreshold: at the usual threshold alone the spotter would
-    /// chime about 140 times an hour of speech.
+    /// chime about 200 times an hour of speech.
     private func confirmed(_ id: UUID, text: String?, score: Float) async {
         guard capture?.id == id, capture?.confirming == true else { return }
         // A press not yet held long enough: wait to see what it is. Held on, it wins

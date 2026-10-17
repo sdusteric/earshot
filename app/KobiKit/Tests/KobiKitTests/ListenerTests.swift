@@ -1238,7 +1238,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     /// A wake no recognizer could judge (the confirmer has no answer) passes only on a
     /// score at or above CtcWakeSpotter.unconfirmedThreshold; under it, it is silent.
-    @Test(arguments: [(Float(-4), true), (Float(-5), true), (Float(-6), false), (Float(-7.9), false)])
+    @Test(arguments: [(Float(-3), true), (Float(-4), true), (Float(-5), false), (Float(-7.9), false)])
     func anUnjudgedWakeNeedsTheStrictScore(score: Float, passes: Bool) async {
         await spotter.setHit(score)
         let confirmer = FakeConfirmer(words: nil)

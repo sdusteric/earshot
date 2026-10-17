@@ -11,7 +11,7 @@ import Testing
         #expect(CtcWakeSpotter.threshold(99) == -9.25)
         #expect(CtcWakeSpotter.threshold(-3) == -7)
         // A wake no recognizer judged needs more than any sensitivity's threshold.
-        #expect(CtcWakeSpotter.unconfirmedThreshold == -5)
+        #expect(CtcWakeSpotter.unconfirmedThreshold == -4)
         #expect((1...10).allSatisfy { CtcWakeSpotter.threshold($0) < CtcWakeSpotter.unconfirmedThreshold })
         // FluidAudio relaxes by 1 per token past 3; that is taken back.
         #expect(CtcWakeSpotter.minScore(5, tokens: 6) == -5)

@@ -344,27 +344,28 @@ public actor CtcWakeSpotter: WakeSpotter {
     /// The lowest score that fires the spotter. Sensitivity 5 is -8.0; each step moves it
     /// by 0.25, higher waking more easily (-7.0 at 1, -9.25 at 10).
     /// A fire is not a wake yet: Apple's recognizer reads the window's words, and the wake
-    /// passes only when they start with the wake phrase (Listener.wakeWords), written as
-    /// such or only sounding like it; only a greeting and the phrase written as such ever
-    /// send the words after them. So the
-    /// threshold can sit low, where the spotter alone would chime about 140 times an hour
-    /// of speech. Measured on the wake bench (tests/wake/README.md, kobi-probe
-    /// wake-rescore, 19950 synthetic clips over 30 voices and 5 mic conditions, a third of the
-    /// voices held out, and 5.4 h of LibriSpeech), at -8.0 with Apple's confirm: positives woken
-    /// (tune, holdout) clean 87%, 81%; quiet 50%, 38%; noise gate 0.2 38%, 34%; gate 0.4 4%, 6%;
-    /// gate 0.6 0%, 1%. Dispatch false wakes: near-misses 0 of 12900, mentions 0 of 2250.
-    /// Window false wakes: near-misses 405 of 12900 (3.1%), mentions 8 of 2250 (0.4 and 0.6 gates).
-    /// LibriSpeech: the spotter fires 142.6 times an hour, 0.00 an hour dispatch, 0.00 a window. The confirm
-    /// takes 51 ms at the median and 59 ms at the 95th percentile.
-    /// The spotter alone at the old -6.0 woke on 73% of clean positives and 17% of quiet
-    /// ones, with 505/4800 near-miss false wakes.
+    /// passes only when they start with the wake phrase (Listener.wakeWords); only a greeting
+    /// and the name written as such ever send the words after them. So the threshold can sit
+    /// low, where the spotter alone would chime about 200 times an hour of speech. Measured on
+    /// the wake bench (tests/wake/README.md, kobi-probe wake-rescore, 18300 synthetic clips
+    /// over 30 voices and 5 mic conditions, a third of the voices held out, and 5.4 h of
+    /// LibriSpeech), at -8.0 with Apple's confirm, end to end: positives woken (tune, holdout)
+    /// clean 97%, 94%; quiet 78%, 83%; noise gate 0.2 46%, 52%; gate 0.4 7%, 6%; gate 0.6 0%, 1%.
+    /// Dispatch false wakes: near-misses 0 of 9300, mentions 0 of 2700. Window false wakes:
+    /// near-misses 13 of 9300 (0.1%), mentions 22 of 2700 (0.8%, 20 of them in the gates).
+    /// LibriSpeech: the spotter fires 200.2 times an hour, 0.00 an hour dispatch, 0.00 a window.
+    /// "Hey Kobe" (and "Hey Coby") wakes as "Hey Kobi" does. Lower thresholds wake a few more
+    /// positives (-8.5: 1512 of 3200 tune, against 1460) for more window false wakes and fires;
+    /// at -9.25, sensitivity 10, one tune near-miss dispatched. The confirm takes 52 ms at the
+    /// median and 65 ms at the 95th percentile.
     public static func threshold(_ sensitivity: Int) -> Float { -8.0 - 0.25 * Float(min(max(sensitivity, 1), 10) - 5) }
 
     /// The lowest score that wakes when no recognizer could judge the window (Apple's has
     /// no answer and Parakeet is not loaded, or the confirm ran past its limit). Spotter
-    /// alone at -5.0 on the wake bench: clean positives 52%, near-miss false wakes 3%,
-    /// LibriSpeech 0 audible an hour. The same at any sensitivity.
-    public static let unconfirmedThreshold: Float = -5.0
+    /// alone at -4.0 on the wake bench's tune split: clean positives 52%, quiet 5%, near-miss
+    /// fires 2%, LibriSpeech 0 an hour (at -4.25 one LibriSpeech clip fires, at -5.0 near-misses
+    /// fire 9%). The same at any sensitivity.
+    public static let unconfirmedThreshold: Float = -4.0
 
     /// FluidAudio lowers the score a phrase needs by 1 for each token past 3 ("hey
     /// kobi" has 5), so the threshold is raised by as much to mean what it says.
@@ -389,8 +390,8 @@ public actor CtcWakeSpotter: WakeSpotter {
     }
 
     /// The score the listener wakes on: the higher of "hey kobi" and "hey kobe". On the wake
-    /// bench's tune split at -8.0 it woke 1433 of 3200 positives, against 1430 for "hey kobe"
-    /// alone and 1383 for "hey kobi" alone, with the same near-miss and mention false wakes.
+    /// bench's tune split at -8.0, end to end, it woke 1460 of 3200 positives, against 1457 for
+    /// "hey kobe" alone and 1408 for "hey kobi" alone, with no dispatch false wakes for any.
     public static func score(_ s: WakeScores) -> Float { max(s.phrase, s.other) }
 
     /// The spotter's scores for one clip: `phrase` "hey kobi", `other` "hey kobe" and
