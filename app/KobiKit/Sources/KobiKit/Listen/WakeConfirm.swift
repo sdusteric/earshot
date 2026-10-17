@@ -1,11 +1,10 @@
 import Foundation
 
-// Kobi wake: part 2 (the sound-alike example, and the rule in Listener.confirmsWake)
 /// The second look at a wake, before Kobi shows it heard one: the words in
 /// the first moments of the segment the spotter fired on. The listener passes
 /// the wake only when those words start with the wake phrase (Listener.confirmsWake),
-/// written as such or sounding like it ("hey your shot"), so other speech stays silent:
-/// no chime, no orb. Only a greeting and the phrase written as such ever send the words after them.
+/// so other speech ("Hey Toby, run the tests") stays silent: no chime, no orb.
+/// Only a greeting and the name written as such ever send the words after them.
 public protocol WakeConfirmer: Sendable {
     /// What was said in `head` (16 kHz mono), or nil when this confirmer can't
     /// tell (not loaded, failed). Nil does not pass the wake by itself: the listener

@@ -42,7 +42,7 @@ actor SlowCommandModel: CommandModel {
         let model = FakeModel(answer: .send(target: "blog", prompt: "are the other seconds going"))
         let p = CommandParser(model: model)
         #expect(await p.parse("Are the other seconds going?", sessions: ["blog"]) == .status(target: nil))
-        // Kobi wake: part 2 (a session named earshot, cut to "shot")
+        // A session named earshot (any name: this is name matching, not the wake), cut to "shot".
         #expect(await p.parse("Shot to run the tests.", sessions: ["earshot"], gated: true)
                 == .confirmSend(target: "earshot", prompt: "run the tests"))
         #expect(await model.asked.isEmpty)

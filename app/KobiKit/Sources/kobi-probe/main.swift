@@ -29,7 +29,7 @@ import KobiKit
 @preconcurrency import FluidAudio
 import Foundation
 
-let wakePhrase = "hey earshot"   // Kobi wake: part 2
+let wakePhrase = CtcWakeSpotter.phrase
 let segmentSpotAt = 24_000          // 1.5 s: spot a segment this long, or when it ends
 let spotWindow = 32_000             // at most 2 s; at the 1.5 s spot only the first 1.5 s is there
 let energyThreshold: Float = 0.008  // RMS; below it the VAD does not run
@@ -229,7 +229,7 @@ func listen(minutes: Double) async throws {
     let spotter = try await Spotter.load()
     let seg = await Segmenter(vad: vad)
     let (engine, stream) = try micStream()
-    print("Listening for \(minutes) min. Say \"Hey Earshot\" now and then.")   // Kobi wake: part 2
+    print("Listening for \(minutes) min. Say \"Hey Kobi\" now and then.")
     let end = Date().addingTimeInterval(minutes * 60)
     var minuteStart = Date(), cpuStart = cpuSeconds()
     var segments = 0, wakes = 0, spotMs: [Int] = []
@@ -366,8 +366,8 @@ func wakeEval(_ dir: URL) async throws {
     await confirmer.prepare()
     print("apple ready: \(await apple.isReady)")
     let transcriber = ParakeetTranscriber()
-    // A session named earshot, as the app would have; the wake's own clip is heard without it.
-    let vocabulary = Listener.wakeVocabulary(["billing service", "finebrief", "earshot", "blog"])   // Kobi wake: part 2
+    // A session named kobi, as the app would have; the wake's own clip is heard without it.
+    let vocabulary = Listener.wakeVocabulary(["billing service", "finebrief", "kobi", "blog"])
     var hits = 0, windowHits = 0, misses = 0, dispatches = 0, windows = 0, words = 0, wordsTotal = 0, rows = 0
     for line in try String(contentsOf: dir.appending(path: "manifest.tsv"), encoding: .utf8).split(separator: "\n") {
         let p = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
@@ -392,7 +392,7 @@ func wakeEval(_ dir: URL) async throws {
                 let tier = Listener.wakeWords(heard)
                 passedOnWords = tier != nil
                 woke = passedOnWords
-                why += ", confirm heard \"\(heard)\"\(tier == .soundAlike ? " (sound-alike)" : tier == .bare ? " (bare)" : "")"
+                why += ", confirm heard \"\(heard)\"\(tier == .bare ? " (bare)" : "")"
             } else {
                 woke = score >= CtcWakeSpotter.unconfirmedThreshold
                 why += ", no confirm answer"

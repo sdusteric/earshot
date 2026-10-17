@@ -334,7 +334,7 @@ actor CountingSpeaker: LineSpeaker {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())
         let player = r.player
-        r.heard.yield(said("Hey Earshot, yes.", .followUp(.approval(id: "1-1-1"))))   // Kobi wake: part 2
+        r.heard.yield(said("Hey Kobi, yes.", .followUp(.approval(id: "1-1-1"))))
         #expect(await eventually { await player.played == ["Approved."] })
         #expect(FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
     }
@@ -342,7 +342,7 @@ actor CountingSpeaker: LineSpeaker {
     @Test func heyKobiAloneInTheWindowDoesNothing() async {
         let r = await rig([agent("s1", "billing-service")])
         await r.book.apply(approval())
-        r.heard.yield(said("Hey Earshot.", .followUp(.approval(id: "1-1-1"))))   // Kobi wake: part 2
+        r.heard.yield(said("Hey Kobi.", .followUp(.approval(id: "1-1-1"))))
         try? await Task.sleep(for: .milliseconds(100))
         #expect(await r.player.played.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
@@ -354,7 +354,7 @@ actor CountingSpeaker: LineSpeaker {
                            agent("b", "billing-service", name: "Invoice export", pid: 11)])
         r.heard.yield(said("Tell billing to run the tests."))
         #expect(await eventually { await followUps.calls == [.reply] })
-        r.heard.yield(said("Hey Earshot, Invoice export.", .followUp(.reply)))   // Kobi wake: part 2
+        r.heard.yield(said("Hey Kobi, Invoice export.", .followUp(.reply)))
         #expect(await eventually { await transport.sent.map(\.pid) == [11] })
     }
 
@@ -406,8 +406,8 @@ actor CountingSpeaker: LineSpeaker {
         let heard = Collected<String>()
         let lines = await r.loop.heardLines()
         Task { for await t in lines { await heard.add(t) } }
-        r.heard.yield(.init(text: "Hey Earshot, tell blog to deploy.", trigger: .wake, endedAt: .now,   // Kobi wake: part 2
-                            plain: "Hey Earshot, tell blob to deploy."))
+        r.heard.yield(.init(text: "Hey Kobi, tell blog to deploy.", trigger: .wake, endedAt: .now,
+                            plain: "Hey Kobi, tell blob to deploy."))
         #expect(await eventually { await heard.items == ["tell blob to deploy."] })
         #expect(await history.entries.map(\.text) == (await heard.items))
     }
@@ -690,7 +690,7 @@ actor CountingSpeaker: LineSpeaker {
                            agent("b", "billing-service", name: "Invoice export", pid: 11)])
         r.heard.yield(said("Tell billing to run the tests."))
         #expect(await eventually { await followUps.calls == [.reply] })
-        r.heard.yield(said("Hey Earshot.", .followUp(.reply)))   // Kobi wake: part 2
+        r.heard.yield(said("Hey Kobi.", .followUp(.reply)))
         try? await Task.sleep(for: .milliseconds(100))
         #expect(await transport.sent.isEmpty)
         #expect(await r.player.played.count == 1)   // only the question

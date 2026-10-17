@@ -12,7 +12,7 @@ import Foundation
 /// fires and false wakes per hour. False wakes are counted in two kinds: "dispatch", a
 /// greeting and the phrase written as such with words after it, which would send them as a
 /// command (the dangerous kind), and "window", a chime that sends nothing of the segment and
-/// only opens the command window ("Kobi" alone first, a sound-alike, or the phrase alone).
+/// only opens the command window ("Kobi" alone first, or the phrase alone).
 /// Collisions ("Hey Kobe", which sounds the same as "Hey Kobi") are counted the same way but
 /// are not false wakes: they are expected to wake. In the confirm-only tables the head's own
 /// words stand in for what the finish sends, and a look with no answer (passed on the strict

@@ -1,58 +1,31 @@
 import Testing
 @testable import KobiKit
 
-// Kobi wake: part 2 (the bench transcripts here are still of "Hey Earshot")
-
 /// Listener.wakeWords and confirmsWake on heads the wake bench's recognizers wrote (Apple's
-/// SpeechTranscriber and Parakeet), for "Hey Earshot" and for the near-misses and mentions that
-/// must not wake. Two tiers: a greeting and the phrase written as such (literal, with the words
-/// after it), and "Earshot" alone first (bare) or words that only sound like it (sound-alike),
-/// which may chime but never send their words.
+/// SpeechTranscriber and Parakeet), for "Hey Kobi" and for the near-misses, mentions and
+/// collisions. Two tiers: a greeting and the name written as such (literal, with the words
+/// after it), and the name alone first (bare), which may chime but never sends its words.
 @Suite struct WakeConfirmTextTests {
-    /// How the bench's recognizers wrote "Hey Earshot" with the phrase spelled as such.
+    /// How the bench's recognizers wrote "Hey Kobi" with the name spelled as such. Apple wrote
+    /// "Kobe" for most of them, and "Koby" now and then.
     @Test(arguments: [
-        "Hey Earshot", "Hey, Earshot, what's everyone doing?", "OK Earshot, be quiet", "Hey ear shot, run the tests",
-        "High earshot, any updates?", "Hay earshot.", "Hate ear shot.", "High ear shot, switch to the app session",
-        "Okay ear shot.", "Eight ear shot.", "Hi Earshot, any updates?", "Hey air shot.", "Hey earshots",
+        "Hey, Kobe.", "Okay, Kobe.", "Hi, Kobe.", "Hey Kobi", "Hey, Kobe, stop.", "Okay, Kobe, be quiet.",
+        "Hey Kobe, how are you?", "Hi Kobe.", "Okay, Kobe status.", "Hey, Kobe, tell the website.", "Hey Koby.",
+        "Hey Koby, tell the blog.", "K Kobe, status.", "K, Kobe.", "I, Kobe, switch to the app.", "Eight Kobe.",
+        "High Kobe, any updates?", "A Kobe.", "OK Kobi, be quiet",
     ])
-    func misheardWakesSpelledAsThePhraseAreLiteral(_ head: String) {
+    func wakesSpelledAsTheNameAreLiteral(_ head: String) {
         #expect(Listener.confirmsWake(head))
         #expect(Listener.wakeRemainder(head) != nil)
         if case .literal? = Listener.wakeWords(head) {} else { Issue.record("not literal: \(head)") }
     }
 
-    /// A greeting, then a word or two that sound like ARXT but are spelled otherwise.
-    @Test(arguments: [
-        "Hate your shot.", "Hey your shot", "Okay your shot, status", "Eight year shot.", "Hey, you're shot. Stop.",
-        "8 year shot", "Hey your shots", "A your shot.", "Hey airshot.",
-    ])
-    func misheardWakesThatOnlySoundLikeItAreSoundAlike(_ head: String) {
-        #expect(Listener.confirmsWake(head))
-        #expect(Listener.wakeWords(head) == .soundAlike)
-        #expect(Listener.wakeRemainder(head) == nil)
-    }
-
-    /// The second safety review's sentences: they sound like the phrase, so they may chime,
-    /// but the words after them are never a command ("Approve it." would approve a prompt).
-    @Test(arguments: [
-        "Okay, your shot. Approve it.", "Hey, we're shot", "Hey, our shots are ready.", "Okay, or shot",
-        "Hey, wear shot", "Okay, you're shot, delete the branch", "okay, your shot, run the tests",
-        "hey, your shot, approve it", "Hey your shot, what's everyone doing?",
-    ])
-    func soundAlikesAreNeverLiteral(_ text: String) {
-        #expect(Listener.wakeWords(text) == .soundAlike)
-        #expect(Listener.wakeRemainder(text) == nil)
-        #expect(Listener.finishRemainder(text, passedOnWords: true) == nil)
-        #expect(Listener.finishRemainder(text, plain: text, second: text, passedOnWords: true) == nil)
-        #expect(Listener.finishRemainder(text, passedOnWords: false) == nil)
-    }
-
-    /// "Earshot" first with no greeting, standing apart, passes the confirm but never sends its
-    /// words: a mention whose start a noise gate cut off reads the same ("did you ask earshot to
-    /// run the tests" heard as "Ear shot. To run.").
-    @Test(arguments: ["Earshot", "Earshot.", "Earshot, stop.", "Ear shot.", "Ear shot, what time is it?",
-                      "Ear shot. To run.", "Earshot, approve it."])
-    func aBareEarshotSetApartIsWindowOnly(_ head: String) {
+    /// The name first with no greeting, standing apart, passes the confirm but never sends its
+    /// words: a mention whose start a noise gate cut off reads the same ("can Kobi read my
+    /// mail" heard as "Kobe, read my mail.").
+    @Test(arguments: ["Kobe.", "Kobe, stop.", "Kobi", "Koby, what time is it?", "Kobe, read that again.",
+                      "Kobe, read my mail.", "Kobe, to run the test.", "Kobe, approve it."])
+    func theNameAloneFirstSetApartIsWindowOnly(_ head: String) {
         #expect(Listener.confirmsWake(head))
         #expect(Listener.wakeWords(head) == .bare)
         #expect(Listener.wakeRemainder(head) == nil)
@@ -60,82 +33,60 @@ import Testing
         #expect(Listener.finishRemainder(head, passedOnWords: false) == nil)
     }
 
+    /// Near-misses as the bench's recognizers wrote them: other names and everyday words. None
+    /// of them pass, the names that sound like Kobi included ("Hey, Colby." is now and then a
+    /// "Hey Kobi", and "Toby." a gated one), since they cost more near-misses than they win wakes.
     @Test(arguments: [
-        "Here's a shot.", "A hair shot.", "Her shot, summarized the last session.", "Hey Urshad.",
-        "Hey, fair shot.", "Hey Earl's hot.", "Hey ear shut up.", "Hey, ear shock.", "Hey Ashton, how are you?",
-        "Nice shot, stop.", "Hey, her shirt.", "Airshot, what's the status?", "Air shot.", "Hey Marshall.",
+        "Copy that.", "Cool beans.", "Okay, go be quiet.", "Hey, go be quiet.", "Cody, approve it.", "Colby.",
+        "Okay, cookie.", "Hey, go be nice.", "Nobody knows.", "Hey, Toby.", "Hey, Goldie.", "Hey, Cody.",
+        "Hey, nobody's here.", "Hey, Jody.", "Hi Colby, how are you?", "Hey, Robbie.", "Hey, Gobi.", "Hey, Colby.",
+        "Okay, Cody, go ahead.", "Hey, Bobby, stop.", "Okay, Colby, stop.", "Hey coach, what's up?", "Toby.",
+        "Toby, stop.", "Hey, Kofi.", "Hey Obi.", "Hey, nobody stop.", "Hey, Cuba is warm.", "Take Kobe to the vet.",
+        "Like Kobe, run the tests.",
     ])
     func nearMissesFail(_ head: String) {
         #expect(!Listener.confirmsWake(head))
         #expect(Listener.wakeWords(head) == nil)
     }
 
-    /// Everyday sentences with "shot" that fired the spotter and that Apple's recognizer heard
-    /// word for word: with a verb first, or "you shot" and "a shot" (AXT, not ARXT), they are
-    /// sentences, and the rest of them would go out as a command. The near-misses in
-    /// tests/wake/phrases.tsv that the words alone can tell apart.
-    @Test(arguments: [
-        "Take a shot, run the test.", "Take a shot at the login bug.", "Hey you shot the deploy.",
-        "Get your shot today.", "Hey, a shot of the bill.", "Take your shot.", "Pay your shot.",
-        "My earshot, switch to the app session", "Eat your shot.", "Paint your shot.", "Make your shot.",
-        "Hey, you shot the deploy.", "Okay, you shot first.", "Nice shot, run it again.", "Good shot.",
-        "Hey, what a shot.", "Okay, your turn to shoot.", "Hey, I shot it over.", "Hey, are you sure?",
-        "High shot.", "Hey, hot shot.", "Hey, we shot the video.", "Eight shots.",
-        "Hey, you're short on time.", "Hey, you shot.", "Hey, a shot.", "Take a shot, run the test",
-        "take your shot", "get your shot today", "hey, you shot the deploy", "hey, a shot of the bill",
-        "Maybe your shot.", "I your shot.", "Hey, nice shot.", "Hey, big shot, run it.", "Hey, mug shot.",
-    ])
-    func everydayShotSentencesFail(_ head: String) {
-        #expect(!Listener.confirmsWake(head))
-        #expect(Listener.wakeRemainder(head) == nil)
+    /// Collisions: "Kobe" and "Coby" are said the same as "Kobi". "Hey Kobe" wakes, and the words
+    /// after it are a command, as for "Hey Kobi". "Coby" is not taken.
+    @Test func aCollisionWakesAsTheNameDoes() {
+        #expect(Listener.wakeWords("Hey, Kobe, run the test.") == .literal(remainder: "run the test."))
+        #expect(Listener.wakeWords("Okay, Kobe, approve it.") == .literal(remainder: "approve it."))
+        #expect(Listener.wakeWords("Kobe, stop.") == .bare)
+        #expect(Listener.wakeWords("Hey Coby, stop.") == nil)
     }
 
-    /// Near-misses whose words are the wake phrase's: the rule can't tell them from a wake,
-    /// so only the spotter's score keeps them out (the bench counts how often). "Hey, your
-    /// shot is next" is a sound-alike, so at most it chimes; "Hey, ear shot." is the phrase.
-    @Test func sentencesMadeOfThePhrasesWordsPass() {
-        #expect(Listener.wakeWords("Hey, your shot is next.") == .soundAlike)
-        #expect(Listener.wakeWords("Hey, ear shot.") == .literal(remainder: ""))
-    }
-
-    /// A mention: the phrase run into a sentence, or later than the start. Never a wake, and
-    /// never a command at finish, wherever the word is.
+    /// A mention: the name run into a sentence, or later than the start. Never a wake, and
+    /// never a command at finish, wherever the name is.
     @Test(arguments: [
-        "Earshot is listening.", "Earshot of the door.", "Ear shot to run the test.", "Earshot app is on my...",
-        "Within earshot of the door.", "The earshot app is on my menu bar.", "Is earshot still running?",
-        "Yes, earshot is listening.", "I think earshot heard you.", "did you ask earshot to run the tests",
-        "Hey there earshot what's the status",
+        "Kobe is listening.", "Yes, Kobe is listening.", "Is Kobe still running?", "I think Kobe heard you.",
+        "Open Kobe settings.", "Kobe Bryant scored.", "Tell me when Kobe is ready.", "Can Kobe read my mail?",
+        "Kobe beef is expensive.", "I asked Kobe yesterday.", "Kobe heard you.", "We flew to Kobe last.",
+        "My dog, Kobe.", "Kobe's still running.", "Kobe still running.", "did you ask kobi to run the tests",
+        "Hey there Kobe what's the status", "Kobi said the tests passed.",
     ])
     func mentionsFail(_ head: String) {
         #expect(!Listener.confirmsWake(head))
+        #expect(Listener.finishRemainder(head, plain: head, second: head, passedOnWords: true) == nil)
     }
 
+    /// wakeRemainder gives the words after the name, as written, in the literal tier.
     @Test(arguments: [
-        "Within earshot of the door.", "The earshot app is on my menu bar.", "Is earshot still running?",
-        "Yes, earshot is listening.", "I think earshot heard you.", "did you ask earshot to run the tests",
-        "Hey there earshot what's the status", "Take a shot run the tests", "Your shot, run the tests.",
+        ("Hey Kobi", ""), ("Hey, Kobe.", ""), ("Hey, Kobe, what's everyone doing?", "what's everyone doing?"),
+        ("Hey kobe run the tests", "run the tests"), ("Hi Kobe, stop.", "stop."), ("Okay Kobe.", ""),
+        ("Okay, Kobe status.", "status."), ("  OK Kobi , be quiet ", "be quiet"), ("Hey Koby, tell the blog.", "tell the blog."),
+        ("K Kobe, status.", "status."), ("Hey Kobe... yes", "yes"), ("Hey, Kobe is listening.", "is listening."),
     ])
-    func aMentionPastTheFirstWordIsNoCommandAtFinish(_ text: String) {
-        #expect(Listener.finishRemainder(text, plain: text, second: text, passedOnWords: true) == nil)
-    }
-
-    /// wakeRemainder gives the words after the phrase, as written, in the literal tier.
-    @Test(arguments: [
-        ("Hey Earshot", ""), ("Hey Earshot.", ""), ("Hey, Earshot, what's everyone doing?", "what's everyone doing?"),
-        ("Hey ear shot run the tests", "run the tests"), ("Hi Earshot, stop.", "stop."), ("Okay Earshot.", ""),
-        ("Hey ear shot, what time is it?", "what time is it?"), ("  OK Earshot , be quiet ", "be quiet"),
-        ("Hey earshots, status", "status"), ("Hey air shot... yes", "yes"),
-        ("High ear shot switch to the app", "switch to the app"), ("Hey, earshot is listening.", "is listening."),
-    ])
-    func theRemainderIsWhatFollowsThePhrase(_ text: String, _ rest: String) {
+    func theRemainderIsWhatFollowsTheName(_ text: String, _ rest: String) {
         #expect(Listener.wakeRemainder(text) == rest)
         #expect(Listener.wakeWords(text) == .literal(remainder: rest))
         #expect(Listener.confirmsWake(text))
     }
 
-    @Test(arguments: ["Hey, ear shock.", "Earshot is listening.", "Run the tests.", "", "Hey there, nice shot.",
-                      "Take a shot, run the test.", "Take your shot, run the test."])
-    func noRemainderWithoutThePhrase(_ text: String) {
+    @Test(arguments: ["Hey, Toby.", "Kobe is listening.", "Run the tests.", "", "Hey there, Kobe.", "Copy that, run the test."])
+    func noRemainderWithoutTheName(_ text: String) {
         #expect(Listener.wakeRemainder(text) == nil)
         #expect(!Listener.confirmsWake(text))
     }
@@ -146,40 +97,39 @@ import Testing
         #expect(Listener.wakeWords("Hey") == nil)
     }
 
-    /// At finish, a wake the confirmer passed on its words looks for a greeting and the phrase
+    /// At finish, a wake the confirmer passed on its words looks for a greeting and the name
     /// written as such in the unboosted words (plain, or the boosted ones when the boost changed
-    /// nothing), then in the second hearing. The command is the boosted words after the phrase
+    /// nothing), then in the second hearing. The command is the boosted words after the name
     /// when they have it too.
     @Test(arguments: [
-        ("Hey Earshot, what's everyone doing?", nil, nil, "what's everyone doing?"),
-        ("Hearsay what's everyone doing", "Hey Earshot. What's everyone doing", nil, "What's everyone doing"),
-        ("Hearsay what's everyone doing", nil, "Hey Earshot, what's everyone doing?", "what's everyone doing?"),
-        ("Hey your shot, what's everyone doing", "Hey your shot what's", "Hey earshot, what's everyone doing", "what's everyone doing"),
-        ("Hey reflow summarized the last session.", "Hey Earshot summarized the last session.", nil, "summarized the last session."),
-        ("Hey Earshot, stop the blog", "Hey Earshot, stop the build", nil, "stop the blog"),
-        ("", nil, "Hey Earshot, pause.", "pause."),
-        ("Hey Earshot", "Hey earshot, run the tests", nil, ""),
+        ("Hey Kobe, what's everyone doing?", nil, nil, "what's everyone doing?"),
+        ("Hey Colby what's everyone doing", "Hey Kobe. What's everyone doing", nil, "What's everyone doing"),
+        ("Hey Colby what's everyone doing", nil, "Hey Kobe, what's everyone doing?", "what's everyone doing?"),
+        ("Hey reflow summarized the last session.", "Hey Kobe summarized the last session.", nil, "summarized the last session."),
+        ("Hey Kobe, stop the blog", "Hey Kobe, stop the build", nil, "stop the blog"),
+        ("", nil, "Hey Kobe, pause.", "pause."),
+        ("Hey Kobi", "Hey kobe, run the tests", nil, ""),
     ] as [(String, String?, String?, String)])
-    func aWakePassedOnWordsFindsTheLiteralPhraseInAnUnboostedHearing(_ text: String, _ plain: String?, _ second: String?, _ rest: String) {
+    func aWakePassedOnWordsFindsTheLiteralNameInAnUnboostedHearing(_ text: String, _ plain: String?, _ second: String?, _ rest: String) {
         #expect(Listener.finishRemainder(text, plain: plain, second: second, passedOnWords: true) == rest)
     }
 
-    /// No command when only "Earshot" first, a sound-alike or nothing of the phrase is heard, in any hearing.
-    @Test(arguments: ["Which sessions are waiting", "Hearsay what's everyone doing", "", "The tests ran fine in the end",
-                      "Okay, your shot. Approve it.", "Earshot which sessions are waiting", "Earshot tell the blog to run the tests",
-                      "Ear shot run the tests", "Earshot, pause.", "Ear shot. To run the tests."])
-    func aTranscriptWithNoLiteralPhraseIsNoCommand(_ text: String) {
+    /// No command when only the name alone first, or nothing of it, is heard, in any hearing.
+    @Test(arguments: ["Which sessions are waiting", "Hey Colby, what's everyone doing", "", "The tests ran fine in the end",
+                      "Kobe which sessions are waiting", "Kobe tell the blog to run the tests", "Kobe, pause.",
+                      "Kobe. To run the tests.", "Toby, approve it."])
+    func aTranscriptWithNoLiteralNameIsNoCommand(_ text: String) {
         #expect(Listener.finishRemainder(text, plain: text, second: text, passedOnWords: true) == nil)
         #expect(Listener.finishRemainder(text, passedOnWords: false) == nil)
     }
 
-    /// A session named earshot makes the boost write the phrase over a sound-alike: the boosted
-    /// words alone never make a command.
+    /// A session named kobe makes the boost write the name over another ("Hey Toby, approve
+    /// it."): the boosted words alone never make a command.
     @Test(arguments: [
-        ("Okay, earshot stop the blog", "Okay, you're shot, stop the build.", nil),
-        ("Okay, earshot stop the blog", "Okay, you're shot, stop the build.", "Okay, your shot. Stop the build."),
-        ("Hey earshot, approve it", "Hey your shot, approve it", "Hey, your shot. Approve it."),
-        ("Hey earshot, approve it", "Earshot, approve it", nil),
+        ("Hey Kobe, approve it", "Hey Toby, approve it", nil),
+        ("Hey Kobe, approve it", "Hey Toby, approve it", "Hey, Toby. Approve it."),
+        ("Okay, Kobe stop the blog", "Okay, Colby, stop the build.", "Okay, Colby, stop the build."),
+        ("Hey Kobe, approve it", "Kobe, approve it", nil),
     ] as [(String, String, String?)])
     func theBoostedWordsAloneAreNoCommand(_ text: String, _ plain: String, _ second: String?) {
         #expect(Listener.finishRemainder(text, plain: plain, second: second, passedOnWords: true) == nil)
@@ -187,26 +137,25 @@ import Testing
     }
 
     /// A wake that passed on the strict score alone decides on the unboosted words too, and
-    /// takes the command from them when the boost lost the phrase.
+    /// takes the command from them when the boost lost the name.
     @Test(arguments: [
-        ("Okay reflow what's the status of the blog", "Okay earshot, what's the status of the build?", "what's the status of the build?"),
-        ("Hey Earshot, stop the blog", "Hey Earshot, stop the build", "stop the blog"),
-        ("Hey Earshot, stop the blog", nil, "stop the blog"),
+        ("Okay reflow what's the status of the blog", "Okay Kobe, what's the status of the build?", "what's the status of the build?"),
+        ("Hey Kobe, stop the blog", "Hey Kobe, stop the build", "stop the blog"),
+        ("Hey Kobe, stop the blog", nil, "stop the blog"),
     ] as [(String, String?, String)])
     func aWakePassedOnTheScoreAloneDecidesOnTheUnboostedWords(_ text: String, _ plain: String?, _ rest: String) {
         #expect(Listener.finishRemainder(text, plain: plain, passedOnWords: false) == rest)
     }
 
     /// A wake that passed on the strict score alone does not look at the second hearing.
-    @Test(arguments: ["Earshot which sessions are waiting", "Hearsay what's everyone doing", "Take a shot run the tests",
-                      "Hey your shot, what's everyone doing?"])
+    @Test(arguments: ["Kobe which sessions are waiting", "Hey Colby, what's everyone doing", "Copy that, run the tests"])
     func aWakePassedOnTheScoreAloneIgnoresTheSecondHearing(_ text: String) {
-        #expect(Listener.finishRemainder(text, second: "Hey Earshot, what's everyone doing?", passedOnWords: false) == nil)
+        #expect(Listener.finishRemainder(text, second: "Hey Kobe, what's everyone doing?", passedOnWords: false) == nil)
     }
 
-    /// Names that spell the wake phrase are left out of a wake's own clip's vocabulary.
-    @Test func namesThatSpellTheWakePhraseAreLeftOut() {
-        #expect(Listener.wakeVocabulary(["billing service", "earshot", "Earshot Spike", "earshots", "Air Shot", "airshot",
-                                         "blog", "ear", "shot"]) == ["billing service", "blog", "ear", "shot"])
+    /// Names with a spelling of the name in them are left out of a wake's own clip's vocabulary.
+    @Test func namesThatSpellTheNameAreLeftOut() {
+        #expect(Listener.wakeVocabulary(["billing service", "kobi", "Kobe app", "kobi-web", "Koby", "blog", "Colby", "kob"])
+                == ["billing service", "blog", "Colby", "kob"])
     }
 }

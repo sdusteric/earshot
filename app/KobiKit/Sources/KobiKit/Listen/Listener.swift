@@ -5,13 +5,12 @@ import os
 /// held, or in a short window after Kobi asked something. Audio lives
 /// only in the ring buffer, and a command's audio is erased once it is heard.
 ///
-/// A wake has two tiers (see wakeWords). A greeting, then the phrase written as such
-/// ("Hey Kobi, stop"), chimes and sends the words after it. "Kobi" alone at the start
-/// ("Kobi, stop"), or words that only sound like the phrase ("hey your shot"), may chime,
-/// but nothing said with them is sent: Kobi waits for the command, said after the chime,
-/// since "Okay, your shot. Approve it." and a mention whose start the mic cut off ("did you
-/// ask earshot to run the tests" heard as "Ear shot. To run.") sound the same.
-// Kobi wake: part 2 (the examples above and the matching below still spell "earshot")
+/// A wake has two tiers (see wakeWords). A greeting, then the name written as such
+/// ("Hey Kobi, stop", or "Hey Kobe, stop", which sounds the same), chimes and sends the
+/// words after it. "Kobi" alone at the start ("Kobi, stop") may chime, but nothing said
+/// with it is sent: Kobi waits for the command, said after the chime, since a mention whose
+/// start the mic cut off ("did you ask kobi to run the tests" heard as "Kobe. To run.")
+/// sounds the same.
 public actor Listener {
     public enum FollowUp: Sendable, Equatable {
         /// The answer to a permission prompt Kobi just announced.
@@ -217,7 +216,7 @@ public actor Listener {
     /// threshold, the transcript of a wake passed on that score alone had no wake words at
     /// all (wakeWords), or it was Kobi's own voice. A wake passed on words whose transcript
     /// lacks the phrase is not counted, nor one passed on the score whose transcript has
-    /// "Kobi" alone first or a sound-alike: each waits for the command (see finishRemainder).
+    /// "Kobi" alone first: each waits for the command (see finishRemainder).
     public private(set) var falseWakes = 0
 
     public init(input: any AudioInput, gate: any SpeechGate, spotter: any WakeSpotter, transcriber: any Transcriber,
@@ -762,8 +761,7 @@ public actor Listener {
         let how: String
         switch tier {
         case .literal?: how = "the phrase"
-        case .bare?: how = "the phrase alone first"
-        case .soundAlike?: how = "a sound-alike"
+        case .bare?: how = "the name alone first"
         case nil: how = "the strict score"
         }
         log.info("wake passed on \(how, privacy: .public)")
@@ -842,7 +840,7 @@ public actor Listener {
     /// Stage 4: transcribes the clip and hands it on. For a wake, only the words after a
     /// greeting and the phrase written as such are a command (finishRemainder); a wake passed
     /// on words whose transcripts lack them, or on the score whose words have "Kobi" alone
-    /// first or a sound-alike, sends nothing and waits for a command said after the chime
+    /// first, sends nothing and waits for a command said after the chime
     /// (openCommandWindow).
     /// `claimed`: the capture was already taken off `capture` (a new press during the tail),
     /// and `clip` is its audio, taken then.
@@ -900,11 +898,11 @@ public actor Listener {
                 }
             } else if c.passedOnWords || Self.wakeWords(plain ?? text) != nil {
                 // A wake passed on words whose transcripts don't start with a greeting and the
-                // phrase written as such ("Okay, your shot. Approve it.", "Kobi, stop", or a
-                // mention cut off at the start, "Ear shot. To run."): none of its words are sent.
+                // name written as such ("Kobi, stop", or a mention cut off at the start,
+                // "Kobe. To run."): none of its words are sent.
                 // It chimed, so the command is the next thing said, after the chime. The same for
                 // a wake passed on the strict score alone whose unboosted words have "Kobi"
-                // alone first or a sound-alike (not the literal tier, which finishRemainder took).
+                // alone first (not the literal tier, which finishRemainder took).
                 text = ""
                 plain = nil
                 other = nil
@@ -934,7 +932,7 @@ public actor Listener {
     /// After a wake that sent nothing, listens for the command, from where the wake ended.
     /// `carryOver` (after "Hey Kobi" alone): speech begun or said while the wake was
     /// being confirmed is the command. Without it (a wake passed on words whose transcripts
-    /// lack a greeting and the phrase, such as "Kobi" alone first or a sound-alike), only
+    /// lack a greeting and the phrase, such as "Kobi" alone first), only
     /// speech that starts after the chime is, as in a follow-up window:
     /// what went on during the confirm may be the rest of a sentence that was not to Kobi.
     private func openCommandWindow(after c: Capture, end: Int, carryOver: Bool) async {
@@ -1062,16 +1060,11 @@ public actor Listener {
 
     // MARK: - Text
 
-    // Kobi wake: part 2. The phrase, its spellings and its sound-alikes below are still
-    // "earshot"'s. Part 2 rewrites them, and their comments, for "Kobi".
-
-    // Kobi wake: part 2
     nonisolated(unsafe) private static let wakePrefix = try! Regex(
-        #"^\s*(?:(?:hey|hi|ok|okay|a)[\s,.!]*)?(?:ear\s*shot|air\s*shot|earshot)\b[\s,.!?]*"#
+        #"^\s*(?:(?:hey|hi|ok|okay|a)[\s,.!]*)?(?:kobi|kobe|koby)\b[\s,.!?]*"#
     ).ignoresCase()
 
-    // Kobi wake: part 2
-    nonisolated(unsafe) private static let wakeAnywhere = try! Regex(#"\b(?:ear\s*shot|air\s*shot)\b"#).ignoresCase()
+    nonisolated(unsafe) private static let wakeAnywhere = try! Regex(#"\b(?:kobi|kobe|koby)\b"#).ignoresCase()
 
     /// The text after the wake phrase, or nil when it does not start with it.
     public static func stripWake(_ text: String) -> String? {
@@ -1081,67 +1074,45 @@ public actor Listener {
 
     /// How a text says the wake phrase at its start, when it does (see wakeWords(_:)).
     public enum WakeWords: Sendable, Equatable {
-        /// A greeting, then the phrase written as such: "earshot", "earshots", "ear shot" or
-        /// "air shot". `remainder` is the words after it, as written (empty for the phrase
-        /// alone). Only this tier ever gives a command.
+        /// A greeting, then the name written as such: "Kobi", "Kobe" or "Koby" (nameSpellings).
+        /// `remainder` is the words after it, as written (empty for the phrase alone).
+        /// Only this tier ever gives a command.
         case literal(remainder: String)
-        /// "Earshot" or "ear shot" as the first word, standing apart ("Earshot, stop",
-        /// "Ear shot."). A noise gate that cuts the start of a mention leaves the same words
-        /// ("did you ask earshot to run the tests" heard as "Ear shot. To run."), so the words
-        /// after it are never a command: the wake may chime, and the command is the next thing said.
+        /// The name as the first word, standing apart ("Kobe, stop", "Kobi."). A
+        /// noise gate that cuts the start of a mention leaves the same words ("did you ask
+        /// kobi to run the tests" heard as "Kobe. To run."), so the words after it are never
+        /// a command: the wake may chime, and the command is the next thing said.
         case bare
-        /// A greeting, then a word or two that sound like "earshot" but are spelled
-        /// otherwise ("hey your shot", "okay, you're shot", "hey, our shots"). Everyday
-        /// sentences sound the same ("Okay, your shot. Approve it."), so, as for bare, the
-        /// words after them are never a command.
-        case soundAlike
     }
 
-    /// What recognizers wrote for "hey" and "okay" on the wake bench, besides the words
-    /// themselves. No verbs: "take your shot, run the test" is a sentence.
-    private static let greetings: Set<String> = ["hey", "hi", "high", "hay", "hate", "eight", "8", "a", "ok", "okay"]
+    /// What recognizers wrote for "hey", "hi" and "okay" on the wake bench, besides the
+    /// words themselves ("K Kobe" for "Okay Kobi", "I Kobe" for "Hi Kobi"). No verbs: "take
+    /// Kobe to the vet" is a sentence.
+    private static let greetings: Set<String> = ["hey", "hi", "high", "hay", "hate", "eight", "8", "a", "i", "k", "ok", "okay"]
 
-    /// Whether the text starts with the wake phrase, and in which tier. Three shapes pass:
-    /// - a greeting, then the phrase spelled "earshot", "earshots", "ear shot" or "air shot"
-    ///   in the next word or two: literal.
-    /// - a greeting, then a word or two that only sound like it: they end in "shot" (or
-    ///   "shots"), do not start with "h" ("hair shot", "her shot"), and their sound key is
-    ///   ARXT ("your shot", "year shot", "you're shot", "we're shot"): sound-alike. Only ARXT:
-    ///   "you shot" and "a shot" are AXT, and are everyday words ("hey, you shot the deploy").
-    /// - "Earshot" or "ear shot" as the first word, with no greeting, standing apart: a comma
-    ///   or a stop right after it, or nothing after it ("Earshot, stop", "Earshot."): bare. Run
-    ///   into a sentence it is a mention ("Earshot is listening"). Never later in the text:
-    ///   "did you ask earshot to run the tests" is about Earshot, not to it.
-    /// Some sentences still pass, since their words are the phrase's: "hey, your shot is
-    /// next" (sound-alike, so nothing of it is sent). Tuned on the wake bench's tune split
-    /// (kobi-probe wake-rescore).
+    /// How recognizers write "Kobi" when they get it right. Apple's recognizer writes "Kobe"
+    /// for most of them, and almost never "Kobi"; "Koby" now and then. "Kobe" is said the
+    /// same, so "Hey Kobe" wakes too. "Coby" is left out: on the wake bench's tune split it
+    /// woke 6 more of 3200 positives, and 3 near-misses and mentions too, so it comes from
+    /// other names as well.
+    static let nameSpellings: Set<String> = ["kobi", "kobe", "koby"]
+
+    /// Whether the text starts with the wake phrase, and in which tier. Two shapes pass:
+    /// - a greeting, then "Kobi" (nameSpellings) as the next word: literal.
+    /// - "Kobi" as the first word, with no greeting, standing apart: a comma or a stop right
+    ///   after it, or nothing after it ("Kobi, stop", "Kobe."): bare. Run into a sentence it
+    ///   is a mention ("Kobi is listening", "Kobe beef is expensive"). Never later in the
+    ///   text: "did you ask kobi to run the tests" is about Kobi, not to it.
+    /// Names that only sound like it ("Hey Colby", "Hey Toby") never pass: on the wake bench's
+    /// tune split, taking "Colby" after a greeting as a window-only wake woke 30 more of 3200
+    /// positives and 169 more of 6200 near-misses (kobi-probe wake-rescore).
     public static func wakeWords(_ text: String) -> WakeWords? {
-        // Kobi wake: part 2
-        func soundsLikeEarshot(_ letters: String) -> Bool {
-            let l = letters.hasSuffix("shots") ? String(letters.dropLast()) : letters
-            return l.hasSuffix("shot") && !l.hasPrefix("h") && SoundsLike.key(l) == "ARXT"
-        }
         let (tokens, words) = wakeTokens(text)
         guard let first = words.first else { return nil }
-        let greeted = greetings.contains(first)
-        if greeted, let n = literalLength(words, at: 1) {
-            return .literal(remainder: remainder(text, after: tokens[n]))
+        if greetings.contains(first), words.count > 1, nameSpellings.contains(words[1]) {
+            return .literal(remainder: remainder(text, after: tokens[1]))
         }
-        for n in 1...2 where words.count >= n && words[..<n].joined() == "earshot" {
-            if words.count == n || ",.!?".contains(tokens[n - 1].last!) { return .bare }
-        }
-        for n in 1...2 where greeted && words.count > n {
-            if soundsLikeEarshot(words[1...n].joined()) { return .soundAlike }
-        }
-        return nil
-    }
-
-    /// How many words the phrase, spelled as such, takes from `words[i]` on, or nil.
-    private static func literalLength(_ words: [String], at i: Int) -> Int? {
-        // Kobi wake: part 2
-        guard i < words.count else { return nil }
-        if words[i] == "earshot" || words[i] == "earshots" { return 1 }
-        if i + 1 < words.count, words[i] == "ear" || words[i] == "air", words[i + 1] == "shot" { return 2 }
+        if nameSpellings.contains(first), words.count == 1 || ",.!?".contains(tokens[0].last!) { return .bare }
         return nil
     }
 
@@ -1159,13 +1130,13 @@ public actor Listener {
     /// unboosted too) and `second` the second hearing's.
     /// Whether there is a command is decided on the unboosted words, `plain ?? text`, and for a
     /// wake passed on the confirmer's words also on `second`, never on the boosted words alone:
-    /// a session named "earshot" makes the boost write the phrase over words that only sound
-    /// like it ("Okay, your shot. Stop the build." became "Okay, earshot stop the blog").
+    /// a session named "kobe" makes the boost write the name over words that only sound
+    /// like it, so "Hey Toby, stop the build." could read as "Hey Kobe, stop the build."
     /// The command is the boosted words after the phrase when they start with it too, so the
     /// names in it are kept; otherwise the unboosted words', then the second hearing's.
     /// Nil means this clip's words are not a command. For a wake passed on words, and for one
-    /// passed on the strict score alone whose unboosted words have "Earshot" alone first or a
-    /// sound-alike (wakeWords), the listener waits for the next; otherwise it is a false wake.
+    /// passed on the strict score alone whose unboosted words have "Kobi" alone first or a
+    /// (wakeWords), the listener waits for the next; otherwise it is a false wake.
     public static func finishRemainder(_ text: String, plain: String? = nil, second: String? = nil,
                                        passedOnWords: Bool) -> String? {
         if let rest = wakeRemainder(plain ?? text) { return wakeRemainder(text) ?? rest }
@@ -1173,14 +1144,13 @@ public actor Listener {
         return wakeRemainder(second)
     }
 
-    /// The names a wake's own clip is heard with: those whose letters spell the wake phrase
-    /// ("earshot", "Earshot Spike", "airshot") left out. With one, the boost writes the phrase
-    /// over words that only sound like it, and they would pass as the phrase written as such.
+    /// The names a wake's own clip is heard with: those whose letters have a spelling of the
+    /// name in them ("kobi", "Kobe app", "kobi-web") left out. With one, the boost writes the
+    /// name over words that only sound like it, and they would pass as the phrase written as such.
     public static func wakeVocabulary(_ names: [String]) -> [String] {
-        // Kobi wake: part 2
         names.filter { name in
             let l = SoundsLike.letters(name)
-            return !l.contains("earshot") && !l.contains("airshot")
+            return !nameSpellings.contains { l.contains($0) }
         }
     }
 
@@ -1200,13 +1170,13 @@ public actor Listener {
     }
 
     /// Whether the words of a wake's head start with the wake phrase, in any tier (see
-    /// wakeWords): the confirm's rule, so "Earshot" alone first and a sound-alike may chime too.
+    /// wakeWords): the confirm's rule, so "Kobi" alone first may chime too.
     public static func confirmsWake(_ text: String) -> Bool { wakeWords(text) != nil }
 
-    /// The wake phrase anywhere in the text ("Hey, earshot needs your OK").
+    /// The name anywhere in the text ("Kobi needs your OK"), as Kobi's own lines may say it.
     public static func mentionsWake(_ text: String) -> Bool { text.contains(wakeAnywhere) }
 
-    /// Lowercase letters and digits only, so "Hey, Earshot" and "hey ear shot" compare equal.
+    /// Lowercase letters and digits only, so "Hey, Kobi" and "hey kobi" compare equal.
     static func squash(_ text: String) -> String {
         String(text.lowercased().filter { $0.isLetter || $0.isNumber })
     }

@@ -1,13 +1,12 @@
 import Foundation
 
 /// How alike two words sound, for words a quiet or gated mic garbled
-/// ("seconds" for "sessions", "your shot" for "earshot").
+/// ("seconds" for "sessions").
 public enum SoundsLike {
-    // Kobi wake: part 2 (Listener.wakeWords matches the key ARXT, "earshot"'s)
     /// A rough sound key, in the spirit of Metaphone: consonant sounds in
     /// order, vowels dropped after the first letter, a word that starts with
     /// a vowel sound starting with "A", and repeats collapsed.
-    /// "sessions" is SXNS, "sections" SKXNS, "earshot" ARXT, "your shot" ARXT.
+    /// "sessions" is SXNS, "sections" SKXNS, "your shot" ARXT, "kobi" KP.
     public static func key(_ word: String) -> String {
         let w = Array(spelledOut(word.lowercased()).filter { $0.isLetter && $0.isASCII })
         guard !w.isEmpty else { return "" }

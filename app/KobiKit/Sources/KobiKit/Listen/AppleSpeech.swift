@@ -96,8 +96,9 @@ public actor AppleTranscriber: SecondHearing {
     }
 }
 
-/// The head's words from Apple's SpeechTranscriber, with the wake phrase as context
-/// so "Earshot" is not heard as "ear shot". Nil when the transcriber is not ready
+/// The head's words from Apple's SpeechTranscriber, with the wake phrase as context.
+/// The context changed none of 2250 heads on the wake bench (Apple writes "Kobe" for
+/// most "Kobi"s either way; Listener.nameSpellings takes both). Nil when the transcriber is not ready
 /// (not available on this Mac, or its model not installed): a confirm never installs it.
 public struct AppleHeadConfirmer: WakeConfirmer {
     private let transcriber: AppleTranscriber
@@ -109,6 +110,6 @@ public struct AppleHeadConfirmer: WakeConfirmer {
 
     public func headText(_ head: [Float]) async -> String? {
         guard !head.isEmpty, await transcriber.isReady else { return nil }
-        return try? await transcriber.transcribe(head, names: ["Hey Earshot", "Earshot"])   // Kobi wake: part 2
+        return try? await transcriber.transcribe(head, names: ["Hey Kobi", "Kobi"])
     }
 }

@@ -176,7 +176,8 @@ public enum Grammar {
 
     /// Nothing to do, and nothing to say back.
     static let noOps: Set<String> = [
-        "thanks", "thank you", "thanks kobi", "thank you kobi", "thanks a lot", "thank you very much",
+        "thanks", "thank you", "thanks kobi", "thank you kobi", "thanks kobe", "thank you kobe", "thanks a lot",
+        "thank you very much",
         "thanks so much", "never mind", "nevermind", "forget it", "cancel", "cancel that", "that's all", "that's it",
         "got it", "cool", "great", "perfect", "nice", "awesome", "all right", "alright", "good",
     ]
@@ -301,9 +302,11 @@ public enum Grammar {
         // Before fillers go: "OK for docs site" starts with its yes.
         if let c = answer(Words(transcript), known: known) { return c }
         var w = Words(transcript).trimmingFillers()
-        // "Kobi, ..." speaks to Kobi itself, not to a session called kobi.
-        // Kobi wake: part 2 (other spellings the transcriber writes for "Kobi")
-        if w.keys.first == "kobi", w.said.first?.hasSuffix(",") == true { w = w.slice(1..<w.count).trimmingFillers() }
+        // "Kobi, ..." speaks to Kobi itself, not to a session called kobi. Recognizers
+        // mostly write the name "Kobe" (Listener.nameSpellings).
+        if let first = w.keys.first, Listener.nameSpellings.contains(first), w.said.first?.hasSuffix(",") == true {
+            w = w.slice(1..<w.count).trimmingFillers()
+        }
         guard !w.isEmpty else { return .unknown }
         if noOps.contains(w.key) { return .quiet }
         if repeatPhrases.contains(w.key) { return .repeatLast }

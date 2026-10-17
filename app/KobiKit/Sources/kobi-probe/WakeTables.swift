@@ -44,11 +44,11 @@ func lookOutcome(_ heard: Heard, score: Float?, rule: (String) -> WakeOutcome?) 
 
 /// The listener's confirm rule (Listener.wakeWords), with the head's own remainder as the
 /// guess at what would be sent: a greeting and the phrase with words after it dispatches;
-/// the phrase alone, "Kobi" alone first (bare) or a sound-alike opens the window.
+/// the phrase alone or "Kobi" alone first (bare) opens the window.
 func tierRule(_ words: String) -> WakeOutcome? {
     switch Listener.wakeWords(words) {
     case .literal(let rest)?: return rest.isEmpty ? .window : .dispatch
-    case .bare?, .soundAlike?: return .window
+    case .bare?: return .window
     case nil: return nil
     }
 }
@@ -169,14 +169,15 @@ struct WakeTables {
         }
     }
 
-    /// Positives woken at `t`, split x condition.
+    /// Positives woken at `t`, split x condition, and of them in brackets those that dispatch: the
+    /// words after the phrase go out in the same breath (the rest only open the command window).
     func positives(at t: Float, label: String, _ outcome: (RescoreRow) -> WakeOutcome?) {
-        print("positives woken at \(t)\(label), split x condition:")
+        print("positives woken at \(t)\(label) (dispatching in the same breath), split x condition:")
         print((["split"] + conditions).joined(separator: "\t"))
         for s in splits {
             let cols = conditions.map { c in
                 let n = count(t, outcome) { $0.cls == "positive" && $0.split == s && $0.condition == c }
-                return "\(n.woken)/\(n.all)"
+                return "\(n.woken)/\(n.all) (\(n.dispatch))"
             }
             print(([s] + cols).joined(separator: "\t"))
         }

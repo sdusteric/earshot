@@ -49,6 +49,7 @@ import Testing
         ("Thanks.", .quiet),
         ("Thank you.", .quiet),
         ("Okay, thanks.", .quiet),
+        ("Thanks, Kobe.", .quiet),
         ("Never mind.", .quiet),
         // Kobi's last line again
         ("Repeat that.", .repeatLast),
@@ -101,6 +102,8 @@ import Testing
         ("Stop talking.", .quiet),
         ("Okay, stop.", .quiet),
         ("Kobi, stop.", .quiet),
+        ("Kobe, stop.", .quiet),   // how recognizers mostly write the name
+        ("Koby, be quiet.", .quiet),
         // Every session at once: Kobi asks first.
         ("Stop everything.", .stopAll),
         ("Stop all.", .stopAll),
@@ -212,6 +215,7 @@ import Testing
         "What's next, run the tests",       // a name that starts like a question is never said first
         "Blog post, write it up",           // more than the name
         "Kobi, run the tests",           // Kobi itself, not a session
+        "Kobe, run the tests",
         "So, what's next?",
         "Is the build done?",
         "What's the plan?",

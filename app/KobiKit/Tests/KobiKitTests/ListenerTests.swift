@@ -2,8 +2,6 @@ import Foundation
 import Testing
 @testable import KobiKit
 
-// Kobi wake: part 2 (the wake phrases and sound-alikes here are still "earshot"'s)
-
 func chunk(_ v: Float) -> [Float] { [Float](repeating: v, count: 4096) }
 
 actor FakeInput: AudioInput {
@@ -58,7 +56,7 @@ actor FakeTranscriber: Transcriber {
     func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String {
         vocabularies.append(vocabulary)
         var words: [String] = []
-        if s.contains(2) { words.append("Hey Earshot,") }
+        if s.contains(2) { words.append("Hey Kobi,") }
         if s.contains(3) { words.append("what's everyone doing?") } else if s.contains(1) { words.append("run the tests") }
         return words.joined(separator: " ")
     }
@@ -87,7 +85,7 @@ actor BoostTranscriber: Transcriber {
         try await transcribeBoth(s, vocabulary: vocabulary).text
     }
     func transcribeBoth(_ s: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
-        let wake = s.contains(2) ? "Hey Earshot, " : ""
+        let wake = s.contains(2) ? "Hey Kobi, " : ""
         return (wake + "how are you wedding", wake + "how are you doing")
     }
     func prewarm() async {}
@@ -177,7 +175,7 @@ actor ScriptTranscriber: Transcriber {
         }
         if let fixed { return fixed }
         var words: [String] = []
-        if s.contains(2) { words.append("Hey Earshot,") }
+        if s.contains(2) { words.append("Hey Kobi,") }
         if s.contains(3) { words.append("what's everyone doing?") } else if s.contains(1) { words.append("run the tests") }
         return words.joined(separator: " ")
     }
@@ -432,7 +430,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(u?.plain == "how are you doing")
     }
 
-    /// After "Hey Earshot" the unboosted words lose the wake phrase, as the boosted ones do.
+    /// After "Hey Kobi" the unboosted words lose the wake phrase, as the boosted ones do.
     @Test func aWakeCommandKeepsTheUnboostedWordsWithoutTheWakePhrase() async {
         let l = await make(transcriber: BoostTranscriber())
         await l.setWakeArmed(true)
@@ -448,7 +446,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     @Test func aCommandCarriesTheSecondHearing() async {
         let other = FakeSecondHearing(words: "how are the other sessions going")
         let l = await make(second: other)
-        await l.setVocabulary(["earshot"])
+        await l.setVocabulary(["kobi"])
         await l.tapToTalk()
         #expect(await eventually { await input.isOpen })
         #expect(await eventually { await other.prepares == 1 })   // readied when the mic opens
@@ -458,7 +456,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         let u = await heard.items.first
         #expect(u?.text == "run the tests")
         #expect(u?.second == "how are the other sessions going")
-        #expect(await other.names == [["earshot"]])
+        #expect(await other.names == [["kobi"]])
     }
 
     /// A second hearing that runs long is left out: it never holds up the command.
@@ -477,9 +475,9 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(ContinuousClock.now - start < .seconds(3))
     }
 
-    /// After "Hey Earshot" the second hearing loses the wake phrase too.
+    /// After "Hey Kobi" the second hearing loses the wake phrase too.
     @Test func aWakeCommandsSecondHearingLosesTheWakePhrase() async {
-        let l = await make(second: FakeSecondHearing(words: "Hey Earshot, what's everyone doing?"))
+        let l = await make(second: FakeSecondHearing(words: "Hey Kobi, what's everyone doing?"))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
@@ -682,7 +680,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await eventually { await observer.events == ["began", "began"] })
         await input.push([1, 1])
         try? await Task.sleep(for: .milliseconds(30))
-        await t.release()   // "Hey Earshot," alone: must not replace the hotkey capture
+        await t.release()   // "Hey Kobi," alone: must not replace the hotkey capture
         #expect(await eventually { await observer.events.count == 3 })
         await l.hotkeyUp()
         #expect(await eventually { await heard.items.count == 1 })
@@ -1083,7 +1081,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// The confirm takes its time while you go on talking: nothing said after the
     /// phrase is lost, and the chime comes once, when the wake passes.
     @Test func aSlowConfirmLosesNothingSaidAfterThePhrase() async {
-        let confirmer = FakeConfirmer(words: "Hey Earshot, what's", hold: true)
+        let confirmer = FakeConfirmer(words: "Hey Kobi, what's", hold: true)
         let st = ScriptTranscriber()
         let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
         await l.setWakeArmed(true)
@@ -1111,7 +1109,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     /// The segment ends while the confirm runs: a pass finishes it at once, and
-    /// "Hey Earshot" alone goes on to listen for the command.
+    /// "Hey Kobi" alone goes on to listen for the command.
     @Test func aSegmentThatEndsDuringTheConfirmIsFinishedOnThePass() async {
         let confirmer = FakeConfirmer(words: nil, hold: true)
         let l = await make(Self.confirmTiming, confirmer: confirmer)
@@ -1268,7 +1266,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// Words that start with the wake phrase pass at any score the spotter fires on.
     @Test func aConfirmedWakePassesAtALowScore() async {
         await spotter.setHit(-7.9)
-        let confirmer = FakeConfirmer(words: "Hey Earshot, what's")
+        let confirmer = FakeConfirmer(words: "Hey Kobi, what's")
         let l = await make(confirmer: confirmer)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1280,7 +1278,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// Under the threshold the spotter does not fire: nothing is confirmed.
     @Test func aScoreUnderTheThresholdIsNoWake() async {
         await spotter.setHit(CtcWakeSpotter.threshold(5) - 0.5)
-        let confirmer = FakeConfirmer(words: "Hey Earshot, what's")
+        let confirmer = FakeConfirmer(words: "Hey Kobi, what's")
         let l = await make(confirmer: confirmer)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1292,11 +1290,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await l.falseWakes == 0)
     }
 
-    /// Confirmed from words that only sound like the phrase ("hey your shot"), a wake whose
-    /// transcript writes the phrase as such keeps its command.
-    @Test func aSoundAlikeConfirmWithALiteralTranscriptKeepsItsCommand() async {
-        let confirmer = FakeConfirmer(words: "Hey your shot, what's everyone doing?")
-        let st = ScriptTranscriber(fixed: "Hey Earshot, what's everyone doing?")
+    /// Confirmed from the name alone first ("Kobe, what's everyone doing?"), a wake whose
+    /// transcript has the greeting and the name keeps its command.
+    @Test func aBareConfirmWithALiteralTranscriptKeepsItsCommand() async {
+        let confirmer = FakeConfirmer(words: "Kobe, what's everyone doing?")
+        let st = ScriptTranscriber(fixed: "Hey Kobi, what's everyone doing?")
         let l = await make(transcriber: st, confirmer: confirmer)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1309,11 +1307,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await observer.heard == [true])
     }
 
-    /// "Okay, your shot. Approve it." sounds like the wake and was heard word for word. It
-    /// chimes, but "Approve it." is never sent: no transcript writes the phrase as such, so
-    /// the listener waits for the command, as after "Hey Earshot" alone.
-    @Test func aSoundAlikeSentenceSendsNothingAndWaitsForTheCommand() async {
-        let said = "Okay, your shot. Approve it."
+    /// "Kobe, approve it." with no greeting, heard word for word in every hearing: a mention
+    /// cut off at the start reads the same. It chimes, but "approve it." is never sent: the
+    /// listener waits for the command, as after "Hey Kobi" alone.
+    @Test func theNameAloneFirstSendsNothingAndWaitsForTheCommand() async {
+        let said = "Kobe, approve it."
         let st = WakeAndCommandTranscriber(wake: said, command: "run the tests")
         let other = FakeSecondHearing(words: said)
         let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: said))
@@ -1327,7 +1325,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await chimes.played == [.listening])
         #expect(await observer.events == ["began"])
         #expect(await l.falseWakes == 0)
-        // The window is the one after "Hey Earshot" alone: the next thing said is the command.
+        // The window is the one after "Hey Kobi" alone: the next thing said is the command.
         await input.push([1, 1, 0, 0])
         #expect(await eventually { await heard.items.count == 1 })
         #expect(await heard.items.first?.text == "run the tests")
@@ -1336,14 +1334,14 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await observer.events == ["began", "ended"])
     }
 
-    /// A mention whose start the noise gate cut off, so the confirm heard "Earshot" alone first
-    /// ("Ear shot. To run."): nothing is sent, whether the transcript has the phrase later ("did
-    /// you ask earshot to run the tests") or was cut off the same way, and the window that opens
+    /// A mention whose start the noise gate cut off, so the confirm heard "Kobe" alone first
+    /// ("Kobe. To run."): nothing is sent, whether the transcript has the name later ("did you
+    /// ask kobi to run the tests") or was cut off the same way, and the window that opens
     /// closes on silence.
-    @Test(arguments: ["did you ask earshot to run the tests", "Ear shot. To run the tests."])
+    @Test(arguments: ["did you ask kobi to run the tests", "Kobe. To run the tests."])
     func aMentionCutOffAtTheStartSendsNothing(_ transcript: String) async {
         let st = WakeAndCommandTranscriber(wake: transcript, command: "")
-        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Ear shot. To run."))
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Kobe. To run."))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
@@ -1354,10 +1352,10 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await eventually { await l.currentPhase == .waiting })
     }
 
-    /// The boost turned "Earshot" into a session's name; the plain words still have the phrase.
+    /// The boost turned "Kobi" into a session's name; the plain words still have the phrase.
     @Test func thePlainWordsCanCarryThePhrase() async {
-        let st = FixedTranscriber(text: "Hey reflow summarized the last session.", plain: "Hey Earshot summarized the last session.")
-        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Hey Earshot"))
+        let st = FixedTranscriber(text: "Hey reflow summarized the last session.", plain: "Hey Kobi summarized the last session.")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Hey Kobi"))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
@@ -1369,8 +1367,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// Parakeet heard nothing; the second hearing, waited for anyway, has the phrase and the command.
     @Test func theSecondHearingCanCarryTheCommandWhenParakeetHeardNothing() async {
         let st = FixedTranscriber(text: "", plain: nil)
-        let other = FakeSecondHearing(words: "Hey Earshot, pause.", delay: .milliseconds(50))
-        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: "Hey Earshot"))
+        let other = FakeSecondHearing(words: "Hey Kobi, pause.", delay: .milliseconds(50))
+        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: "Hey Kobi"))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
@@ -1379,11 +1377,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await chimes.played == [.listening])
     }
 
-    /// "Earshot, stop" with no greeting chimes and opens the window, but sends nothing of its
+    /// "Kobi, stop" with no greeting chimes and opens the window, but sends nothing of its
     /// own segment, even when the transcript agrees: the next segment is the command.
-    @Test func aBareEarshotOpensTheWindowAndTheNextSegmentIsTheCommand() async {
-        let st = WakeAndCommandTranscriber(wake: "Earshot, stop", command: "run the tests")
-        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Earshot, stop"))
+    @Test func aBareKobiOpensTheWindowAndTheNextSegmentIsTheCommand() async {
+        let st = WakeAndCommandTranscriber(wake: "Kobe, stop", command: "run the tests")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Kobe, stop"))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
@@ -1401,11 +1399,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await st.clips.last?.contains(2) == false)
     }
 
-    /// A session named earshot: the boost wrote the phrase over "Okay, your shot." The unboosted
-    /// words are a sound-alike, so nothing is sent, and the window opens for the command.
-    @Test func theBoostWritingThePhraseOverASoundAlikeSendsNothing() async {
-        let st = FixedTranscriber(text: "Okay, earshot stop the blog", plain: "Okay, you're shot, stop the build.")
-        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Okay, your shot."))
+    /// A session named kobe: the boost wrote the name over "Okay, Colby." The unboosted words
+    /// lack the name, so nothing is sent, and the window opens for the command.
+    @Test func theBoostWritingTheNameOverAnotherSendsNothing() async {
+        let st = FixedTranscriber(text: "Okay, Kobe stop the blog", plain: "Okay, Colby, stop the build.")
+        let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Kobe, stop."))
         await l.setVocabulary(["blog"])
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1425,7 +1423,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// have it, so they are the command.
     @Test func aStrictWakeTakesTheCommandFromTheUnboostedWords() async {
         let st = FixedTranscriber(text: "Okay reflow what's the status of the blog",
-                                  plain: "Okay earshot, what's the status of the build?")
+                                  plain: "Okay Kobe, what's the status of the build?")
         let l = await make(transcriber: st, confirmer: FakeConfirmer(words: nil))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1436,11 +1434,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await l.falseWakes == 0)
     }
 
-    /// After a sound-alike pass, speech begun while the confirm ran is not the command, even
-    /// with the window open when it ends: the command is what starts after the chime.
-    @Test func speechBegunDuringASlowConfirmAfterASoundAlikeIsNotTheCommand() async {
-        let confirmer = FakeConfirmer(words: "Okay, your shot.", hold: true)
-        let st = WakeAndCommandTranscriber(wake: "Okay, your shot.", command: "approve it")
+    /// After a pass on the name alone first, speech begun while the confirm ran is not the
+    /// command, even with the window open when it ends: the command is what starts after the chime.
+    @Test func speechBegunDuringASlowConfirmAfterTheNameAloneIsNotTheCommand() async {
+        let confirmer = FakeConfirmer(words: "Kobe.", hold: true)
+        let st = WakeAndCommandTranscriber(wake: "Kobe.", command: "approve it")
         var t = Self.confirmTiming
         t.wakeSilence = .seconds(2)
         let l = await make(t, transcriber: st, confirmer: confirmer)
@@ -1470,9 +1468,9 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     /// The same with the whole sentence said during the confirm: it is not the command either.
-    @Test func aSentenceSaidDuringASlowConfirmAfterASoundAlikeIsNotTheCommand() async {
-        let confirmer = FakeConfirmer(words: "Hey your shot", hold: true)
-        let st = WakeAndCommandTranscriber(wake: "Hey your shot", command: "approve it")
+    @Test func aSentenceSaidDuringASlowConfirmAfterTheNameAloneIsNotTheCommand() async {
+        let confirmer = FakeConfirmer(words: "Kobe", hold: true)
+        let st = WakeAndCommandTranscriber(wake: "Kobe", command: "approve it")
         let l = await make(Self.confirmTiming, transcriber: st, confirmer: confirmer)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1488,24 +1486,24 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     /// A wake's own clip is heard without the names that spell the wake phrase; the command
-    /// after "Hey Earshot" alone is heard with all of them.
+    /// after "Hey Kobi" alone is heard with all of them.
     @Test func aWakesOwnClipIsHeardWithoutNamesThatSpellThePhrase() async {
         let other = FakeSecondHearing(words: "")
         let l = await make(second: other)
-        await l.setVocabulary(["billing service", "earshot", "Earshot Spike", "blog"])
+        await l.setVocabulary(["billing service", "kobi", "Kobe app", "blog"])
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 2, 0, 0])
         #expect(await eventually { await chimes.played == [.listening] })
         await input.push([1, 1, 0, 0])
         #expect(await eventually { await heard.items.count == 1 })
-        #expect(await transcriber.vocabularies == [["billing service", "blog"], ["billing service", "earshot", "Earshot Spike", "blog"]])
-        #expect(await other.names == [["billing service", "blog"], ["billing service", "earshot", "Earshot Spike", "blog"]])
+        #expect(await transcriber.vocabularies == [["billing service", "blog"], ["billing service", "kobi", "Kobe app", "blog"]])
+        #expect(await other.names == [["billing service", "blog"], ["billing service", "kobi", "Kobe app", "blog"]])
     }
 
     /// A wake that passed on the strict score alone, with no words to go on, whose transcript
-    /// has no wake words at all ("Earshot" run into a sentence is a mention): a false wake.
-    @Test(arguments: ["Earshot which sessions are waiting", "which sessions are waiting"])
+    /// has no wake words at all ("Kobi" run into a sentence is a mention): a false wake.
+    @Test(arguments: ["Kobi which sessions are waiting", "which sessions are waiting"])
     func aWakePassedOnTheScoreAloneKeepsThePlainRuleAtFinish(_ transcript: String) async {
         let st = ScriptTranscriber(fixed: transcript)
         let l = await make(transcriber: st, confirmer: FakeConfirmer(words: nil))
@@ -1518,10 +1516,10 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await observer.heard == [false])
     }
 
-    /// A wake passed on the strict score alone whose transcript has "Earshot" alone first or a
-    /// sound-alike: as for a wake passed on those words, it chimed, nothing of its segment is
-    /// sent, it is not a false wake, and the next segment is the command.
-    @Test(arguments: ["Earshot, stop", "Earshot.", "Hey your shot. Approve it."])
+    /// A wake passed on the strict score alone whose transcript has the name alone first: as
+    /// for a wake passed on those words, it chimed, nothing of its segment is sent, it is not a
+    /// false wake, and the next segment is the command.
+    @Test(arguments: ["Kobe, stop", "Kobe.", "Koby, approve it."])
     func aWakePassedOnTheScoreAloneWithoutThePhraseWrittenAsSuchWaitsForTheCommand(_ transcript: String) async {
         let st = WakeAndCommandTranscriber(wake: transcript, command: "run the tests")
         let l = await make(transcriber: st, confirmer: FakeConfirmer(words: nil))
@@ -1544,15 +1542,15 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await st.clips.last?.contains(2) == false)
     }
 
-    /// The settle after a sound-alike's chime runs from the chime, not from when the window
-    /// opens after the wake's transcription: the audio held meanwhile, and a one-word command
-    /// said soon after the chime, are not taken for the chime.
-    @Test func aOneWordCommandSoonAfterASoundAlikesChimeIsHeard() async {
-        let st = WakeAndCommandTranscriber(wake: "Hey your shot.", command: "stop", wakeDelay: .milliseconds(150))
+    /// The settle after the chime of the name alone first runs from the chime, not from when
+    /// the window opens after the wake's transcription: the audio held meanwhile, and a one-word
+    /// command said soon after the chime, are not taken for the chime.
+    @Test func aOneWordCommandSoonAfterTheChimeOfTheNameAloneIsHeard() async {
+        let st = WakeAndCommandTranscriber(wake: "Kobe.", command: "stop", wakeDelay: .milliseconds(150))
         var t = Listener.Timing.forTests
         t.followUpSettle = .milliseconds(250)
         t.wakeSilence = .seconds(2)
-        let l = await make(t, transcriber: st, confirmer: FakeConfirmer(words: "Hey your shot."))
+        let l = await make(t, transcriber: st, confirmer: FakeConfirmer(words: "Kobe."))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 2, 0, 0])
@@ -1570,11 +1568,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// The chime, heard while a slow transcription of the wake held audio back, is still too
     /// soon once the window opens: the settle goes by when audio came in, not when it is processed.
     @Test func theChimeHeardDuringASlowWakeTranscriptionIsNotTheCommand() async {
-        let st = WakeAndCommandTranscriber(wake: "Hey your shot.", command: "stop", wakeDelay: .milliseconds(400))
+        let st = WakeAndCommandTranscriber(wake: "Kobe.", command: "stop", wakeDelay: .milliseconds(400))
         var t = Listener.Timing.forTests
         t.followUpSettle = .milliseconds(250)
         t.wakeSilence = .seconds(2)
-        let l = await make(t, transcriber: st, confirmer: FakeConfirmer(words: "Hey your shot."))
+        let l = await make(t, transcriber: st, confirmer: FakeConfirmer(words: "Kobe."))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 2, 0, 0])
@@ -1591,10 +1589,10 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await chimes.played == [.listening])
     }
 
-    /// An everyday sentence the spotter fired on and the confirmer heard word for word is
-    /// rejected silently, so the rest of it never goes out as a command.
-    @Test(arguments: ["Take a shot, run the test.", "Hey you shot the deploy.", "Take your shot."])
-    func anEverydayShotSentenceIsRejectedSilently(_ words: String) async {
+    /// A near-miss the spotter fired on and the confirmer heard word for word is rejected
+    /// silently, so the rest of it never goes out as a command.
+    @Test(arguments: ["Copy that, run the test.", "Hey Toby, run the tests.", "Hey, Colby, approve it.", "Kobe is listening."])
+    func aNearMissIsRejectedSilently(_ words: String) async {
         await spotter.setHit(-7.877)
         let confirmer = FakeConfirmer(words: words)
         let st = ScriptTranscriber(fixed: words)
@@ -1613,9 +1611,9 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     /// The unboosted words and the second hearing lose the phrase by the same rule,
     /// however each recognizer spelled it.
     @Test func theOtherHearingsLoseATolerantWakePhraseToo() async {
-        let st = FixedTranscriber(text: "Hey Earshot, how are you wedding", plain: "Hey, ear shot. how are you doing")
-        let other = FakeSecondHearing(words: "Hate earshot. How are you doing?")
-        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: "Hey Earshot"))
+        let st = FixedTranscriber(text: "Hey Kobi, how are you wedding", plain: "Hey, Kobe. how are you doing")
+        let other = FakeSecondHearing(words: "Hi Kobe. How are you doing?")
+        let l = await make(transcriber: st, second: other, confirmer: FakeConfirmer(words: "Hey Kobi"))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
@@ -1628,10 +1626,10 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     /// Apple first; Parakeet only when Apple has no answer. Heard nothing is an answer.
     @Test func theConfirmChainAsksTheNextOnlyOnNoAnswer() async {
-        let apple = FakeConfirmer(words: nil), parakeet = FakeConfirmer(words: "Hey Earshot")
-        #expect(await FirstAnswerConfirmer([apple, parakeet]).headText([1]) == "Hey Earshot")
+        let apple = FakeConfirmer(words: nil), parakeet = FakeConfirmer(words: "Hey Kobi")
+        #expect(await FirstAnswerConfirmer([apple, parakeet]).headText([1]) == "Hey Kobi")
         #expect(await parakeet.heads.count == 1)
-        let quiet = FakeConfirmer(words: ""), unasked = FakeConfirmer(words: "Hey Earshot")
+        let quiet = FakeConfirmer(words: ""), unasked = FakeConfirmer(words: "Hey Kobi")
         #expect(await FirstAnswerConfirmer([quiet, unasked]).headText([1]) == "")
         #expect(await unasked.heads.isEmpty)
         #expect(await FirstAnswerConfirmer([FakeConfirmer(words: nil), FakeConfirmer(words: nil)]).headText([1]) == nil)
@@ -1640,7 +1638,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     /// A confirmer that hears the wake phrase changes nothing from before there was a confirm.
     @Test func aPassingConfirmerHearsTheWakeAsBefore() async {
-        let confirmer = FakeConfirmer(words: "Hey Earshot, what's everyone")
+        let confirmer = FakeConfirmer(words: "Hey Kobi, what's everyone")
         let l = await make(confirmer: confirmer)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
@@ -1658,13 +1656,13 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     /// A confirmer that hears one of Kobi's own recent lines rejects the wake.
     @Test func aConfirmThatRepeatsKobisLineIsRejected() async {
-        let confirmer = FakeConfirmer(words: "Hey earshot needs your OK.")
+        let confirmer = FakeConfirmer(words: "Hey kobi needs your OK.")
         var timing = Listener.Timing.forTests
         timing.ownWakeGrace = .zero
         let l = await make(timing, confirmer: confirmer)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
-        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking("Hey, kobi needs your OK to run the tests.")
         await l.setSpeaking(nil)
         try? await Task.sleep(for: .milliseconds(20))
         await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
@@ -1694,7 +1692,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await observer.heard == [true])
     }
 
-    /// "Hey Earshot" alone, a pause, then the command, begun before the confirm answered:
+    /// "Hey Kobi" alone, a pause, then the command, begun before the confirm answered:
     /// the command is heard from where it began, not lost to a capture that waits for speech.
     @Test func aCommandBegunDuringTheConfirmIsHeard() async {
         let confirmer = FakeConfirmer(words: nil, hold: true)
@@ -1794,12 +1792,12 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     // MARK: - Kobi's own voice
 
-    /// A session named "earshot": the plugin says "Hey, earshot needs your OK".
+    /// A session named "kobi": the plugin says "Hey, kobi needs your OK".
     @Test func aWakeWhileKobiSaysThePhraseIsIgnored() async {
         let l = await make()
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
-        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking("Hey, kobi needs your OK to run the tests.")
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
         #expect(await eventually { await spotter.calls == 1 })
         try? await Task.sleep(for: .milliseconds(100))
@@ -1813,7 +1811,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         let l = await make()
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
-        await l.setSpeaking("Earshot finished: fixed the tests.")
+        await l.setSpeaking("Kobi finished: fixed the tests.")
         await l.setSpeaking(nil)
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
         #expect(await eventually { await spotter.calls == 1 })
@@ -1829,7 +1827,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         let l = await make(timing)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
-        await l.setSpeaking("Earshot finished.")
+        await l.setSpeaking("Kobe finished.")
         await input.push([2])
         try? await Task.sleep(for: .milliseconds(30))
         await l.setSpeaking(nil)
@@ -1854,13 +1852,13 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     @Test func aWakeThatRepeatsALineKobiJustSaidIsDropped() async {
-        let t = ScriptTranscriber(fixed: "Hey earshot needs your OK.")
+        let t = ScriptTranscriber(fixed: "Hey kobi needs your OK.")
         var timing = Listener.Timing.forTests
         timing.ownWakeGrace = .zero
         let l = await make(timing, transcriber: t)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
-        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking("Hey, kobi needs your OK to run the tests.")
         await l.setSpeaking(nil)
         try? await Task.sleep(for: .milliseconds(20))
         await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
@@ -1871,14 +1869,14 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     @Test func aLineSaidLongAgoNoLongerDropsAWake() async {
-        let t = ScriptTranscriber(fixed: "Hey earshot needs your OK.")
+        let t = ScriptTranscriber(fixed: "Hey kobi needs your OK.")
         var timing = Listener.Timing.forTests
         timing.ownWakeGrace = .zero
         timing.ownLineMemory = .milliseconds(30)
         let l = await make(timing, transcriber: t)
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
-        await l.setSpeaking("Hey, earshot needs your OK to run the tests.")
+        await l.setSpeaking("Hey, kobi needs your OK to run the tests.")
         await l.setSpeaking(nil)
         try? await Task.sleep(for: .milliseconds(80))
         await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
@@ -1887,22 +1885,23 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     @Test(arguments: [
-        ("Hey, earshot needs your OK to run the tests.", true),
-        ("Earshot finished: fixed the tests.", true),
-        ("The ear shot session is done.", true),
+        ("Hey, kobi needs your OK to run the tests.", true),
+        ("Kobi finished: fixed the tests.", true),
+        ("The Kobe session is done.", true),
+        ("Toby finished.", false),
         ("Billing service needs your OK.", false),
-        ("Hearsay is not evidence.", false),
+        ("Kobold is not a session.", false),
     ])
     func findsTheWakePhraseAnywhere(_ line: String, _ found: Bool) {
         #expect(Listener.mentionsWake(line) == found)
     }
 
     @Test(arguments: [
-        ("Hey Earshot, what's everyone doing?", "what's everyone doing?"),
-        ("hey ear shot tell billing to run the tests", "tell billing to run the tests"),
-        ("Earshot. Stop billing.", "Stop billing."),
-        ("Hey, Earshot", ""),
-        ("Hey air shot, status", "status"),
+        ("Hey Kobi, what's everyone doing?", "what's everyone doing?"),
+        ("hey kobe tell billing to run the tests", "tell billing to run the tests"),
+        ("Kobi. Stop billing.", "Stop billing."),
+        ("Hey, Kobi", ""),
+        ("Okay Kobe, status", "status"),
     ])
     func stripsTheWakePhrase(_ said: String, _ rest: String) {
         #expect(Listener.stripWake(said) == rest)
@@ -1910,6 +1909,8 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     @Test func leavesOtherTextAlone() {
         #expect(Listener.stripWake("run the tests") == nil)
+        #expect(Listener.stripWake("Hey Toby, run the tests") == nil)
+        #expect(Listener.stripWake("Kobold, run the tests") == nil)
     }
 }
 

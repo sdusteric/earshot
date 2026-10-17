@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import KobiKit
 
-// Kobi wake: part 2 (the session named earshot and the words that sound like it)
+// "earshot" here is a session name, from real recordings of one: name matching, not the wake word.
 
 /// What a webcam mic with its noise gate on made of real commands, and the
 /// bench's degraded speech (tests/hearing).
