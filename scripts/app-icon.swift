@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// app-icon.swift: draws Earshot's app icon into app/Earshot/Assets.xcassets/AppIcon.appiconset.
+// app-icon.swift: draws Kobi's app icon into app/Kobi/Assets.xcassets/AppIcon.appiconset.
 // The same dotted sphere as the menu bar icon (MenuIcon.swift), in Orb White on the
 // near-black ground from DESIGN.md. The art fills the square: macOS masks it to its icon shape.
 //
@@ -7,7 +7,7 @@
 import AppKit
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-let set = root.appendingPathComponent("app/Earshot/Assets.xcassets/AppIcon.appiconset")
+let set = root.appendingPathComponent("app/Kobi/Assets.xcassets/AppIcon.appiconset")
 
 func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
     CGColor(srgbRed: CGFloat(hex >> 16 & 0xff) / 255, green: CGFloat(hex >> 8 & 0xff) / 255,

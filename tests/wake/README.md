@@ -1,5 +1,7 @@
 # Wake bench audio
 
+Kobi wake: part 2. The bench, its phrases and the rules below are still for "Hey Earshot".
+
 Audio for tuning "Hey Earshot" without real recordings. The audio is generated
 outside the repo and never committed.
 
@@ -26,7 +28,7 @@ Run the bench with both manifests, each resolved relative to its own folder, and
 the per-segment output in an explicit `--out` file (a name ending in
 `manifest.tsv` is refused, so a manifest is never overwritten):
 
-    earshot-probe wake-bench OUTDIR/manifest.tsv OUTDIR2/manifest.tsv --out RESULTS.tsv
+    kobi-probe wake-bench OUTDIR/manifest.tsv OUTDIR2/manifest.tsv --out RESULTS.tsv
 
 Other flags: `--confirmers ctc,apple,parakeet` (default all three) and
 `--limit N` (the first N files of each manifest, for a smoke test).
@@ -110,7 +112,7 @@ stops meaning what the listener gets. Run about 1000 files per process, each sha
 manifest of its own in the same folder as the full one (the file column is
 relative to the manifest), and keep the per-segment output of each:
 
-    probe=app/EarshotKit/.build/release/earshot-probe   # swift build -c release first
+    probe=app/KobiKit/.build/release/kobi-probe   # swift build -c release first
     for m in OUTDIR OUTDIR2; do
       head -1 $m/manifest.tsv > $m/header
       tail -n +2 $m/manifest.tsv | grep -v '^#' | split -l 1000 - $m/shard-
@@ -129,8 +131,8 @@ Each shard's log has its own report; the totals come from wake-rescore.
 `wake-rescore` reads the per-segment TSVs again and works out each look's pass
 from the text it heard, so a confirm rule can be tried without the audio:
 
-    earshot-probe wake-rescore RESULTS/*.out.tsv
-    earshot-probe wake-rescore RESULTS/*.out.tsv --threshold -8
+    kobi-probe wake-rescore RESULTS/*.out.tsv
+    kobi-probe wake-rescore RESULTS/*.out.tsv --threshold -8
 
 It prints, for the stripWake rule and the listener's rule (`Listener.wakeWords`,
 both tiers) and for apple, parakeet and the two OR'd, the positives woken by
@@ -164,4 +166,4 @@ window, never send. The first row (inf) is the shipped wake. `--bare B` adds the
 positives by split and condition at B and lists every negative woken there.
 Measured on 2026-10-16 and not adopted (tests/app-e2e.md, the wake section):
 
-    earshot-probe wake-rescore RESULTS/*.out.tsv --threshold -8 --bare -8.5
+    kobi-probe wake-rescore RESULTS/*.out.tsv --threshold -8 --bare -8.5

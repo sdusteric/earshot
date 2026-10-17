@@ -21,8 +21,8 @@ after=$(ids) || { echo "claude agents --json failed after the start; stop the ne
 id=$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort) | tail -1)
 [ -n "$id" ] || { echo "no new background session found"; exit 1; }
 trap 'claude stop "$id" >/dev/null 2>&1' EXIT
-token="EARSHOT-$RANDOM"
-swift run --package-path "$ROOT/app/EarshotKit" -c release earshot-probe send-id "$id" "Reply with exactly $token and nothing else." || exit 1
+token="KOBI-$RANDOM"
+swift run --package-path "$ROOT/app/KobiKit" -c release kobi-probe send-id "$id" "Reply with exactly $token and nothing else." || exit 1
 sleep 20
 logs=$(claude logs "$id" 2>/dev/null)
 if grep -q "$token" <<<"$logs"; then echo "ok: the background session answered"; exit 0

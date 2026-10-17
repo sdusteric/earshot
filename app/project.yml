@@ -1,56 +1,57 @@
-name: Earshot
+name: Kobi
 options:
-  bundleIdPrefix: com.earshot
+  bundleIdPrefix: com.kobi
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
 packages:
-  EarshotKit:
-    path: EarshotKit
+  KobiKit:
+    path: KobiKit
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.10.0"
 targets:
-  Earshot:
+  Kobi:
     type: application
     platform: macOS
     sources:
-      - Earshot
+      - Kobi
       # Credit and license text for Sparkle, FluidAudio and the models. The repo copy is the source.
       - path: ../THIRD_PARTY_NOTICES.md
         buildPhase: resources
     dependencies:
-      - package: EarshotKit
+      - package: KobiKit
       - package: Sparkle
     info:
-      path: Earshot/Info.plist
+      path: Kobi/Info.plist
       properties:
-        CFBundleDisplayName: Earshot
+        CFBundleDisplayName: Kobi
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.developer-tools
-        NSAudioCaptureUsageDescription: "Earshot lowers other apps' audio while it talks. It never records or saves that audio."
-        NSSpeechRecognitionUsageDescription: "Earshot hears your voice commands a second way with Apple's on-device speech recognition. Nothing leaves your Mac."
-        # Earshot starts and talks to Claude Code sessions in your project folders. macOS asks
+        NSAudioCaptureUsageDescription: "Kobi lowers other apps' audio while it talks. It never records or saves that audio."
+        NSSpeechRecognitionUsageDescription: "Kobi hears your voice commands a second way with Apple's on-device speech recognition. Nothing leaves your Mac."
+        # Kobi starts and talks to Claude Code sessions in your project folders. macOS asks
         # for access when a folder is in one of these places.
-        NSDocumentsFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Documents."
-        NSDesktopFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on the Desktop."
-        NSDownloadsFolderUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is in Downloads."
-        NSRemovableVolumesUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on an external drive."
-        NSNetworkVolumesUsageDescription: "Earshot talks to Claude Code sessions in your project folders. It needs access when a project is on a network drive."
-        NSMicrophoneUsageDescription: "Earshot listens for \"Hey Earshot\" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved."
+        NSDocumentsFolderUsageDescription: "Kobi talks to Claude Code sessions in your project folders. It needs access when a project is in Documents."
+        NSDesktopFolderUsageDescription: "Kobi talks to Claude Code sessions in your project folders. It needs access when a project is on the Desktop."
+        NSDownloadsFolderUsageDescription: "Kobi talks to Claude Code sessions in your project folders. It needs access when a project is in Downloads."
+        NSRemovableVolumesUsageDescription: "Kobi talks to Claude Code sessions in your project folders. It needs access when a project is on an external drive."
+        NSNetworkVolumesUsageDescription: "Kobi talks to Claude Code sessions in your project folders. It needs access when a project is on a network drive."
+        NSMicrophoneUsageDescription: "Kobi listens for \"Hey Kobi\" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved."
         # The feed is packaging/appcast.xml on main. release-app.sh adds each release to it.
+        # The GitHub repo keeps its old name, earshot, until it is renamed.
         SUFeedURL: "https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml"
         SUPublicEDKey: "$(SPARKLE_PUBLIC_KEY)"
     entitlements:
-      path: Earshot/Earshot.entitlements
+      path: Kobi/Kobi.entitlements
       properties:
         com.apple.security.device.audio-input: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.earshot.app
-        PRODUCT_NAME: Earshot
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobi.app
+        PRODUCT_NAME: Kobi
         DEVELOPMENT_TEAM: 8N9KUZLT8N
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES

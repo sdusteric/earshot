@@ -1,4 +1,5 @@
 # class	text
+# Kobi wake: part 2 (the phrases are still for "Hey Earshot")
 # positives: shapes Listener.confirmsWake accepts (a bare "Earshot" first only opens the command window). nearmiss: shares sounds, must not wake. mention: the word, not as a wake at the start.
 # New lines go at the end: make-wake-audio.sh numbers the phrases in order (p001..), so the files of the lines above keep their ids.
 positive	Hey Earshot

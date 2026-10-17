@@ -1,4 +1,5 @@
 #!/bin/bash
+# Kobi wake: part 2 (it looks for "earshot" in the transcripts)
 # Real human negatives for the wake bench: LibriSpeech test-clean as 16 kHz mono wav.
 #
 #   tests/wake/librispeech.sh SRC OUTDIR

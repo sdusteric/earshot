@@ -1,0 +1,723 @@
+import Foundation
+import Testing
+@testable import KobiKit
+
+actor FakeTransport: SessionTransport {
+    struct Sent: Equatable { let pid: Int32; let session: String; let text: String; let priority: Priority }
+    private(set) var sent: [Sent] = []
+    private var works = true
+    func setWorks(_ w: Bool) { works = w }
+    func send(pid: Int32, sessionID: String, text: String, priority: Priority) async -> Bool {
+        sent.append(Sent(pid: pid, session: sessionID, text: text, priority: priority))
+        return works
+    }
+}
+
+@Suite struct DispatcherTests {
+    let store = SessionStore()
+    let transport = FakeTransport()
+    let said = Collected<String>()
+    let approvalsDir: String = {
+        let d = NSTemporaryDirectory() + "ek-d-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
+        return d
+    }()
+    let secret = "0123456789abcdef0123456789abcdef"
+
+    func make(_ agents: [AgentEntry], claudeJSON: String = "/nonexistent", poll: Duration = .seconds(1),
+              queued: Duration = .seconds(5), dismissals: DismissalsBox = DismissalsBox()) -> (Dispatcher, FakeRunner, ApprovalBook) {
+        let runner = FakeRunner(agents)
+        let directory = SessionDirectory(runner: runner, store: store, labeler: Labeler(model: nil, liveDir: NSTemporaryDirectory()),
+                                         claudeJSON: claudeJSON)
+        let book = ApprovalBook(stateDir: approvalsDir, isAlive: { _ in true })
+        let said = self.said
+        let d = Dispatcher(directory: directory, store: store, transport: transport, runner: runner, approvals: book,
+                           say: { await said.add($0) }, dismissals: { dismissals.current },
+                           receiptTimeout: .milliseconds(200), pollInterval: poll, queuedTimeout: queued)
+        return (d, runner, book)
+    }
+
+    func approval(_ session: String, _ id: String, _ name: String) -> AppMessage.Approval {
+        .init(session: session, id: id, name: name, what: "to run the migration",
+              answer: "\(approvalsDir)/answer-\(session)-\(id)", secret: secret, pid: 1)
+    }
+
+    // MARK: Send
+
+    @Test func sendsToTheNamedSession() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10), agent("b", "blog", pid: 11)])
+        let o = await d.run(.send(target: "billing service", prompt: "run the tests"))
+        #expect(o.line == "Sent to Billing service.")
+        #expect(o.spokeAbout == "a")
+        #expect(await transport.sent == [.init(pid: 10, session: "a", text: "run the tests", priority: .next)])
+    }
+
+    @Test func aBusySessionIsQueued() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")])
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Queued. Billing service will see it when it finishes.")
+    }
+
+    @Test func aSessionOnAPromptSaysItStillWaits() async {
+        await store.apply(.init(session: "a", state: .needs, detail: "needs your OK", name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service", status: "waiting")])
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Queued. Billing service is still waiting on your OK.")
+    }
+
+    @Test func noTargetWithOneSessionUsesIt() async {
+        let (d, _, _) = make([agent("b", "blog")])
+        #expect(await d.run(.send(target: nil, prompt: "deploy")).line == "Sent to Blog.")
+    }
+
+    @Test func noTargetWithSeveralAsks() async {
+        let (d, _, _) = make([agent("a", "billing-service"), agent("b", "blog"), agent("c", "kobi"), agent("e", "extra")])
+        let o = await d.run(.send(target: nil, prompt: "deploy"))
+        #expect(o.line?.hasPrefix("Which session? Open ones are ") == true)
+        #expect(o.pending == .chooseSession(.send(target: nil, prompt: "deploy"), ["a", "b", "c", "e"]))
+        #expect(await transport.sent.isEmpty)
+    }
+
+    @Test func twoInOneProjectAsksWhichOneThenSends() async {
+        let (d, _, _) = make([agent("a", "billing-service", name: "Fix refund rounding", pid: 10),
+                              agent("b", "billing-service", name: "Invoice export", pid: 11)])
+        let o = await d.run(.send(target: "billing", prompt: "run the tests"))
+        #expect(o.line == "Billing service has two: Fix refund rounding and Invoice export. Which one?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        let r = await d.reply("invoices", to: p)
+        #expect(r.line == "Sent to Billing service invoice.")
+        #expect(await transport.sent.map(\.pid) == [11])
+    }
+
+    @Test func twoUntitledInOneFolderAreAskedAboutByAge() async {
+        let (d, _, _) = make([agent("a", "blog", pid: 10, startedAt: 1_790_000_200_000),
+                              agent("b", "blog", pid: 11, startedAt: 1_790_000_100_000)])
+        let o = await d.run(.send(target: "blog", prompt: "deploy"))
+        #expect(o.line == "Blog has two: Older blog and Newer blog. Which one?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("The newer one.", to: p).line == "Sent to Newer blog.")
+        #expect(await transport.sent.map(\.pid) == [10])
+    }
+
+    @Test func anUnknownTargetListsAtMostThree() async {
+        let (d, _, _) = make([agent("a", "billing-service"), agent("b", "blog"), agent("c", "kobi"), agent("e", "extra")])
+        let line = await d.run(.send(target: "payments", prompt: "x")).line ?? ""
+        #expect(line.hasPrefix("I don't know a session called payments. Open ones are "))
+        #expect(line.components(separatedBy: ",").count + line.components(separatedBy: " and ").count - 1 == 3)
+    }
+
+    @Test func aClosedSessionIsSaid() async {
+        await transport.setWorks(false)
+        let (d, _, _) = make([agent("a", "billing-service")])
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Billing service has closed.")
+    }
+
+    @Test func noReceiptIsSaidLater() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        #expect(await eventually { await said.items == ["Billing service didn't pick it up."] })
+    }
+
+    @Test func aReceiptKeepsItQuiet() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func twoMissesMarkSendingBrokenAndBackgroundSessionsResume() async {
+        let (d, runner, _) = make([agent("a", "billing-service"), agent("g", "wedding", pid: nil, kind: "background", status: nil)])
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        #expect(await eventually { await said.items.count == 1 })
+        _ = await d.run(.send(target: "billing", prompt: "y"))
+        #expect(await eventually { await said.items.count == 2 })
+        #expect(await said.items.last == "Sending to sessions stopped working with this Claude Code version. Background sessions still work.")
+        #expect(await d.run(.send(target: "billing", prompt: "z")).line == "Sending to Billing service doesn't work with this Claude Code version yet.")
+        #expect(await d.run(.send(target: "wedding", prompt: "w")).line == "Sent to Wedding.")
+        #expect(await runner.argLists.contains(["--resume", "g", "--bg", "w"]))
+    }
+
+    @Test func aBackgroundSessionWithoutAProcessResumes() async {
+        let (d, runner, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)])
+        #expect(await d.run(.send(target: "wedding", prompt: "keep going")).line == "Sent to Wedding.")
+        #expect(await runner.argLists.contains(["--resume", "g", "--bg", "keep going"]))
+        #expect(await transport.sent.isEmpty)
+    }
+
+    @Test func unknownCommandSendsNothing() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        #expect(await d.run(.unknown).line == "Sorry, I didn't get that.")
+        #expect(await transport.sent.isEmpty)
+    }
+
+    // MARK: Receipts and the broken mark
+
+    @Test func missReceiptMissDoesNotMarkBroken() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        _ = await d.run(.send(target: "billing", prompt: "1"))
+        #expect(await eventually { await said.items.count == 1 })
+        _ = await d.run(.send(target: "billing", prompt: "2"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(350))
+        _ = await d.run(.send(target: "billing", prompt: "3"))
+        #expect(await eventually { await said.items.count == 2 })
+        #expect(await said.items.last == "Billing service didn't pick it up.")
+        _ = await d.run(.send(target: "billing", prompt: "4"))
+        #expect(await transport.sent.count == 4)
+    }
+
+    @Test func busyAtAPollCountsEvenIfIdleAtTheDeadline() async {
+        let (d, runner, _) = make([agent("a", "billing-service")], poll: .milliseconds(50))
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await runner.setAgents([agent("a", "billing-service", status: "busy")])
+        try? await Task.sleep(for: .milliseconds(120))
+        await runner.setAgents([agent("a", "billing-service")])
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func aWindowWhereClaudeNeverAnsweredIsNotAMiss() async {
+        let (d, runner, _) = make([agent("a", "billing-service")], poll: .milliseconds(50))
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await runner.setFail(true)
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+    }
+
+    /// The session closed after the send: not a miss, and nothing to say.
+    @Test func aSessionGoneAtTheReceiptCheckIsNotAMiss() async {
+        let (d, runner, _) = make([agent("a", "billing-service", pid: 10), agent("b", "blog", pid: 11)], poll: .milliseconds(50))
+        _ = await d.run(.send(target: "billing", prompt: "x"))
+        await runner.setAgents([agent("b", "blog", pid: 11)])
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(await said.items.isEmpty)
+        _ = await d.run(.send(target: "blog", prompt: "y"))
+        #expect(await eventually { await said.items == ["Blog didn't pick it up."] })   // one miss, not two
+    }
+
+    /// Receipts say what became of a send, for the line under a reply field.
+    @Test func aReceiptSaysTheSessionStartedWorking() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        let before = Date()
+        _ = await d.send(typed: "run the tests", toSession: "a")
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        let r = await got.items.first
+        #expect(r?.result == .started)
+        #expect(r?.session == "a")
+        #expect((r?.sent ?? .distantPast) >= before)
+        #expect(r?.line == "Billing service started working.")
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func aMissedReceiptIsSaidAndSent() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "run the tests", toSession: "a")
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .missed)
+        #expect(await got.items.first?.line == "Billing service didn't pick it up.")
+        #expect(await said.items == ["Billing service didn't pick it up."])
+    }
+
+    @Test func aSessionThatClosedHasAReceiptToo() async {
+        let (d, runner, _) = make([agent("a", "billing-service", pid: 10)], poll: .milliseconds(50))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setAgents([])
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .closed)
+        #expect(await said.items.isEmpty)
+    }
+
+    @Test func noAnswerFromClaudeLeavesTheReceiptUnknown() async {
+        let (d, runner, _) = make([agent("a", "billing-service")], poll: .milliseconds(50))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setFail(true)
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .unknown)
+        #expect(await got.items.first?.line == nil)
+    }
+
+    /// A reply queued behind a busy session: its receipt comes once the turn
+    /// ends and the session starts on it.
+    @Test func aQueuedReplyHasAReceiptWhenTheSessionStartsOnIt() async {
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        let before = Date()
+        #expect(await d.send(typed: "x", toSession: "a").line == "Queued. Billing service will see it when it finishes.")
+        // Progress on the turn it is on is not the start.
+        await store.apply(.init(session: "a", state: .working, detail: "still on it", name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await got.items.isEmpty)
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        let r = await got.items.first
+        #expect(r?.result == .started)
+        #expect((r?.sent ?? .distantPast) >= before)
+        #expect(r?.line == "Billing service started working.")
+        #expect(await said.items.isEmpty)
+    }
+
+    /// The turn ended and nothing began: Claude Code is asked, and an idle session didn't pick it up.
+    /// Not said aloud, and not a miss toward the broken mark.
+    @Test func aQueuedReplyWhoseTurnEndsWithNothingBegunIsMissed() async {
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setAgents([agent("a", "billing-service")])
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .missed)
+        #expect(await got.items.first?.line == "Billing service didn't pick it up.")
+        #expect(await said.items.isEmpty)
+    }
+
+    /// Claude Code lists it busy when asked after the turn ended: it is on it,
+    /// though the plugin never said so.
+    @Test func aQueuedReplyListedBusyAfterTheTurnEndedStarted() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+    }
+
+    @Test func aQueuedReplyToASessionThatClosedSaysSo() async {
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await runner.setAgents([])
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .closed)
+        #expect(await got.items.first?.line == "Billing service has closed.")
+    }
+
+    /// The watch is bounded: a turn still going at the end leaves the receipt unknown, with no line.
+    @Test func aQueuedReplyStillWaitingAtTheEndIsUnknown() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20),
+                             queued: .milliseconds(150))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .unknown)
+        #expect(await got.items.first?.line == nil)
+    }
+
+    /// One watch per session: a newer queued reply takes it over, so the start is told once, for it.
+    @Test func aNewerQueuedReplyTakesTheWatchOver() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        try? await Task.sleep(for: .milliseconds(30))
+        let second = Date()
+        _ = await d.send(typed: "y", toSession: "a")
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        #expect(await eventually { await got.items.count == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await got.items.count == 1)
+        #expect((await got.items.first?.sent ?? .distantPast) >= second)
+    }
+
+    /// A reply queued behind a prompt waits on your OK, not on the session: no receipt.
+    @Test func aReplyQueuedBehindAPromptHasNoReceipt() async {
+        await store.apply(.init(session: "a", state: .needs, detail: "needs your OK", name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service", status: "waiting")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "x", toSession: "a")
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(await got.items.isEmpty)
+    }
+
+    /// A background session resumed with the reply: started once Claude Code lists it working.
+    @Test func aResumedBackgroundSessionHasAReceipt() async {
+        let (d, runner, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "keep going", toSession: "g").line == "Sent to Wedding.")
+        await runner.setAgents([agent("g", "wedding", pid: 40, kind: "background", status: "busy")])
+        #expect(await eventually { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+        #expect(await got.items.first?.line == "Wedding started working.")
+        #expect(await said.items.isEmpty)
+    }
+
+    /// Not listed working within the bound: unknown, with nothing said and no line.
+    @Test func aResumeNeverSeenWorkingIsUnknown() async {
+        let (d, _, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        _ = await d.send(typed: "keep going", toSession: "g")
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .unknown)
+        #expect(await got.items.first?.line == nil)
+        #expect(await said.items.isEmpty)
+    }
+
+    /// Claude Code's list still says busy (it is up to 2 s old), but the plugin
+    /// said the turn ended after that list was read: the reply runs at once, so
+    /// it is sent, and its start is the receipt.
+    @Test func aReplyThatRanAtOnceIsReportedStarted() async {
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        _ = await d.run(.status(target: nil))          // list read: busy
+        // The turn ends just before the send; the list is not read again (younger than 2 s).
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        await runner.setAgents([agent("a", "billing-service", status: "idle")])
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "run the tests", toSession: "a").line == "Sent to Billing service.")
+        await runner.setAgents([agent("a", "billing-service", status: "busy")])
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(100))
+        await store.apply(.init(session: "a", state: .done, detail: "tests pass", name: "billing service"))
+        await runner.setAgents([agent("a", "billing-service", status: "idle")])
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+        #expect(await said.items.isEmpty)
+    }
+
+    /// The plugin said the turn ended, but Claude Code still listed the session
+    /// busy after that: queued. The turn that begins after the send is the
+    /// reply's, and its own end is not taken for the end of the turn before.
+    @Test func aQueuedReplyThatRanAtOnceIsReportedStarted() async {
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        try? await Task.sleep(for: .milliseconds(10))
+        let (d, runner, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "run the tests", toSession: "a").line
+            == "Queued. Billing service will see it when it finishes.")
+        await store.apply(.init(session: "a", state: .working, name: "billing service"))
+        await store.apply(.init(session: "a", state: .done, detail: "tests pass", name: "billing service"))
+        await runner.setAgents([agent("a", "billing-service", status: "idle")])
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        #expect(await got.items.first?.result == .started)
+    }
+
+    /// A queued reply's watch ends when a later reply is sent to the idle
+    /// session: only the later one has a receipt, so it is never replaced.
+    @Test func aLaterSendEndsAQueuedWatch() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy")], poll: .milliseconds(20),
+                             queued: .milliseconds(600))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "first", toSession: "a").line?.hasPrefix("Queued") == true)
+        // The turn ends; the plugin says so after the list was read, so the next reply is sent.
+        await store.apply(.init(session: "a", state: .done, name: "billing service"))
+        let second = Date()
+        #expect(await d.send(typed: "second", toSession: "a").line == "Sent to Billing service.")
+        #expect(await eventually(within: .seconds(2)) { await got.items.count == 1 })
+        try? await Task.sleep(for: .milliseconds(800))
+        let items = await got.items
+        #expect(items.count == 1)
+        #expect((items.first?.sent ?? .distantPast) >= second)
+    }
+
+    @Test func aFailedResumeHasNoReceipt() async {
+        let (d, runner, _) = make([agent("g", "wedding", pid: nil, kind: "background", status: nil)], poll: .milliseconds(20))
+        await runner.setResult("--resume", RunResult(status: 1))
+        let got = Collected<Dispatcher.Receipt>()
+        let stream = await d.receipts()
+        Task { for await r in stream { await got.add(r) } }
+        #expect(await d.send(typed: "keep going", toSession: "g").line == "Couldn't reach Wedding.")
+        try? await Task.sleep(for: .milliseconds(800))
+        #expect(await got.items.isEmpty)
+    }
+
+    // MARK: Dismissed waits
+
+    /// A wait you dismissed in Activity reads as open in what Kobi says about it.
+    @Test func theRollCallLeavesADismissedWaitOut() async {
+        await store.apply(.init(session: "a", state: .needs, detail: "needs your OK", name: "billing service"))
+        let box = DismissalsBox()
+        let (d, _, _) = make([agent("a", "billing-service", status: "waiting")], dismissals: box)
+        #expect(await d.run(.status(target: nil)).line?.contains("Billing service needs your OK.") == true)
+        var dismissed = Dismissals()
+        dismissed.dismiss("a")
+        box.set(dismissed)
+        #expect(await d.run(.status(target: nil)).line == "One session. It's idle. Nothing needs you.")
+        #expect(await d.run(.status(target: "billing")).line == "Billing service is idle.")
+        #expect(await d.run(.greet).line?.contains("nothing needs you") == true)
+    }
+
+    @Test func afterTwoMissesTheSocketIsSkippedAndTheBrokenLineIsSaidOnce() async {
+        let (d, _, _) = make([agent("a", "billing-service")])
+        _ = await d.run(.send(target: "billing", prompt: "1"))
+        _ = await d.run(.send(target: "billing", prompt: "2"))
+        #expect(await eventually { await said.items.count == 2 })
+        _ = await d.run(.send(target: "billing", prompt: "3"))
+        try? await Task.sleep(for: .milliseconds(350))
+        #expect(await transport.sent.count == 2)
+        #expect(await said.items.filter { $0.hasPrefix("Sending to sessions stopped") }.count == 1)
+        #expect(await said.items.count == 2)
+    }
+
+    @Test func stoppingWhenSendingIsBrokenSaysSo() async {
+        let (d, _, _) = make([agent("a", "billing-service"), agent("b", "blog", status: "busy")])
+        _ = await d.run(.send(target: "billing", prompt: "1"))
+        _ = await d.run(.send(target: "billing", prompt: "2"))
+        #expect(await eventually { await said.items.count == 2 })
+        #expect(await d.run(.stop(target: "blog", now: false)).line == "Sending to Blog doesn't work with this Claude Code version yet.")
+    }
+
+    @Test func aSessionWaitingOnYourAnswerIsIdleForSendAndStop() async {
+        await store.apply(.init(session: "a", state: .reply, detail: "asked something", name: "billing service"))
+        let (d, _, _) = make([agent("a", "billing-service")])
+        #expect(await d.run(.send(target: "billing", prompt: "x")).line == "Sent to Billing service.")
+        #expect(await d.run(.stop(target: "billing", now: false)).line == "Billing service isn't doing anything.")
+    }
+
+    @Test func aLateApprovalChoiceSaysNothing() async {
+        let (d, _, book) = make([agent("s1", "billing-service"), agent("s2", "docs")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        await book.apply(approval("s2", "2-2-2", "docs"))
+        guard let p = await d.run(.answer(allow: true, target: nil)).pending else { Issue.record("no question"); return }
+        _ = await book.answer("1-1-1", allow: true)
+        _ = await book.answer("2-2-2", allow: true)
+        #expect(await d.reply("docs", to: p) == Dispatcher.Outcome())
+    }
+
+    @Test func aLateChoiceOfTheClosedPromptSaysNothingAndWritesNothing() async {
+        let (d, _, book) = make([agent("s1", "billing-service"), agent("s2", "docs")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        await book.apply(approval("s2", "2-2-2", "docs"))
+        guard let p = await d.run(.answer(allow: true, target: nil)).pending else { Issue.record("no question"); return }
+        _ = await book.answer("2-2-2", allow: true)
+        #expect(await d.reply("docs", to: p) == Dispatcher.Outcome())
+        #expect(await book.current.map(\.id) == ["1-1-1"])
+        #expect(!FileManager.default.fileExists(atPath: "\(approvalsDir)/answer-s1-1-1-1"))
+    }
+
+    // MARK: Status, stop, start
+
+    @Test func statusForEveryoneIsTheRollCall() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy"), agent("b", "blog")])
+        // Then a closing note, which depends on the hour.
+        #expect(await d.run(.status(target: nil)).line?.hasPrefix("Two sessions. Billing service is working. One other is idle. ") == true)
+    }
+
+    @Test func statusForOne() async {
+        let (d, _, _) = make([agent("a", "billing-service", status: "busy"), agent("b", "blog")])
+        let o = await d.run(.status(target: "billing"))
+        #expect(o.line == "Billing service is working.")
+        #expect(o.spokeAbout == "a")
+    }
+
+    @Test func stopAfterTheCurrentStep() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy")])
+        #expect(await d.run(.stop(target: "billing", now: false)).line == "Billing service will stop after its current step.")
+        #expect(await transport.sent == [.init(pid: 10, session: "a", text: Dispatcher.stopText, priority: .now)])
+    }
+
+    @Test func quietSaysNothingAndSendsNothing() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy")])
+        #expect(await d.run(.quiet) == Dispatcher.Outcome())
+        #expect(await transport.sent.isEmpty)
+    }
+
+    /// Stopping every session asks first, and only a clear yes stops them.
+    @Test func stopAllAsksThenStopsWhatIsRunning() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy"), agent("b", "blog", pid: 11, status: "busy"),
+                              agent("c", "docs", pid: 12)])
+        let o = await d.run(.stopAll)
+        #expect(o.line == "Stop Billing service and Blog?")
+        #expect(await transport.sent.isEmpty)
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("Yes.", to: p).line == "Billing service and Blog will stop after their current step.")
+        #expect(await transport.sent.map(\.pid) == [10, 11])
+        #expect(await transport.sent.allSatisfy { $0.text == Dispatcher.stopText })
+    }
+
+    @Test func stopAllWithoutAYesStopsNothing() async {
+        let (d, _, _) = make([agent("a", "billing-service", pid: 10, status: "busy")])
+        let o = await d.run(.stopAll)
+        #expect(o.line == "Stop Billing service?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("No.", to: p).line == "Okay, I didn't stop anything.")
+        #expect(await d.reply("What's the weather", to: p).line == "Okay, I didn't stop anything.")
+        #expect(await transport.sent.isEmpty)
+    }
+
+    @Test func stopAllWithNothingRunning() async {
+        let (d, _, _) = make([agent("c", "docs")])
+        #expect(await d.run(.stopAll).line == "Nothing is running.")
+        let (none, _, _) = make([])
+        #expect(await none.run(.stopAll).line == "No Claude sessions are open.")
+    }
+
+    // MARK: Sends heard unclearly
+
+    /// A send heard unclearly is read back, and goes only on a clear yes.
+    @Test func anUnclearSendIsReadBackThenSentOnAYes() async {
+        let (d, _, _) = make([agent("a", "kobi", pid: 10), agent("b", "blog", pid: 11)])
+        let o = await d.run(.confirmSend(target: "kobi", prompt: "what else should we do"))
+        #expect(o.line == "Send to Kobi: what else should we do?")
+        #expect(await transport.sent.isEmpty)
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(p == .confirmSend(session: "a", prompt: "what else should we do"))
+        #expect(await d.reply("Yes.", to: p).line == "Sent to Kobi.")
+        #expect(await transport.sent == [.init(pid: 10, session: "a", text: "what else should we do", priority: .next)])
+    }
+
+    /// A reply typed in the session view goes to that session by its ID.
+    @Test func aTypedReplyGoesToThatSession() async {
+        let (d, _, _) = make([agent("a", "blog", pid: 10), agent("b", "docs", pid: 11)])
+        #expect(await d.send(typed: "  run the tests ", toSession: "b").line == "Sent to Docs.")
+        #expect(await transport.sent == [.init(pid: 11, session: "b", text: "run the tests", priority: .next)])
+        #expect(await d.send(typed: "   ", toSession: "b").line == "")
+        #expect(await d.send(typed: "hi", toSession: "gone").line == "That session has closed.")
+        #expect(await transport.sent.count == 1)
+    }
+
+    @Test func anUnclearSendWithoutAYesSendsNothing() async {
+        let (d, _, _) = make([agent("a", "kobi", pid: 10)])
+        guard let p = await d.run(.confirmSend(target: "kobi", prompt: "run the tests")).pending else {
+            Issue.record("no question"); return
+        }
+        #expect(await d.reply("No.", to: p).line == "Okay, I didn't send it.")
+        #expect(await d.reply("Run the tests", to: p).line == "Okay, I didn't send it.")
+        #expect(await transport.sent.isEmpty)
+    }
+
+    /// The yes confirms the send. A permission prompt open meanwhile stays open.
+    @Test func theYesToAnUnclearSendNeverAnswersAPrompt() async {
+        let (d, _, book) = make([agent("a", "kobi", pid: 10)])
+        await book.apply(approval("a", "1-1-1", "kobi"))
+        guard let p = await d.run(.confirmSend(target: "kobi", prompt: "run the tests")).pending else {
+            Issue.record("no question"); return
+        }
+        _ = await d.reply("Yes.", to: p)
+        #expect(await transport.sent.map(\.text) == ["run the tests"])
+        #expect(await book.isOpen("1-1-1"))
+    }
+
+    @Test func anUnclearSendToANameThatIsGoneIsNotUnderstood() async {
+        let (d, _, _) = make([agent("b", "blog")])
+        #expect(await d.run(.confirmSend(target: "kobi", prompt: "run the tests")).line == Dispatcher.didntGetIt)
+    }
+
+    @Test func whatWasHeardIsSaidBack() {
+        #expect(Dispatcher.didntGet("Are the other seconds going?") == "Sorry, I heard: Are the other seconds going.")
+        #expect(Dispatcher.didntGet("  ") == Dispatcher.didntGetIt)
+        let long = Dispatcher.didntGet("one two three four five six seven eight nine ten eleven twelve thirteen")
+        #expect(long == "Sorry, I heard: one two three four five six seven eight nine ten eleven twelve...")
+    }
+
+    @Test func stopNowOnABackgroundSessionRunsClaudeStop() async {
+        let (d, runner, _) = make([agent("g", "wedding", pid: 20, kind: "background", status: "busy")])
+        #expect(await d.run(.stop(target: "wedding", now: true)).line == "Stopped Wedding.")
+        #expect(await runner.argLists.contains(["stop", "g"]))
+        #expect(await transport.sent.isEmpty)
+    }
+
+    @Test func stoppingAnIdleSessionDoesNothing() async {
+        let (d, _, _) = make([agent("b", "blog")])
+        #expect(await d.run(.stop(target: "blog", now: false)).line == "Blog isn't doing anything.")
+        #expect(await transport.sent.isEmpty)
+    }
+
+    func claudeJSON() throws -> String {
+        let path = NSTemporaryDirectory() + "ek-cj-\(UUID().uuidString.prefix(6)).json"
+        try #"{"projects":{"/p/blog":{"hasTrustDialogAccepted":true},"/p/secret":{"hasTrustDialogAccepted":false}}}"#
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    @Test func startRunsClaudeInTheFolder() async throws {
+        let (d, runner, _) = make([], claudeJSON: try claudeJSON())
+        #expect(await d.run(.start(project: "blog", prompt: "fix the header")).line == "Started a session in blog.")
+        let call = await runner.calls.last
+        #expect(call?.args == ["--bg", "fix the header"])
+        #expect(call?.cwd == "/p/blog")
+    }
+
+    @Test func startInAnUntrustedFolderSaysSo() async throws {
+        let (d, runner, _) = make([], claudeJSON: try claudeJSON())
+        #expect(await d.run(.start(project: "secret", prompt: "x")).line == "Secret isn't trusted yet. Open it in Claude once first.")
+        #expect(await runner.argLists.allSatisfy { $0.first != "--bg" })
+    }
+
+    @Test func startWithoutAPromptAsksWhatToDo() async throws {
+        let (d, runner, _) = make([], claudeJSON: try claudeJSON())
+        let o = await d.run(.start(project: "blog", prompt: nil))
+        #expect(o.line == "What should the new session in blog do?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        #expect(await d.reply("fix the header", to: p).line == "Started a session in blog.")
+        #expect(await runner.argLists.contains(["--bg", "fix the header"]))
+    }
+
+    @Test func startInAnUnknownFolder() async throws {
+        let (d, _, _) = make([], claudeJSON: try claudeJSON())
+        #expect(await d.run(.start(project: "payments", prompt: "x")).line == "I don't know a folder called payments.")
+    }
+
+    // MARK: Answers
+
+    @Test func answerApprovesTheOnlyPrompt() async throws {
+        let (d, _, book) = make([agent("s1", "billing-service")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        let o = await d.run(.answer(allow: true, target: nil))
+        #expect(o.line == "Approved.")
+        #expect(o.sound)
+        #expect(try String(contentsOfFile: "\(approvalsDir)/answer-s1-1-1-1", encoding: .utf8) == "allow \(secret)\n")
+    }
+
+    @Test func answerWithTwoOpenAsksWhichOne() async {
+        let (d, _, book) = make([agent("s1", "billing-service"), agent("s2", "docs")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        await book.apply(approval("s2", "2-2-2", "docs"))
+        let o = await d.run(.answer(allow: false, target: nil))
+        #expect(o.line == "Which one, billing service or docs?")
+        guard let p = o.pending else { Issue.record("no question"); return }
+        let r = await d.reply("docs", to: p)
+        #expect(r.line == "Told it no.")
+        #expect(await book.current.map(\.id) == ["1-1-1"])
+    }
+
+    @Test func answerByName() async {
+        let (d, _, book) = make([agent("s1", "billing-service"), agent("s2", "docs")])
+        await book.apply(approval("s1", "1-1-1", "billing service"))
+        await book.apply(approval("s2", "2-2-2", "docs"))
+        #expect(await d.run(.answer(allow: true, target: "billing")).line == "Approved.")
+        #expect(await book.current.map(\.id) == ["2-2-2"])
+    }
+
+    @Test func answerWhenNothingWaits() async {
+        let (d, _, _) = make([agent("s1", "billing-service")])
+        #expect(await d.run(.answer(allow: true, target: nil)).line == "Nothing is waiting on your OK.")
+    }
+}

@@ -15,8 +15,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 out=${1:?usage: make-wake-audio.sh OUTDIR}
 mkdir -p "$out/raw"
 out=$(cd "$out" && pwd)
-export tts=${KOKORO:-$HOME/.config/earshot/kokoro/earshot-tts}
-export sock=${KOKORO_SOCKET:-/tmp/earshot-bench-tts.sock}
+export tts=${KOKORO:-$HOME/.config/kobi/kokoro/kobi-tts}
+export sock=${KOKORO_SOCKET:-/tmp/kobi-bench-tts.sock}
 jobs=${JOBS:-10}
 
 # synth and degrade are copied from tests/hearing/make-audio.sh and must stay

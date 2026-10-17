@@ -1,4 +1,5 @@
 # Spoken commands for the hearing bench (make-audio.sh turns each into clean and degraded audio).
+# Kobi wake: part 2 (the session named earshot, and how its name is heard, stay until part 2)
 # id	what is said	expected
 # expected: send|<target>  status|<target or empty>  stop|<target>  start|<project>  answer|allow|<target>
 #           answer|deny|<target>  greet  quiet  repeat  unknown

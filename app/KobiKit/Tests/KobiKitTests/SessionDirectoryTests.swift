@@ -1,0 +1,525 @@
+import Foundation
+import Testing
+@testable import KobiKit
+
+/// claude, scripted: agents JSON, and every call recorded.
+actor FakeRunner: ClaudeRunner {
+    var agents: [AgentEntry]
+    var results: [String: RunResult] = [:]   // by first argument
+    private(set) var calls: [(args: [String], cwd: String?)] = []
+    private var hold = false
+    private var failAgents = false
+    func setHold(_ h: Bool) { hold = h }
+    func setFail(_ f: Bool) { failAgents = f }
+    init(_ agents: [AgentEntry]) { self.agents = agents }
+    func setAgents(_ a: [AgentEntry]) { agents = a }
+    func setResult(_ first: String, _ r: RunResult) { results[first] = r }
+    func run(_ args: [String], cwd: String?, timeout: Duration) async -> RunResult {
+        calls.append((args, cwd))
+        if args.first == "agents" {
+            while hold { await Task.yield() }
+            if failAgents { return RunResult(status: 1) }
+            let objs: [[String: Any]] = agents.map { a in
+                var d: [String: Any] = ["sessionId": a.sessionId, "cwd": a.cwd, "kind": a.kind]
+                if let p = a.pid { d["pid"] = p }
+                if let n = a.name { d["name"] = n }
+                if let s = a.status { d["status"] = s }
+                if let s = a.state { d["state"] = s }
+                if let t = a.startedAt { d["startedAt"] = t }
+                return d
+            }
+            return RunResult(status: 0, stdout: try! JSONSerialization.data(withJSONObject: objs))
+        }
+        return results[args.first ?? ""] ?? RunResult(status: 0)
+    }
+    func version() async -> String? { "2.1.296" }
+    var argLists: [[String]] { calls.map(\.args) }
+}
+
+func agent(_ id: String, _ dir: String, name: String? = nil, pid: Int32? = 100, kind: String = "interactive",
+           status: String? = "idle", startedAt: Double? = nil) -> AgentEntry {
+    AgentEntry(sessionId: id, pid: pid, cwd: "/p/\(dir)", kind: kind, name: name, status: status, startedAt: startedAt)
+}
+
+@Suite struct SessionDirectoryTests {
+    let store = SessionStore()
+    let labeler = Labeler(model: nil, liveDir: NSTemporaryDirectory())
+
+    func directory(_ agents: [AgentEntry], now: @escaping @Sendable () -> Date = Date.init,
+                   claudeJSON: String = "/nonexistent") async -> (SessionDirectory, FakeRunner) {
+        let runner = FakeRunner(agents)
+        let d = SessionDirectory(runner: runner, store: store, labeler: labeler, claudeJSON: claudeJSON, clock: now)
+        await d.refresh()
+        return (d, runner)
+    }
+
+    @Test func namesFollowTheShortestUniqueRule() async {
+        let (d, _) = await directory([agent("a", "billing-service", name: "Fix refund rounding"),
+                                      agent("b", "billing-service", name: "Invoice export"),
+                                      agent("c", "blog", name: "blog-83")])
+        let names = await d.sessions.map(\.name).sorted()
+        #expect(names == ["Billing service invoice", "Billing service refund", "Blog"])
+    }
+
+    /// Two sessions in one folder, as the user had them: "Reflow" and "Reflow" before.
+    @Test func sessionsInOneFolderAreToldApartAndFoundByVoice() async {
+        let (d, _) = await directory([agent("a", "reflow", name: "reflow-d5", startedAt: 1_790_000_000_000),
+                                      agent("b", "reflow", name: "Project status and milestones", startedAt: 1_790_000_100_000),
+                                      agent("c", "finebrief", name: "finebrief-5e"), agent("d", "finebrief", name: "What's next"),
+                                      agent("e", "finebrief", name: "Launch and onboarding UX")])
+        let names = Dictionary(uniqueKeysWithValues: await d.sessions.map { ($0.id, $0.name) })
+        #expect(names == ["a": "Reflow", "b": "Reflow milestones", "c": "Finebrief", "d": "Finebrief what's next",
+                          "e": "Finebrief launch"])
+        for (said, id) in [("reflow", "a"), ("Reflow milestones", "b"), ("the reflow milestones session", "b"),
+                           ("milestones", "b"), ("milestones in reflow", "b"), ("reflow mile stones", "b"),
+                           ("finebrief what's next", "d"), ("fine brief launch", "e"), ("launch", "e"),
+                           ("project status", "b"), ("finebrief", "c")] {
+            guard case .one(let s) = await d.resolve(said) else { Issue.record("no single match for \(said)"); continue }
+            #expect(s.id == id, "\(said)")
+        }
+        // Asked "which one?", a topic word picks one.
+        guard case .one(let s) = await d.resolve("the launch one", among: ["c", "d", "e"]) else { Issue.record("among"); return }
+        #expect(s.id == "e")
+    }
+
+    /// After a relaunch the sessions still open go by the names they had, even
+    /// though the list is in another order and a title has changed.
+    @Test func namesStayAcrossARelaunch() async {
+        let url = FileManager.default.temporaryDirectory.appending(path: "names-\(UUID().uuidString)/session-names.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        func launch(_ agents: [AgentEntry]) async -> [String: String] {
+            let d = SessionDirectory(runner: FakeRunner(agents), store: SessionStore(namesURL: url), labeler: labeler,
+                                     claudeJSON: "/nonexistent")
+            await d.refresh()
+            return Dictionary(uniqueKeysWithValues: await d.sessions.map { ($0.id, $0.name) })
+        }
+        let before = await launch([agent("a", "reflow", name: "reflow-d5", startedAt: 1_790_000_000_000),
+                                   agent("b", "reflow", name: "Project status and milestones", startedAt: 1_790_000_100_000)])
+        #expect(before == ["a": "Reflow", "b": "Reflow milestones"])
+        let after = await launch([agent("b", "reflow", name: "Project status", startedAt: 1_790_000_100_000),
+                                  agent("a", "reflow", name: "Retry queue", startedAt: 1_790_000_000_000),
+                                  agent("c", "reflow", name: "Docs", startedAt: 1_790_000_200_000)])
+        #expect(after["a"] == "Reflow")
+        #expect(after["b"] == "Reflow milestones")
+        #expect(Set(after.values).count == 3)
+    }
+
+    /// The real sessions, as `claude agents --json` listed them.
+    static let realAgents = [
+        agent("wedding", "wedding", name: "Create guest confirmation email with event details", kind: "background", startedAt: 1),
+        agent("blog-83", "blog", name: "blog-83", startedAt: 2), agent("reflow-d5", "reflow", name: "reflow-d5", startedAt: 3),
+        agent("finebrief-5e", "finebrief", name: "finebrief-5e", startedAt: 4),
+        agent("roadmap", "kobi", name: "Plugin/Mac app product roadmap", startedAt: 5),
+        agent("next", "finebrief", name: "What's next", startedAt: 6),
+        agent("status", "reflow", name: "Project status and milestones", startedAt: 7),
+        agent("launch", "finebrief", name: "Launch and onboarding UX", startedAt: 8),
+        agent("links", "blog", name: "Showcase site links page", startedAt: 9),
+        agent("overlap", "kobi", name: "Session overlap check", startedAt: 10),
+        agent("icon", "kobi", name: "Notification icon", startedAt: 11),
+    ]
+
+    /// Commands said to the new names, clean and as a gated mic garbles them,
+    /// through the grammar, the tolerant reading and the directory, as the voice loop runs them.
+    /// One at a time, as TolerantTests: the tolerant reading takes every core for a moment.
+    @Test(.serialized, arguments: [
+        ("How's reflow milestones doing?", false, "status"), ("Reflow milestones.", false, "status"),
+        ("How is reflow doing?", false, "reflow-d5"), ("Tell finebrief launch to run the tests.", false, "launch"),
+        ("Kobi overlap, run the tests.", false, "overlap"), ("What's kobi notification working on?", false, "icon"),
+        ("Stop blog showcase.", false, "links"), ("Yes to kobi plugin.", false, "roadmap"),
+        ("How's finebrief what's next going?", false, "next"), ("Check on wedding.", false, "wedding"),
+        ("Tell the blog to deploy.", false, "blog-83"),
+        // Gated or garbled.
+        ("Reflow mile stones going.", true, "status"), ("Fine brief launch doing.", true, "launch"),
+        ("Kobi over lap doing.", true, "overlap"), ("Blog show case working on.", true, "links"),
+    ] as [(String, Bool, String)])
+    func spokenCommandsFindTheNewNames(_ said: String, _ gated: Bool, _ id: String) async {
+        let (d, _) = await directory(Self.realAgents)
+        let c = await CommandParser(model: nil).parse(said, sessions: await d.vocabulary(), gated: gated)
+        let target: String?
+        switch c {
+        case .status(let t), .stop(let t, _), .send(let t, _), .answer(_, let t): target = t
+        case .confirmSend(let t, _): target = t
+        default: target = nil
+        }
+        guard let target else { Issue.record("\(said): \(c)"); return }
+        guard case .one(let s) = await d.resolve(target) else { Issue.record("\(said): no single session for \(target)"); return }
+        #expect(s.id == id, "\(said)")
+    }
+
+    /// The home folder is "Home", said and matched.
+    @Test func theHomeFolderIsHome() async {
+        await store.apply(.init(session: "h", state: .working, name: "your home folder", project: "your home folder"))
+        #expect(await store.name(of: "h") == "Home")
+        let d = SessionDirectory(runner: FakeRunner([AgentEntry(sessionId: "h", pid: 1, cwd: NSHomeDirectory(), kind: "interactive",
+                                                               name: nil, status: "idle", startedAt: nil)]),
+                                 store: store, labeler: labeler, claudeJSON: "/nonexistent")
+        await d.refresh()
+        #expect(await d.session("h")?.name == "Home")
+        #expect(await d.session("h")?.project == "home")
+        guard case .one(let s) = await d.resolve("home") else { Issue.record("home"); return }
+        #expect(s.id == "h")
+    }
+
+    /// A refresh never renames a session: not a newcomer in its folder, not a new title.
+    @Test func namesStayAcrossRefreshes() async {
+        let (d, runner) = await directory([agent("a", "reflow", name: "reflow-d5")])
+        #expect(await d.session("a")?.name == "Reflow")
+        await runner.setAgents([agent("a", "reflow", name: "reflow-d5"), agent("b", "reflow", name: "Retry queue")])
+        await d.refresh()
+        #expect(await d.session("a")?.name == "Reflow")
+        #expect(await d.session("b")?.name == "Reflow retry")
+        await runner.setAgents([agent("a", "reflow", name: "Docs"), agent("b", "reflow", name: "Retry backoff")])
+        for _ in 0..<3 { await d.refresh() }
+        #expect(await d.session("a")?.name == "Reflow")
+        #expect(await d.session("b")?.name == "Reflow retry")
+        // A failed check keeps every name, even of sessions it could not list.
+        await runner.setFail(true)
+        await d.refresh()
+        await runner.setFail(false)
+        await d.refresh()
+        #expect(await d.session("a")?.name == "Reflow")
+        // A session that closed gives its name up.
+        await runner.setAgents([agent("b", "reflow", name: "Retry backoff")])
+        await d.refresh()
+        #expect(await d.session("b")?.name == "Reflow retry")
+        #expect(await store.name(of: "a") == nil)
+    }
+
+    /// A session the plugin reports before `claude agents` lists it is named at
+    /// once, beside the others, and keeps that name when it is listed.
+    @Test func aSessionThePluginReportsFirstKeepsItsName() async {
+        let (d, runner) = await directory([agent("a", "blog", name: "Showcase site links page")])
+        #expect(await d.session("a")?.name == "Blog")
+        await store.apply(.init(session: "b", state: .working, name: "the RSS feed session", project: "blog", title: "RSS feed"))
+        #expect(await store.name(of: "b") == "Blog RSS")
+        #expect(await store.sessions.first { $0.id == "b" }?.name == "Blog RSS")
+        await runner.setAgents([agent("a", "blog", name: "Showcase site links page"), agent("b", "blog", name: "RSS feed")])
+        await d.refresh()
+        #expect(await d.session("b")?.name == "Blog RSS")
+        #expect(await d.session("a")?.name == "Blog")
+    }
+
+    /// The plugin's lines and approvals are said with the store's name.
+    @Test func thePluginsLinesUseTheName() async {
+        let (_, _) = await directory([agent("a", "reflow", name: "reflow-d5"), agent("b", "reflow", name: "Project status")])
+        await store.apply(.init(session: "b", state: .working, name: "the Project status session", project: "reflow"))
+        let beat = await store.renamed(.init(text: "Still on Project status, about 9 minutes in.", kind: .beat, session: "b"))
+        #expect(beat.text == "Still on Reflow project status, about 9 minutes in.")
+        #expect(beat.name == "Reflow project status")
+        let need = await store.renamed(.init(text: "Hey, reflow needs your OK to run git push.", kind: .need, session: "a",
+                                             name: "reflow"))
+        #expect(need.text == "Hey, Reflow needs your OK to run git push.")
+        let unknown = AppMessage.Say(text: "Hey, blog needs you.", kind: .need, session: "zz", name: "blog")
+        #expect(await store.renamed(unknown) == unknown)
+    }
+
+    @Test func aReplyStateIsNotWaitingInTheFallbackList() async {
+        await store.apply(.init(session: "a", state: .reply, detail: "asked", name: "billing service"))
+        let (d, runner) = await directory([agent("a", "billing-service")])
+        await runner.setFail(true)
+        await d.refresh()
+        #expect(await d.lastRefreshSucceeded == false)
+        let s = await d.session("a")
+        #expect(s?.state == .reply)
+        #expect(s?.waiting == false)
+    }
+
+    @Test func thePluginsStatusAndTitleWin() async {
+        await store.apply(.init(session: "a", state: .needs, detail: "needs your OK to run the migration",
+                                name: "billing service", project: "billing service", title: "Refund rounding"))
+        let (d, _) = await directory([agent("a", "billing-service", name: "billing-service-1f")])
+        let s = await d.session("a")
+        #expect(s?.state == .needs)
+        #expect(s?.title == "Refund rounding")
+        #expect(s?.detail == "needs your OK to run the migration")
+    }
+
+    @Test(arguments: [
+        ("billing service", "a"), ("Billing Service", "a"), ("billing services", "a"), ("the billing service", "a"),
+        ("fine brief", "b"), ("finebrief", "b"), ("blog", "c"), ("the blog session", "c"),
+    ])
+    func matchesSpokenNames(_ said: String, _ id: String) async {
+        let (d, _) = await directory([agent("a", "billing-service"), agent("b", "finebrief"), agent("c", "blog")])
+        guard case .one(let s) = await d.resolve(said) else { Issue.record("no single match for \(said)"); return }
+        #expect(s.id == id)
+    }
+
+    @Test func twoSessionsInOneProjectAreBothMatches() async {
+        let (d, _) = await directory([agent("a", "billing-service", name: "Fix refund rounding"),
+                                      agent("b", "billing-service", name: "Invoice export"), agent("c", "blog")])
+        guard case .several(let list) = await d.resolve("billing") else { Issue.record("expected several"); return }
+        #expect(Set(list.map(\.id)) == ["a", "b"])
+        guard case .one(let s) = await d.resolve("invoice export") else { Issue.record("label"); return }
+        #expect(s.id == "b")
+        guard case .one(let r) = await d.resolve("refund rounding in billing service") else { Issue.record("label in project"); return }
+        #expect(r.id == "a")
+    }
+
+    /// "How is reflow going" asked "which one?" between reflow and Project status.
+    @Test func theSpokenNameWinsOverASharedFolder() async {
+        let (d, _) = await directory([agent("a", "reflow"), agent("b", "reflow", name: "Project status")])
+        let names = await d.sessions.map(\.name).sorted()
+        guard case .one(let s) = await d.resolve("reflow") else { Issue.record("expected one; names \(names)"); return }
+        #expect(s.id == "a")
+    }
+
+    @Test func anUnknownNameIsNone() async {
+        let (d, _) = await directory([agent("a", "billing-service"), agent("c", "blog")])
+        #expect(await d.resolve("payments") == .none)
+    }
+
+    @Test func noTargetIsTheOnlySession() async {
+        let (d, _) = await directory([agent("c", "blog")])
+        guard case .one(let s) = await d.resolve(nil) else { Issue.record("expected one"); return }
+        #expect(s.id == "c")
+    }
+
+    @Test func noTargetIsTheLastSpokenAboutForTwoMinutes() async {
+        let now = Box(Date(timeIntervalSince1970: 1_000_000))
+        let (d, _) = await directory([agent("a", "billing-service"), agent("c", "blog")], now: { now.value })
+        #expect(await d.resolve(nil) == .noTarget)
+        await d.noteSpoke(about: "c")
+        now.value = now.value.addingTimeInterval(119)
+        guard case .one(let s) = await d.resolve(nil) else { Issue.record("expected the last one"); return }
+        #expect(s.id == "c")
+        now.value = now.value.addingTimeInterval(2)
+        #expect(await d.resolve(nil) == .noTarget)
+    }
+
+    @Test func resolveAmongTheOffered() async {
+        let (d, _) = await directory([agent("a", "billing-service", name: "Fix refund rounding"),
+                                      agent("b", "billing-service", name: "Invoice export"), agent("c", "blog")])
+        guard case .one(let s) = await d.resolve("the second one invoices", among: ["a", "b"]) else {
+            Issue.record("expected invoices"); return
+        }
+        #expect(s.id == "b")
+    }
+
+    /// Two untitled sessions in blog: named by age, and picked by name, order or age.
+    @Test func untitledTwinsCanBeTold() async {
+        let (d, _) = await directory([agent("a", "blog", startedAt: 1_790_000_200_000), agent("b", "blog", startedAt: 1_790_000_100_000)])
+        #expect(Set(await d.sessions.map(\.name)) == ["Newer blog", "Older blog"])
+        guard case .one(let s) = await d.resolve("the older blog session") else { Issue.record("by name"); return }
+        #expect(s.id == "b")
+        guard case .one(let n) = await d.resolve("newer blog") else { Issue.record("by name"); return }
+        #expect(n.id == "a")
+        guard case .several = await d.resolve("blog") else { Issue.record("expected several"); return }
+        // Offered oldest first, as "Which one?" says them.
+        for (said, id) in [("The older one.", "b"), ("newer", "a"), ("The first one.", "b"), ("the second", "a"),
+                           ("The last one.", "a"), ("the newest", "a")] {
+            guard case .one(let s) = await d.resolve(said, among: ["b", "a"]) else { Issue.record("no pick for \(said)"); continue }
+            #expect(s.id == id, "\(said)")
+        }
+    }
+
+    @Test func vocabularyHasNamesProjectsAndLabels() async {
+        let (d, _) = await directory([agent("a", "finebrief", name: "Orchestrator agent for multi-session voice control"),
+                                      agent("b", "blog"), agent("c", "blog", name: "RSS feed")])
+        let v = await d.vocabulary()
+        #expect(v.contains("Finebrief"))
+        #expect(v.contains("Orchestrator agent"))
+        #expect(v.contains("Blog RSS"))
+        #expect(v.filter { $0.lowercased() == "blog" }.count == 1)   // the name and the project, once
+        #expect(v.firstIndex(of: "Blog RSS")! < v.firstIndex(of: "Orchestrator agent")!)   // names first
+    }
+
+    @Test func knownProjectsComeFromClaudeJSONAndLiveSessions() async throws {
+        let path = NSTemporaryDirectory() + "ek-claude-\(UUID().uuidString.prefix(6)).json"
+        try #"{"projects":{"/p/blog":{"hasTrustDialogAccepted":true},"/p/new-thing":{"hasTrustDialogAccepted":false}},"other":1}"#
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let (d, _) = await directory([agent("a", "billing-service")], claudeJSON: path)
+        let known = await d.knownProjects()
+        #expect(known.contains(KnownProject(name: "blog", path: "/p/blog", trusted: true)))
+        #expect(known.contains(KnownProject(name: "new thing", path: "/p/new-thing", trusted: false)))
+        #expect(known.contains(KnownProject(name: "billing service", path: "/p/billing-service", trusted: true)))
+        #expect(await d.matchProject("the blog")?.path == "/p/blog")
+        #expect(await d.matchProject("newthing")?.path == "/p/new-thing")
+        #expect(await d.matchProject("payments") == nil)
+    }
+
+    @Test func theClaudeJSONIsReadOnceUntilItChanges() async throws {
+        let path = NSTemporaryDirectory() + "ek-claude-\(UUID().uuidString.prefix(6)).json"
+        try #"{"projects":{"/p/blog":{"hasTrustDialogAccepted":true}}}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        let reads = Box(0)
+        let d = SessionDirectory(runner: FakeRunner([agent("a", "billing-service")]), store: store, labeler: labeler,
+                                 claudeJSON: path, readFile: { reads.value += 1; return FileManager.default.contents(atPath: $0) })
+        await d.refresh()
+        for _ in 0..<3 { _ = await d.vocabulary(); _ = await d.matchProject("blog") }
+        #expect(reads.value == 1)
+        try #"{"projects":{"/p/blog":{"hasTrustDialogAccepted":true},"/p/more":{}}}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        _ = await d.knownProjects()
+        #expect(reads.value == 2)
+        #expect(await d.matchProject("more")?.path == "/p/more")
+    }
+
+    @Test func overlappingRefreshesShareOneAgentsCall() async {
+        let runner = FakeRunner([agent("a", "blog")])
+        await runner.setHold(true)
+        let d = SessionDirectory(runner: runner, store: store, labeler: labeler, claudeJSON: "/nonexistent")
+        let first = Task { await d.refresh() }
+        while await runner.argLists.isEmpty { await Task.yield() }
+        let second = Task { await d.refresh(ifOlderThan: 2); return await d.sessions.map(\.id) }
+        for _ in 0..<20 { await Task.yield() }
+        await runner.setHold(false)
+        await first.value
+        #expect(await second.value == ["a"])
+        #expect(await d.sessions.map(\.id) == ["a"])
+        #expect(await runner.argLists.filter { $0.first == "agents" }.count == 1)
+    }
+
+    @Test func aFailedRefreshDoesNotStampTheTime() async {
+        let runner = FakeRunner([agent("a", "blog")])
+        await runner.setFail(true)
+        let d = SessionDirectory(runner: runner, store: store, labeler: labeler, claudeJSON: "/nonexistent")
+        await d.refresh()
+        await runner.setFail(false)
+        await d.refresh(ifOlderThan: 60)
+        #expect(await d.sessions.map(\.id) == ["a"])
+    }
+
+    @Test func aSessionOnlyThePluginKnowsIsNotListedWhenAgentsSucceeded() async {
+        await store.apply(.init(session: "ghost", state: .working, name: "ghost", project: "ghost"))
+        let (d, _) = await directory([agent("a", "blog")])
+        #expect(await d.sessions.map(\.id) == ["a"])
+    }
+
+    @Test func whenAgentsFailsPluginSessionsStayAndKeepTheirPid() async {
+        await store.apply(.init(session: "a", state: .working, name: "blog", project: "blog"))
+        await store.apply(.init(session: "p", state: .working, name: "plug", project: "plug"))
+        let (d, runner) = await directory([agent("a", "blog", pid: 4242)])
+        #expect(await d.session("p") == nil)
+        await runner.setFail(true)
+        await d.refresh()
+        #expect(Set(await d.sessions.map(\.id)) == ["a", "p"])
+        #expect(await d.session("a")?.pid == 4242)
+        #expect(await d.session("a")?.kind == "interactive")
+    }
+
+    @Test func rollCallPutsSessionsThatNeedYouFirst() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func s(_ id: String, _ name: String, _ state: SessionState?, detail: String? = nil, mins: Double = 0,
+               busy: Bool = false) -> LiveSession {
+            LiveSession(id: id, pid: 1, kind: "interactive", cwd: "/p", project: name, title: "", label: "", name: name,
+                        busy: busy, waiting: false, state: state, detail: detail, since: now.addingTimeInterval(-mins * 60))
+        }
+        let line = RollCall.line([s("a", "invoice api", .working, mins: 12), s("b", "docs site", .done, detail: "fixed the broken links"),
+                                  s("c", "billing service", .needs, detail: "needs your OK to run the database migration")], now: now,
+                                 hour: 14)
+        #expect(line == "Three sessions. Billing service needs your OK to run the database migration. Invoice api is working, 12 minutes in. Docs site finished: fixed the broken links.")
+        #expect(RollCall.line([], now: now) == "No Claude sessions are open.")
+        #expect(RollCall.sentence(s("x", "blog", nil, busy: true), now: now) == "Blog is working.")
+        #expect(RollCall.sentence(s("x", "blog", nil), now: now) == "Blog is idle.")
+    }
+
+    @Test func rollCallNamesSixThenCounts() {
+        let now = Date()
+        let list = (1...8).map { i in
+            LiveSession(id: "\(i)", pid: 1, kind: "interactive", cwd: "/p", project: "p\(i)", title: "", label: "",
+                        name: "p\(i)", busy: true, waiting: false, state: .working, detail: nil, since: now.addingTimeInterval(Double(i)))
+        }
+        let line = RollCall.line(list, now: now, hour: 14)
+        #expect(line.hasPrefix("Eight sessions. P1 is working, just started."))
+        #expect(line.hasSuffix("And 2 more. Nothing needs you."))
+    }
+
+    /// Idle sessions are counted, not named one by one.
+    @Test func idleSessionsAreCounted() {
+        let now = Date()
+        func s(_ name: String, _ state: SessionState) -> LiveSession {
+            LiveSession(id: name, pid: 1, kind: "interactive", cwd: "/p", project: name, title: "", label: "", name: name,
+                        busy: state == .working, waiting: false, state: state, detail: nil, since: now)
+        }
+        #expect(RollCall.line([s("blog", .working), s("docs", .open), s("api", .open)], now: now, hour: 14)
+                == "Three sessions. Blog is working, just started. The other 2 are idle. Nothing needs you.")
+        #expect(RollCall.line([s("blog", .working), s("docs", .open)], now: now, hour: 14)
+                == "Two sessions. Blog is working, just started. One other is idle. Nothing needs you.")
+        #expect(RollCall.line([s("docs", .open), s("api", .open)], now: now, hour: 14) == "Two sessions. All idle. Nothing needs you.")
+    }
+}
+
+/// Kobi's voice: what it noticed, in a coworker's words.
+@Suite struct PersonalityTests {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func s(_ name: String, _ state: SessionState?, mins: Double = 0, detail: String? = nil) -> LiveSession {
+        LiveSession(id: name, pid: 1, kind: "interactive", cwd: "/p", project: name, title: "", label: "", name: name,
+                    busy: state == .working, waiting: state == .needs, state: state, detail: detail,
+                    since: now.addingTimeInterval(-mins * 60))
+    }
+
+    @Test func aLongRunAndALongWaitAreMentioned() {
+        #expect(RollCall.sentence(s("billing", .working, mins: 65), now: now) == "Billing's been at it for about an hour.")
+        #expect(RollCall.sentence(s("docs", .working, mins: 40), now: now) == "Docs has been at it for 40 minutes.")
+        #expect(RollCall.sentence(s("reflow", .needs, mins: 25), now: now) == "Reflow's been waiting on you for 25 minutes.")
+        #expect(RollCall.sentence(s("reflow", .needs, mins: 3), now: now) == "Reflow is waiting on you.")
+        #expect(RollCall.sentence(s("blog", .needs, mins: 130, detail: "wants to push to main"), now: now)
+                == "Blog wants to push to main. That was about 2 hours ago.")
+    }
+
+    @Test func theRollCallEndsWithWhatItNoticed() {
+        let quiet = [s("blog", .done), s("docs", .open)]
+        #expect(RollCall.line(quiet, now: now, hour: 15) == "Two sessions. Blog finished. One other is idle. Nothing needs you.")
+        let late = [s("billing", .working, mins: 5)]
+        #expect(RollCall.line(late, now: now, hour: 1) == "One session. Billing is working, 5 minutes in. It's past midnight, and one's still going.")
+        let waiting = [s("reflow", .needs, mins: 2)]
+        #expect(RollCall.line(waiting, now: now, hour: 15) == "One session. Reflow is waiting on you.")
+    }
+
+    /// A session that finished a while ago is idle now: the roll call only counts it.
+    @Test func anOldFinishCountsAsIdle() {
+        let list = [s("blog", .done, mins: 45, detail: "fixed the feed"), s("docs", .done, mins: 5, detail: "fixed the links"),
+                    s("api", .working, mins: 3)]
+        #expect(RollCall.line(list, now: now, hour: 15)
+                == "Three sessions. Api is working, 3 minutes in. Docs finished: fixed the links. One other is idle. Nothing needs you.")
+        #expect(RollCall.line([s("blog", .done, mins: 300)], now: now, hour: 15) == "One session. It's idle. Nothing needs you.")
+    }
+
+    @Test func aGreetingIsShortAndSaysWhatMatters() {
+        let all = [s("blog", .done), s("docs", .done), s("reflow", .needs, mins: 12), s("billing", .working, mins: 80),
+                   s("api", .working, mins: 4)]
+        #expect(RollCall.greeting(all, now: now, hour: 15, pick: { _ in 0 })
+                == "Doing okay. Reflow's been waiting on you for 12 minutes. Two are working. Billing's been at it for over an hour.")
+        #expect(RollCall.greeting([s("blog", .done)], now: now, hour: 15, pick: { _ in 1 })
+                == "All good here. Nothing's running, and nothing needs you.")
+        #expect(RollCall.greeting([s("api", .working, mins: 4), s("ui", .working, mins: 2)], now: now, hour: 23, pick: { _ in 2 })
+                == "Pretty good, thanks. Two are working. It's getting late, and two are still going.")
+        #expect(RollCall.greeting([], now: now, hour: 15, pick: { _ in 3 }) == "Not bad. No sessions are open.")
+    }
+
+    @Test func aGreetingNamesTwoThatNeedYouThenCounts() {
+        let all = [s("a", .needs), s("b", .failed), s("c", .stuck)]
+        #expect(RollCall.greeting(all, now: now, hour: 15, pick: { _ in 1 })
+                == "Good, mostly. A is waiting on you. B hit an error. And 1 more need you. Nothing else is running.")
+    }
+
+    @Test func durationsReadLikeSpeech() {
+        #expect(RollCall.duration(30) == "a minute")
+        #expect(RollCall.duration(12 * 60) == "12 minutes")
+        #expect(RollCall.duration(58 * 60) == "about an hour")
+        #expect(RollCall.duration(85 * 60) == "over an hour")
+        #expect(RollCall.duration(170 * 60) == "about 3 hours")
+    }
+
+    /// A state that repeats keeps its start time, so a long run counts from its start.
+    @Test func aRepeatedStateKeepsWhenItBegan() async {
+        let clock = TestClock(Date(timeIntervalSince1970: 1000))
+        let store = SessionStore(clock: { clock.now })
+        await store.apply(AppMessage.Status(session: "s", state: .working))
+        clock.now = Date(timeIntervalSince1970: 2000)
+        await store.apply(AppMessage.Status(session: "s", state: .working))
+        #expect(await store.sessions.first?.since == Date(timeIntervalSince1970: 1000))
+        clock.now = Date(timeIntervalSince1970: 3000)
+        await store.apply(AppMessage.Status(session: "s", state: .done))
+        #expect(await store.sessions.first?.since == Date(timeIntervalSince1970: 3000))
+    }
+}
+
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+    init(_ d: Date) { value = d }
+    var now: Date {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}

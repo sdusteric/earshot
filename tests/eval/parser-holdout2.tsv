@@ -5,13 +5,13 @@ tell finebrief to add a loading spinner	send|finebrief
 ask the docs site to check the code samples	send|docs site
 have billing service write the migration notes	send|billing service
 blog, rename the draft to launch notes	send|blog
-get earshot to bump the plugin version	send|earshot
+get kobi to bump the plugin version	send|kobi
 could invoice export retry the failed rows	send|invoice export
 refund rounding should round half up instead	send|refund rounding
 tell the blog session to fix the image sizes	send|blog
 ask billing why the webhook failed	send|billing service
 please tell docs site to add a search box	send|docs site
-send earshot a note to rerun the evals	send|earshot
+send kobi a note to rerun the evals	send|kobi
 I need finebrief to update the pricing page	send|finebrief
 tell it to try again	send|
 make it shorter	send|
@@ -24,7 +24,7 @@ how are my sessions going	status|
 what needs me right now	status|
 anything new	status|
 who's waiting on me	status|
-what has earshot done so far	status|earshot
+what has kobi done so far	status|kobi
 stop the docs site	stop|docs site
 stop billing service immediately	stop|billing service
 tell finebrief to stop	stop|finebrief
@@ -46,7 +46,7 @@ nope	answer|deny|
 no don't	answer|deny|
 deny	answer|deny|
 no for the blog	answer|deny|blog
-deny earshot	answer|deny|earshot
+deny kobi	answer|deny|kobi
 don't allow billing	answer|deny|billing service
 thanks	quiet
 never mind	quiet

@@ -4,11 +4,11 @@ mic-in-use
 videos/
 plugin/tts/.build/
 .superpowers/
-app/EarshotKit/.build/
-app/EarshotKit/.swiftpm/
+app/KobiKit/.build/
+app/KobiKit/.swiftpm/
 app/build/
 app/.build/
-app/Earshot.xcodeproj/
+app/Kobi.xcodeproj/
 tests/eval/listener/
 
 # Impeccable scratch: decision sketches and review captures

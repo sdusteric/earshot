@@ -5,7 +5,7 @@
 tell billing to bump the version number	send|billing service
 could the blog session fix the typo in the header	send|blog
 have finebrief rerun the migration	send|finebrief
-ask earshot to write a changelog entry	send|earshot
+ask kobi to write a changelog entry	send|kobi
 docs site should regenerate the sitemap	send|docs site
 let the refund rounding one know the fix is merged	send|refund rounding
 get invoice export to try the smaller batch size	send|invoice export
@@ -19,7 +19,7 @@ please ask billing service to clean up the old branches	send|billing service
 what's billing up to	status|billing service
 where is finebrief at	status|finebrief
 any update from the blog	status|blog
-is earshot done yet	status|earshot
+is kobi done yet	status|kobi
 what's going on	status|
 give me a quick rundown	status|
 did the docs site finish	status|docs site
@@ -31,12 +31,12 @@ stop finebrief right now	stop|finebrief
 halt the billing service	stop|billing service
 tell blog to stop what it's doing	stop|blog
 cancel the docs site session	stop|docs site
-pause earshot	stop|earshot
+pause kobi	stop|kobi
 kill invoice export	stop|invoice export
 spin up a session in finebrief	start|finebrief
 start working in the blog folder	start|blog
 open a new session for docs site and update the readme	start|docs site
-launch claude in earshot	start|earshot
+launch claude in kobi	start|kobi
 start something in billing service to check the logs	start|billing service
 yes go ahead	answer|allow|
 yep do it	answer|allow|
@@ -48,7 +48,7 @@ no	answer|deny|
 don't do that	answer|deny|
 deny it	answer|deny|
 no not the docs site	answer|deny|docs site
-reject earshot's request	answer|deny|earshot
+reject kobi's request	answer|deny|kobi
 nah block that	answer|deny|
 what time is it	unknown
 play some music	unknown

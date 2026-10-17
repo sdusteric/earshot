@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Sparkle update feed for Earshot for Mac. The app reads it from
+<!-- Sparkle update feed for Kobi for Mac. The app reads it from
      https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml
      scripts/release-app.sh adds an item for each release. Edit by hand only to remove one. -->
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
-    <title>Earshot for Mac</title>
+    <title>Kobi for Mac</title>
     <link>https://github.com/sdusteric/earshot</link>
-    <description>Updates for Earshot for Mac.</description>
+    <description>Updates for Kobi for Mac.</description>
     <language>en</language>
     <!-- release-app.sh adds each release below this line, newest first. -->
   </channel>

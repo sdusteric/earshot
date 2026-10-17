@@ -5,7 +5,7 @@
 could billing service run the integration tests again	send|billing service
 have blog rebuild the RSS feed	send|blog
 I need finebrief to look at the failing build	send|finebrief
-earshot should commit what it has	send|earshot
+kobi should commit what it has	send|kobi
 let billing know the API key changed	send|billing service
 get the docs site to fix the broken links	send|docs site
 can the refund rounding session add a test for zero	send|refund rounding
@@ -18,7 +18,7 @@ ask the invoice export one to retry	send|invoice export
 tell the blog session it can deploy now	send|blog
 send finebrief a message to pull main first	send|finebrief
 see if billing can speed up the query	send|billing service
-let earshot rename the file to config dot swift	send|earshot
+let kobi rename the file to config dot swift	send|kobi
 blog, use the dark theme	send|blog
 I want billing to undo the last change	send|billing service
 over in finebrief please rerun the linter	send|finebrief
@@ -26,7 +26,7 @@ docs site should regenerate the sitemap	send|docs site
 let it finish then open a PR	send|
 tell whoever is on refunds to stop logging so much	send|refund rounding
 billing service needs to update the changelog	send|billing service
-could the earshot session check the hooks file	send|earshot
+could the kobi session check the hooks file	send|kobi
 have docs site bump the version number	send|docs site
 let finebrief know it can merge	send|finebrief
 billing service can you rerun the migration	send|billing service
@@ -35,7 +35,7 @@ how many sessions are open	status|
 what's billing up to	status|billing service
 how far along is blog	status|blog
 is finebrief done yet	status|finebrief
-any news from earshot	status|earshot
+any news from kobi	status|kobi
 where are we with the docs site	status|docs site
 how is the refund rounding thing going	status|refund rounding
 did invoice export finish	status|invoice export
@@ -50,12 +50,12 @@ how's it all going	status|
 what's the blog session working on	status|blog
 has billing finished the tests	status|billing service
 check how finebrief is doing	status|finebrief
-tell me what earshot did	status|earshot
+tell me what kobi did	status|kobi
 update on docs site	status|docs site
 make billing stop	stop|billing service
 kill the blog session	stop|blog
 cancel what finebrief is doing	stop|finebrief
-earshot stop right now	stop|earshot
+kobi stop right now	stop|kobi
 pause the docs site	stop|docs site
 halt everything on refund rounding	stop|refund rounding
 billing service stop what you're doing	stop|billing service
@@ -65,25 +65,25 @@ end finebrief	stop|finebrief
 spin up a new one in blog	start|blog
 open claude in finebrief and fix the readme	start|finebrief
 I want a fresh session in the docs site	start|docs site
-kick off a session in earshot to write tests	start|earshot
+kick off a session in kobi to write tests	start|kobi
 new claude session for billing service	start|billing service
 start something in blog to update dependencies	start|blog
 fire up finebrief	start|finebrief
 launch a session in the docs site to check links	start|docs site
-create a session in earshot	start|earshot
+create a session in kobi	start|kobi
 begin work in billing service on the refund bug	start|billing service
 yes go for it	answer|allow|
 sure thing	answer|allow|
 let billing do it	answer|allow|billing service
 approve the blog one	answer|allow|blog
 yeah allow finebrief	answer|allow|finebrief
-go ahead with earshot	answer|allow|earshot
+go ahead with kobi	answer|allow|kobi
 OK for docs site	answer|allow|docs site
 fine let it run	answer|allow|
 no don't let billing do that	answer|deny|billing service
 deny the blog request	answer|deny|blog
 nope not for finebrief	answer|deny|finebrief
-reject earshot	answer|deny|earshot
+reject kobi	answer|deny|kobi
 don't allow it	answer|deny|
 absolutely not	answer|deny|
 tell docs site no	answer|deny|docs site
@@ -97,7 +97,7 @@ remind me to call mom	unknown
 how do I make pasta	unknown
 mm hmm	unknown
 testing one two three	unknown
-earshot is a cool name	unknown
+kobi is a cool name	unknown
 what's two plus two	unknown
 turn off the lights	unknown
 that's all for now	unknown

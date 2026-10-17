@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds and packages Earshot for Mac. See docs/RELEASE.md for the whole checklist.
+# Builds and packages Kobi for Mac. See docs/RELEASE.md for the whole checklist.
 #
 #   release-app.sh --dry-run   Checks every prerequisite and builds nothing.
 #   release-app.sh             Developer ID release: archive, export, verify, notarize,
@@ -11,7 +11,7 @@
 #                              Writes a DMG's version and checksum into the cask.
 #
 # Settings, all optional:
-#   NOTARY_PROFILE   notarytool keychain profile name (default: earshot)
+#   NOTARY_PROFILE   notarytool keychain profile name (default: kobi)
 #   SPARKLE_ACCOUNT  keychain account of the Sparkle private key (default: ed25519)
 #   RELEASE_NOTES    an HTML file shown in the update window and used for the GitHub release.
 #                    Without it, the GitHub release notes list the commits under app/ since the
@@ -28,15 +28,15 @@ OUT=$APP/build/release
 PACKAGES=$APP/build/SourcePackages
 SPARKLE_BIN=$PACKAGES/artifacts/sparkle/Sparkle/bin
 APPCAST=$ROOT/packaging/appcast.xml
-CASK=$ROOT/packaging/earshot.rb
+CASK=$ROOT/packaging/kobi.rb
 PLUGIN_JSON=$ROOT/plugin/.claude-plugin/plugin.json
-PLUGIN_LINK=$APP/EarshotKit/Sources/EarshotKit/Sessions/PluginLink.swift
-REPO=sdusteric/earshot
-BUNDLE_ID=com.earshot.app
+PLUGIN_LINK=$APP/KobiKit/Sources/KobiKit/Sessions/PluginLink.swift
+REPO=sdusteric/earshot   # the GitHub repo keeps the old name until it is renamed
+BUNDLE_ID=com.kobi.app
 TAG_PREFIX=app-v
 FEED_URL_EXPECTED=https://raw.githubusercontent.com/$REPO/main/packaging/appcast.xml
 KEY_PLACEHOLDER=SPARKLE_PUBLIC_KEY_NOT_SET
-NOTARY_PROFILE=${NOTARY_PROFILE:-earshot}
+NOTARY_PROFILE=${NOTARY_PROFILE:-kobi}
 SPARKLE_ACCOUNT=${SPARKLE_ACCOUNT:-ed25519}
 
 fail() { echo "error: $*" >&2; exit 1; }
@@ -58,10 +58,10 @@ make_dmg() {
   rm -rf "$stage"; mkdir -p "$stage"
   cp -R "$1" "$stage/"; ln -s /Applications "$stage/Applications"
   if diskutil image create from --help >/dev/null 2>&1; then
-    diskutil image create from --format UDZO --volumeName Earshot "$stage" "$2" >/dev/null 2>&1 \
+    diskutil image create from --format UDZO --volumeName Kobi "$stage" "$2" >/dev/null 2>&1 \
       || fail "Couldn't make the disk image."
   else
-    hdiutil create -volname Earshot -srcfolder "$stage" -ov -format UDZO "$2" >/dev/null \
+    hdiutil create -volname Kobi -srcfolder "$stage" -ov -format UDZO "$2" >/dev/null \
       || fail "Couldn't make the disk image."
   fi
   rm -rf "$stage"
@@ -97,13 +97,13 @@ if [ "$mode" = local ]; then
   command -v xcodegen >/dev/null || fail "Needs XcodeGen: brew install xcodegen"
   rm -rf "$OUT"; mkdir -p "$OUT"
   xcodegen generate --spec "$SPEC" --project "$APP" >/dev/null
-  step "Building Earshot $ver ($build) for this Mac"
-  xcodebuild -project "$APP/Earshot.xcodeproj" -scheme Earshot -configuration Release \
+  step "Building Kobi $ver ($build) for this Mac"
+  xcodebuild -project "$APP/Kobi.xcodeproj" -scheme Kobi -configuration Release \
     -derivedDataPath "$APP/build" build >"$OUT/build.log" 2>&1 || fail "Build failed: $OUT/build.log"
-  cp -R "$APP/build/Build/Products/Release/Earshot.app" "$OUT/"
-  codesign --verify --deep --strict "$OUT/Earshot.app" || fail "The app's signature does not verify."
-  make_dmg "$OUT/Earshot.app" "$OUT/Earshot-$ver.dmg"
-  echo "Built $OUT/Earshot-$ver.dmg"
+  cp -R "$APP/build/Build/Products/Release/Kobi.app" "$OUT/"
+  codesign --verify --deep --strict "$OUT/Kobi.app" || fail "The app's signature does not verify."
+  make_dmg "$OUT/Kobi.app" "$OUT/Kobi-$ver.dmg"
+  echo "Built $OUT/Kobi-$ver.dmg"
   exit 0
 fi
 
@@ -115,7 +115,7 @@ ok() { echo "  ok       $*"; }
 missing() { echo "  MISSING  $1"; shift; for line in "$@"; do echo "           $line"; done; problems=$((problems + 1)); }
 note() { echo "  note     $*"; }
 
-echo "Earshot for Mac release checks"
+echo "Kobi for Mac release checks"
 echo "  version  $ver, build $build, tag $tag, team $team"
 
 [ -n "$team" ] || missing "DEVELOPMENT_TEAM is not set in app/project.yml." "Set it to the Apple team ID."
@@ -181,8 +181,8 @@ else missing "No \"Developer ID Application\" certificate for team $team in the 
   "Only the Account Holder can create it."; fi
 export_team=$(plutil -extract teamID raw -o - "$APP/ExportOptions.plist" 2>/dev/null || true)
 [ "$export_team" = "$team" ] || missing "app/ExportOptions.plist has team '$export_team', project.yml has '$team'." "Make them match."
-if grep -q get-task-allow "$APP/Earshot/Earshot.entitlements"; then
-  missing "Earshot.entitlements has get-task-allow." "Remove it. Notarization rejects apps with it."
+if grep -q get-task-allow "$APP/Kobi/Kobi.entitlements"; then
+  missing "Kobi.entitlements has get-task-allow." "Remove it. Notarization rejects apps with it."
 fi
 
 # Notarization credentials stored in the keychain by notarytool.
@@ -196,11 +196,11 @@ else missing "No working notarytool profile '$NOTARY_PROFILE'." \
 if [ ! -x "$SPARKLE_BIN/sign_update" ] && command -v xcodegen >/dev/null; then
   echo "  ...      fetching Swift packages for Sparkle's tools"
   xcodegen generate --spec "$SPEC" --project "$APP" >/dev/null
-  xcodebuild -resolvePackageDependencies -project "$APP/Earshot.xcodeproj" -scheme Earshot \
+  xcodebuild -resolvePackageDependencies -project "$APP/Kobi.xcodeproj" -scheme Kobi \
     -clonedSourcePackagesDirPath "$PACKAGES" >/dev/null 2>&1 || true
 fi
 if [ -x "$SPARKLE_BIN/sign_update" ] && [ -x "$SPARKLE_BIN/generate_keys" ]; then ok "Sparkle tools in app/build/SourcePackages"
-else missing "Sparkle's sign_update and generate_keys." "Run: cd app && xcodegen generate && xcodebuild -resolvePackageDependencies -project Earshot.xcodeproj -scheme Earshot -clonedSourcePackagesDirPath build/SourcePackages"; fi
+else missing "Sparkle's sign_update and generate_keys." "Run: cd app && xcodegen generate && xcodebuild -resolvePackageDependencies -project Kobi.xcodeproj -scheme Kobi -clonedSourcePackagesDirPath build/SourcePackages"; fi
 key_ok=
 if [ -z "$pubkey" ] || [ "$pubkey" = "$KEY_PLACEHOLDER" ]; then
   missing "SPARKLE_PUBLIC_KEY in app/project.yml is the placeholder." \
@@ -239,7 +239,7 @@ if [ "$problems" -gt 0 ]; then
   exit 1
 fi
 if [ "$mode" = dry ]; then
-  echo "Ready to release Earshot $ver ($build). Run scripts/release-app.sh without --dry-run."
+  echo "Ready to release Kobi $ver ($build). Run scripts/release-app.sh without --dry-run."
   exit 0
 fi
 if [ -n "${RELEASE_NOTES:-}" ] && [ ! -f "$RELEASE_NOTES" ]; then fail "RELEASE_NOTES points to a missing file: $RELEASE_NOTES"; fi
@@ -248,19 +248,19 @@ if [ -n "${RELEASE_NOTES:-}" ] && [ ! -f "$RELEASE_NOTES" ]; then fail "RELEASE_
 
 rm -rf "$OUT"; mkdir -p "$OUT"
 log=$OUT/build.log
-app=$OUT/Earshot.app
+app=$OUT/Kobi.app
 commit=$(git -C "$ROOT" rev-parse HEAD)
 
-step "Archiving Earshot $ver ($build)"
+step "Archiving Kobi $ver ($build)"
 xcodegen generate --spec "$SPEC" --project "$APP" >/dev/null
-xcodebuild -project "$APP/Earshot.xcodeproj" -scheme Earshot -configuration Release \
-  -archivePath "$OUT/Earshot.xcarchive" -derivedDataPath "$APP/build/release-dd" \
+xcodebuild -project "$APP/Kobi.xcodeproj" -scheme Kobi -configuration Release \
+  -archivePath "$OUT/Kobi.xcarchive" -derivedDataPath "$APP/build/release-dd" \
   -clonedSourcePackagesDirPath "$PACKAGES" archive >"$log" 2>&1 || fail "Archive failed. See $log"
 
 step "Exporting with Developer ID"
-xcodebuild -exportArchive -archivePath "$OUT/Earshot.xcarchive" -exportOptionsPlist "$APP/ExportOptions.plist" \
+xcodebuild -exportArchive -archivePath "$OUT/Kobi.xcarchive" -exportOptionsPlist "$APP/ExportOptions.plist" \
   -exportPath "$OUT/export" >>"$log" 2>&1 || fail "Export failed. See $log"
-mv "$OUT/export/Earshot.app" "$app"
+mv "$OUT/export/Kobi.app" "$app"
 
 step "Checking the signature, hardened runtime and entitlements"
 codesign --verify --deep --strict --verbose=2 "$app" >>"$log" 2>&1 || fail "codesign --verify --deep --strict failed. See $log"
@@ -318,12 +318,12 @@ codesign --verify --deep --strict "$app" || fail "The stapled app's signature do
 echo "Gatekeeper accepts the app"
 
 # Sparkle installs from a zip of the stapled app.
-zip=$OUT/Earshot-$ver.zip
+zip=$OUT/Kobi-$ver.zip
 step "Making $zip"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
 
 # The DMG holds the app and a link to Applications, for people and for Homebrew.
-dmg=$OUT/Earshot-$ver.dmg
+dmg=$OUT/Kobi-$ver.dmg
 step "Making $dmg"
 make_dmg "$app" "$dmg"
 codesign --sign "$identity_hash" --timestamp "$dmg" >>"$log" 2>&1 || fail "Signing the DMG failed. See $log"
@@ -356,7 +356,7 @@ item=$OUT/appcast-item.xml
   if [ -n "${RELEASE_NOTES:-}" ]; then
     echo "      <description><![CDATA["; cat "$RELEASE_NOTES"; echo "      ]]></description>"
   fi
-  echo "      <enclosure url=\"$base/Earshot-$ver.zip\" type=\"application/octet-stream\" $attrs/>"
+  echo "      <enclosure url=\"$base/Kobi-$ver.zip\" type=\"application/octet-stream\" $attrs/>"
   echo "    </item>"
 } >"$item"
 cp "$APPCAST" "$OUT/appcast.before.xml"
@@ -367,7 +367,7 @@ xmllint --noout "$APPCAST" || { cp "$OUT/appcast.before.xml" "$APPCAST"; fail "T
 cp "$APPCAST" "$OUT/appcast.xml"
 
 update_cask "$dmg" "$ver"
-(cd "$OUT" && shasum -a 256 "Earshot-$ver.dmg" "Earshot-$ver.zip" >SHA256SUMS)
+(cd "$OUT" && shasum -a 256 "Kobi-$ver.dmg" "Kobi-$ver.zip" >SHA256SUMS)
 printf 'version %s\nbuild %s\ncommit %s\nidentity %s\n' "$ver" "$build" "$commit" "$identity_name" >"$OUT/release-info.txt"
 
 # GitHub's --generate-notes lists every commit since the last release, and the last release
@@ -379,7 +379,7 @@ if [ -z "$notes_file" ]; then
   prev_tag=$(git -C "$ROOT" tag --list "${TAG_PREFIX}*" --sort=-v:refname | head -1)
   range=HEAD; [ -n "$prev_tag" ] && range="$prev_tag..HEAD"
   {
-    echo "Changes to Earshot for Mac${prev_tag:+ since ${prev_tag#"$TAG_PREFIX"}}:"
+    echo "Changes to Kobi for Mac${prev_tag:+ since ${prev_tag#"$TAG_PREFIX"}}:"
     echo
     git -C "$ROOT" log --no-merges --format='- %s' "$range" -- app | grep -v 'Package.resolved' || true
   } >"$notes_file"
@@ -387,18 +387,18 @@ if [ -z "$notes_file" ]; then
 fi
 cat <<EOF
 
-Built and notarized Earshot $ver ($build) from $commit:
+Built and notarized Kobi $ver ($build) from $commit:
   $dmg
   $zip
   $OUT/SHA256SUMS
-packaging/appcast.xml and packaging/earshot.rb are updated but not committed.
+packaging/appcast.xml and packaging/kobi.rb are updated but not committed.
 
 Publish, in this order (the feed goes live last, once the files exist):
   git push origin $branch
   gh release create $tag "$dmg" "$zip" --repo $REPO --target $commit \\
-    --title "Earshot for Mac $ver" --latest=false --notes-file "$notes_file"
-  git add packaging/appcast.xml packaging/earshot.rb
-  git commit -m "Earshot for Mac $ver: appcast and cask"
+    --title "Kobi for Mac $ver" --latest=false --notes-file "$notes_file"
+  git add packaging/appcast.xml packaging/kobi.rb
+  git commit -m "Kobi for Mac $ver: appcast and cask"
   git push origin $branch
-Then copy packaging/earshot.rb to Casks/earshot.rb in $REPO's tap (sdusteric/homebrew-earshot) and push it.
+Then copy packaging/kobi.rb to Casks/kobi.rb in $REPO's tap (sdusteric/homebrew-kobi) and push it.
 EOF

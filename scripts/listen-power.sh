@@ -1,9 +1,9 @@
 #!/bin/bash
 # listen-power.sh <process name> [minutes]: Energy Impact and CPU of one
 # process from powermetrics, one sample every 5 seconds. Needs sudo.
-# Run it next to "earshot-probe listen" or the app with the wake word on.
+# Run it next to "kobi-probe listen" or the app with the wake word on.
 # CPU is printed in ms/s and in percent of one core (ms/s / 10), the unit of the budgets.
-name=${1:?process name, e.g. earshot-probe or Earshot}; mins=${2:-5}
+name=${1:?process name, e.g. kobi-probe or Kobi}; mins=${2:-5}
 n=$(( mins * 12 ))
 sudo powermetrics --samplers tasks --show-process-energy -i 5000 -n "$n" 2>/dev/null \
   | awk -v name="$name" '

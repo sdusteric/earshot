@@ -12,13 +12,13 @@
 # Parakeet and Whisper both lose the first word and garble the rest the same way.
 #
 #   tests/hearing/make-audio.sh OUTDIR
-# then: earshot-probe hear-bench OUTDIR/manifest.tsv tests/hearing/sessions.txt
+# then: kobi-probe hear-bench OUTDIR/manifest.tsv tests/hearing/sessions.txt
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:?usage: make-audio.sh OUTDIR}
 mkdir -p "$out/raw"
-tts=${KOKORO:-$HOME/.config/earshot/kokoro/earshot-tts}
-sock=${KOKORO_SOCKET:-/tmp/earshot-bench-tts.sock}
+tts=${KOKORO:-$HOME/.config/kobi/kokoro/kobi-tts}
+sock=${KOKORO_SOCKET:-/tmp/kobi-bench-tts.sock}
 voices=(am_michael af_heart say:Samantha bm_george af_sarah am_adam say:Daniel bf_emma)
 
 synth() { # voice text out
