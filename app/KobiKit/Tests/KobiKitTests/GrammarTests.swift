@@ -104,6 +104,9 @@ import Testing
         ("Kobi, stop.", .quiet),
         ("Kobe, stop.", .quiet),   // how recognizers mostly write the name
         ("Koby, be quiet.", .quiet),
+        // The name standing apart, as the wake takes it: a comma, a stop, ? or ! after it.
+        ("Kobe. Stop.", .quiet),
+        ("Kobi! Be quiet.", .quiet),
         // Every session at once: Kobi asks first.
         ("Stop everything.", .stopAll),
         ("Stop all.", .stopAll),

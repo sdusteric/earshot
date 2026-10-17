@@ -100,6 +100,20 @@ actor FixedTranscriber: Transcriber {
     func prewarm() async {}
 }
 
+/// Writes `boosted` when a session it boosts sounds like `name`, and `plain` without it, as
+/// Parakeet's boost does; keeps the vocabularies it was given.
+actor BoostingTranscriber: Transcriber {
+    let name: String, boosted: String, plain: String
+    private(set) var vocabularies: [[String]] = []
+    init(name: String, boosted: String, plain: String) { self.name = name; self.boosted = boosted; self.plain = plain }
+    func transcribe(_ s: [Float], vocabulary: [String]) async throws -> String { try await transcribeBoth(s, vocabulary: vocabulary).text }
+    func transcribeBoth(_ s: [Float], vocabulary: [String]) async throws -> (text: String, plain: String?) {
+        vocabularies.append(vocabulary)
+        return vocabulary.contains(name) ? (boosted, plain) : (plain, nil)
+    }
+    func prewarm() async {}
+}
+
 /// Hears `wake` in a clip with the wake in it (a 2), after `wakeDelay`, and `command` in any other.
 actor WakeAndCommandTranscriber: Transcriber {
     let wake: String, command: String, wakeDelay: Duration
@@ -1399,16 +1413,18 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await st.clips.last?.contains(2) == false)
     }
 
-    /// A session named kobe: the boost wrote the name over "Okay, Colby." The unboosted words
-    /// lack the name, so nothing is sent, and the window opens for the command.
+    /// A session named kobe would make the boost write the name over "Okay, Colby." The wake's
+    /// own clip is heard without it, so the unboosted words are all there is, they lack the name,
+    /// nothing is sent, and the window opens for the command.
     @Test func theBoostWritingTheNameOverAnotherSendsNothing() async {
-        let st = FixedTranscriber(text: "Okay, Kobe stop the blog", plain: "Okay, Colby, stop the build.")
+        let st = BoostingTranscriber(name: "kobe", boosted: "Okay, Kobe, stop the blog.", plain: "Okay, Colby, stop the build.")
         let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Kobe, stop."))
-        await l.setVocabulary(["blog"])
+        await l.setVocabulary(["blog", "kobe"])
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })
         await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
         #expect(await eventually { await l.currentPhase == .capturing(.wake) })
+        #expect(await st.vocabularies == [["blog"]])
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await heard.items.isEmpty)
         #expect(await chimes.played == [.listening])
@@ -1654,9 +1670,11 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await l.falseWakes == 0)
     }
 
-    /// A confirmer that hears one of Kobi's own recent lines rejects the wake.
-    @Test func aConfirmThatRepeatsKobisLineIsRejected() async {
-        let confirmer = FakeConfirmer(words: "Hey kobi needs your OK.")
+    /// A confirmer that hears one of Kobi's own recent lines rejects the wake, with the name as
+    /// Apple writes it ("Kobe") after the grace (speakers that play late).
+    @Test(arguments: ["Hey, Kobe needs your OK.", "Hey, Kobe. Needs your OK.", "Hey Koby needs your OK."])
+    func aConfirmThatRepeatsKobisLineIsRejected(_ words: String) async {
+        let confirmer = FakeConfirmer(words: words)
         var timing = Listener.Timing.forTests
         timing.ownWakeGrace = .zero
         let l = await make(timing, confirmer: confirmer)
@@ -1851,8 +1869,10 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(await l.falseWakes == 0)
     }
 
-    @Test func aWakeThatRepeatsALineKobiJustSaidIsDropped() async {
-        let t = ScriptTranscriber(fixed: "Hey kobi needs your OK.")
+    /// The mic hears one of Kobi's lines after the grace, the name written "Kobe": still its own line.
+    @Test(arguments: ["Hey, Kobe needs your OK.", "Hey, Kobe. Needs your OK."])
+    func aWakeThatRepeatsALineKobiJustSaidIsDropped(_ words: String) async {
+        let t = ScriptTranscriber(fixed: words)
         var timing = Listener.Timing.forTests
         timing.ownWakeGrace = .zero
         let l = await make(timing, transcriber: t)
@@ -1869,7 +1889,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
     }
 
     @Test func aLineSaidLongAgoNoLongerDropsAWake() async {
-        let t = ScriptTranscriber(fixed: "Hey kobi needs your OK.")
+        let t = ScriptTranscriber(fixed: "Hey, Kobe. Needs your OK.")
         var timing = Listener.Timing.forTests
         timing.ownWakeGrace = .zero
         timing.ownLineMemory = .milliseconds(30)
@@ -1881,7 +1901,22 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         try? await Task.sleep(for: .milliseconds(80))
         await input.push([2, 1, 1, 1, 1, 1, 1, 0, 0])
         #expect(await eventually { await heard.items.count == 1 })
-        #expect(await heard.items.first?.text == "needs your OK.")
+        #expect(await heard.items.first?.text == "Needs your OK.")
+    }
+
+    /// A session named KobiKit in Kobi's own line, heard back as "Hey, Kobe kit": Kobi's own
+    /// voice, so no barge-in and nothing sent.
+    @Test func aLineWithTheNameInsideAWordIsKobisOwnVoice() async {
+        let t = ScriptTranscriber(fixed: "Hey, Kobe kit needs your OK.")
+        let l = await make(transcriber: t, confirmer: FakeConfirmer(words: "Hey, Kobe kit needs your OK."))
+        await l.setWakeArmed(true)
+        #expect(await eventually { await input.isOpen })
+        await l.setSpeaking("Hey, KobiKit needs your OK to run the tests.")
+        await input.push([2, 3, 3, 3, 3, 3, 3, 0, 0])
+        #expect(await eventually { await l.falseWakes == 1 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await observer.events.isEmpty)
+        #expect(await heard.items.isEmpty)
     }
 
     @Test(arguments: [
@@ -1891,6 +1926,12 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         ("Toby finished.", false),
         ("Billing service needs your OK.", false),
         ("Kobold is not a session.", false),
+        // Compounds and possessives, as the boost's vocabulary filter takes them.
+        ("Hey, KobiKit needs your OK.", true), ("kobiapp finished.", true), ("kobi_api is stuck.", true),
+        ("kobi2 finished.", true), ("Kobi's tests passed.", true), ("The kobi-web session is done.", true),
+        // Names recognizers write for "Kobi".
+        ("Coby finished.", true), ("Kobie needs your OK.", true), ("Koby is working.", true),
+        ("Cob salad finished.", false), ("Coburn is working.", false),
     ])
     func findsTheWakePhraseAnywhere(_ line: String, _ found: Bool) {
         #expect(Listener.mentionsWake(line) == found)
@@ -1911,6 +1952,14 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
         #expect(Listener.stripWake("run the tests") == nil)
         #expect(Listener.stripWake("Hey Toby, run the tests") == nil)
         #expect(Listener.stripWake("Kobold, run the tests") == nil)
+    }
+
+    /// stripWake takes off only what wakeWords takes as the wake phrase.
+    @Test(arguments: ["Kobe-san, stop.", "Kobe: keep going", "Kobe beef is expensive", "Kobe's still running",
+                      "Take Kobe to the vet"])
+    func stripsOnlyWhatWakes(_ said: String) {
+        #expect(Listener.wakeWords(said) == nil)
+        #expect(Listener.stripWake(said) == nil)
     }
 }
 

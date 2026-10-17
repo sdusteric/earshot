@@ -303,8 +303,10 @@ public enum Grammar {
         if let c = answer(Words(transcript), known: known) { return c }
         var w = Words(transcript).trimmingFillers()
         // "Kobi, ..." speaks to Kobi itself, not to a session called kobi. Recognizers
-        // mostly write the name "Kobe" (Listener.nameSpellings).
-        if let first = w.keys.first, Listener.nameSpellings.contains(first), w.said.first?.hasSuffix(",") == true {
+        // mostly write the name "Kobe" (Listener.nameSpellings). The name stands apart as the
+        // wake takes it (Listener.wakeWords): a comma, a stop, ? or ! right after it.
+        if let first = w.keys.first, Listener.nameSpellings.contains(first),
+           let said = w.said.first?.last, ",.!?".contains(said) {
             w = w.slice(1..<w.count).trimmingFillers()
         }
         guard !w.isEmpty else { return .unknown }

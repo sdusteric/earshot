@@ -155,7 +155,7 @@ import Testing
 
     /// Names with a spelling of the name in them are left out of a wake's own clip's vocabulary.
     @Test func namesThatSpellTheNameAreLeftOut() {
-        #expect(Listener.wakeVocabulary(["billing service", "kobi", "Kobe app", "kobi-web", "Koby", "blog", "Colby", "kob"])
+        #expect(Listener.wakeVocabulary(["billing service", "kobi", "Kobe app", "kobi-web", "Koby", "blog", "Colby", "kob", "Coby", "KobiKit"])
                 == ["billing service", "blog", "Colby", "kob"])
     }
 }

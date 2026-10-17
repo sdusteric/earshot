@@ -1060,16 +1060,13 @@ public actor Listener {
 
     // MARK: - Text
 
-    nonisolated(unsafe) private static let wakePrefix = try! Regex(
-        #"^\s*(?:(?:hey|hi|ok|okay|a)[\s,.!]*)?(?:kobi|kobe|koby)\b[\s,.!?]*"#
-    ).ignoresCase()
-
-    nonisolated(unsafe) private static let wakeAnywhere = try! Regex(#"\b(?:kobi|kobe|koby)\b"#).ignoresCase()
-
-    /// The text after the wake phrase, or nil when it does not start with it.
+    /// The text after the wake phrase, or nil when it does not start with it: what wakeWords
+    /// takes as the phrase, in either tier, comes off ("Kobe-san, stop" keeps its name).
     public static func stripWake(_ text: String) -> String? {
-        guard let m = text.prefixMatch(of: wakePrefix) else { return nil }
-        return String(text[m.range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard wakeWords(text) != nil else { return nil }
+        let (tokens, words) = wakeTokens(text)
+        let name = nameSpellings.contains(words[0]) ? 0 : 1
+        return remainder(text, after: tokens[name])
     }
 
     /// How a text says the wake phrase at its start, when it does (see wakeWords(_:)).
@@ -1144,14 +1141,22 @@ public actor Listener {
         return wakeRemainder(second)
     }
 
-    /// The names a wake's own clip is heard with: those whose letters have a spelling of the
-    /// name in them ("kobi", "Kobe app", "kobi-web") left out. With one, the boost writes the
-    /// name over words that only sound like it, and they would pass as the phrase written as such.
+    /// The names a wake's own clip is heard with: those that have the name in them (hasName:
+    /// "kobi", "Kobe app", "kobi-web", "Coby") left out. With one, the boost writes the name over
+    /// words that only sound like it, and they would pass as the phrase written as such.
     public static func wakeVocabulary(_ names: [String]) -> [String] {
-        names.filter { name in
-            let l = SoundsLike.letters(name)
-            return !nameSpellings.contains { l.contains($0) }
-        }
+        names.filter { !hasName($0) }
+    }
+
+    /// How recognizers write the name, inside a word too: nameSpellings, and "Coby" and
+    /// "Kobie", which Apple's recognizer writes as "Kobe" now and then, and so the other way.
+    static let nameLookalikes: [String] = ["kobie", "kobi", "kobe", "koby", "coby"]
+
+    /// The letters of `text` have the name in them, as one of nameLookalikes ("KobiKit",
+    /// "kobi_api", "Kobi's", "Coby").
+    static func hasName(_ text: String) -> Bool {
+        let l = SoundsLike.letters(text)
+        return nameLookalikes.contains { l.contains($0) }
     }
 
     /// The text's words (those with a letter or digit), and each as the letters compared.
@@ -1173,11 +1178,19 @@ public actor Listener {
     /// wakeWords): the confirm's rule, so "Kobi" alone first may chime too.
     public static func confirmsWake(_ text: String) -> Bool { wakeWords(text) != nil }
 
-    /// The name anywhere in the text ("Kobi needs your OK"), as Kobi's own lines may say it.
-    public static func mentionsWake(_ text: String) -> Bool { text.contains(wakeAnywhere) }
+    /// The name anywhere in the text ("Kobi needs your OK"), as Kobi's own lines may say it: in
+    /// any word, the way the boost's vocabulary filter takes it (hasName), so a session named
+    /// KobiKit, heard back as "Kobe kit", is Kobi's own voice too.
+    public static func mentionsWake(_ text: String) -> Bool {
+        text.split(whereSeparator: \.isWhitespace).contains { hasName(String($0)) }
+    }
 
-    /// Lowercase letters and digits only, so "Hey, Kobi" and "hey kobi" compare equal.
+    /// Lowercase letters and digits only, with the name's spellings folded into one, so
+    /// "Hey, Kobi" and "hey kobe" compare equal: Kobi's lines spell "kobi", and Apple's
+    /// recognizer writes "Kobe" when it hears one played back.
     static func squash(_ text: String) -> String {
-        String(text.lowercased().filter { $0.isLetter || $0.isNumber })
+        var s = String(text.lowercased().filter { $0.isLetter || $0.isNumber })
+        for spelling in nameLookalikes where spelling != "kobi" { s = s.replacingOccurrences(of: spelling, with: "kobi") }
+        return s
     }
 }
