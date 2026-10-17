@@ -1368,7 +1368,7 @@ func eventually(within limit: Duration = .seconds(1), _ check: @escaping @Sendab
 
     /// The boost turned "Kobi" into a session's name; the plain words still have the phrase.
     @Test func thePlainWordsCanCarryThePhrase() async {
-        let st = FixedTranscriber(text: "Hey reflow summarized the last session.", plain: "Hey Kobi summarized the last session.")
+        let st = FixedTranscriber(text: "Hey reflow, summarized the last session.", plain: "Hey Kobi, summarized the last session.")
         let l = await make(transcriber: st, confirmer: FakeConfirmer(words: "Hey Kobi"))
         await l.setWakeArmed(true)
         #expect(await eventually { await input.isOpen })

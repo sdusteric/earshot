@@ -10,7 +10,7 @@ import Testing
     /// "Kobe" for most of them, and "Koby" now and then.
     @Test(arguments: [
         "Hey, Kobe.", "Okay, Kobe.", "Hi, Kobe.", "Hey Kobi", "Hey, Kobe, stop.", "Okay, Kobe, be quiet.",
-        "Hey Kobe, how are you?", "Hi Kobe.", "Okay, Kobe status.", "Hey, Kobe, tell the website.", "Hey Koby.",
+        "Hey Kobe, how are you?", "Hi Kobe.", "Okay, Kobe, status.", "Hey, Kobe, tell the website.", "Hey Koby.",
         "Hey Koby, tell the blog.", "K Kobe, status.", "K, Kobe.", "I, Kobe, switch to the app.", "Eight Kobe.",
         "High Kobe, any updates?", "A Kobe.", "OK Kobi, be quiet",
     ])
@@ -20,16 +20,12 @@ import Testing
         if case .literal? = Listener.wakeWords(head) {} else { Issue.record("not literal: \(head)") }
     }
 
-    /// After a weak greeting (a, i, k, eight, 8, hate, high, hay: words that start ordinary
-    /// sentences too), the name sends what follows only when it stands apart: a comma, a stop,
-    /// ? or ! after it, or nothing. Run into the sentence it is window only, as the name alone
-    /// first is: "Kobe" is a common word ("a Kobe steak"). After hey, hi, ok and okay the name
-    /// run into the sentence still sends it: recognizers often write a real command with no
-    /// comma ("Hey Kobe pause.", "Okay Kobe status."), and requiring one cost 25 of 440 tune
-    /// commands in clean and 20 in quiet on the wake bench (5.7 and 4.5 points).
+    /// After a greeting, the name sends what follows only when it stands apart: a comma, a
+    /// stop, ? or ! after it, or nothing. Run into the sentence it is window only, as the name
+    /// alone first is: "Kobe" is a common word ("a Kobe steak").
     @Test(arguments: ["A Kobe beef burger, please.", "Eight Kobe sliders, please.", "A Kobe Bryant jersey for my son.",
                       "A Kobe steak, medium rare.", "8 Kobe sliders.", "I Kobe is listening.", "K Kobe what time is it"])
-    func aWeakGreetingRunIntoTheSentenceIsWindowOnly(_ head: String) {
+    func aGreetingRunIntoAnOrdinarySentenceIsWindowOnly(_ head: String) {
         #expect(Listener.wakeWords(head) == .bare)
         #expect(Listener.wakeRemainder(head) == nil)
         #expect(Listener.finishRemainder(head, plain: head, second: head, passedOnWords: true) == nil)
@@ -37,9 +33,15 @@ import Testing
         #expect(Listener.stripWake(head) != nil)
     }
 
-    @Test func aStrongGreetingRunIntoTheSentenceStillSends() {
-        #expect(Listener.wakeWords("Hey Kobe pause.") == .literal(remainder: "pause."))
-        #expect(Listener.wakeWords("Okay Kobe status.") == .literal(remainder: "status."))
+    /// After any greeting the name must stand apart to send what follows: "Kobe" is a common word.
+    @Test func aGreetingRunIntoTheSentenceIsWindowOnly() {
+        #expect(Listener.wakeWords("Hey Kobe pause.") == .bare)
+        #expect(Listener.wakeWords("Hey kobe run the tests") == .bare)
+        #expect(Listener.wakeWords("Okay, Kobe status.") == .bare)
+        #expect(Listener.wakeWords("Okay, Kobe Bryant was the best.") == .bare)
+        #expect(Listener.wakeWords("Hey, Kobi just deleted the branch.") == .bare)
+        #expect(Listener.wakeWords("Hey, Kobe is listening.") == .bare)
+        #expect(Listener.wakeWords("Okay Kobe, status.") == .literal(remainder: "status."))
         #expect(Listener.wakeWords("A Kobe, status.") == .literal(remainder: "status."))
     }
 
@@ -98,9 +100,9 @@ import Testing
     /// wakeRemainder gives the words after the name, as written, in the literal tier.
     @Test(arguments: [
         ("Hey Kobi", ""), ("Hey, Kobe.", ""), ("Hey, Kobe, what's everyone doing?", "what's everyone doing?"),
-        ("Hey kobe run the tests", "run the tests"), ("Hi Kobe, stop.", "stop."), ("Okay Kobe.", ""),
-        ("Okay, Kobe status.", "status."), ("  OK Kobi , be quiet ", "be quiet"), ("Hey Koby, tell the blog.", "tell the blog."),
-        ("K Kobe, status.", "status."), ("Hey Kobe... yes", "yes"), ("Hey, Kobe is listening.", "is listening."),
+        ("Hey kobe, run the tests", "run the tests"), ("Hi Kobe, stop.", "stop."), ("Okay Kobe.", ""),
+        ("Okay, Kobe. Status.", "Status."), ("  OK Kobi , be quiet ", "be quiet"), ("Hey Koby, tell the blog.", "tell the blog."),
+        ("K Kobe, status.", "status."), ("Hey Kobe... yes", "yes"),
     ])
     func theRemainderIsWhatFollowsTheName(_ text: String, _ rest: String) {
         #expect(Listener.wakeRemainder(text) == rest)
@@ -128,7 +130,7 @@ import Testing
         ("Hey Kobe, what's everyone doing?", nil, nil, "what's everyone doing?"),
         ("Hey Colby what's everyone doing", "Hey Kobe. What's everyone doing", nil, "What's everyone doing"),
         ("Hey Colby what's everyone doing", nil, "Hey Kobe, what's everyone doing?", "what's everyone doing?"),
-        ("Hey reflow summarized the last session.", "Hey Kobe summarized the last session.", nil, "summarized the last session."),
+        ("Hey reflow, summarized the last session.", "Hey Kobe, summarized the last session.", nil, "summarized the last session."),
         ("Hey Kobe, stop the blog", "Hey Kobe, stop the build", nil, "stop the blog"),
         ("", nil, "Hey Kobe, pause.", "pause."),
         ("Hey Kobi", "Hey kobe, run the tests", nil, ""),

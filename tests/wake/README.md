@@ -96,15 +96,15 @@ phrase. What it does then falls in one of two tiers:
   (`Listener.nameSpellings`). Apple's recognizer wrote "Kobe" for most "Kobi"s
   on the bench and "Kobi" almost never; "K Kobe" is a mis-heard "Okay Kobi",
   "I Kobe" a mis-heard "Hi Kobi". Only this tier sends the words after the name.
-  After the weak greetings (a, i, k, eight, 8, hate, high, hay:
-  `Listener.weakGreetings`), which start ordinary sentences too ("A Kobe beef
-  burger, please", "Eight Kobe sliders"), the name must stand apart: a comma,
-  a stop, ? or ! after it, or nothing. After hey, hi, ok and okay it need not:
-  recognizers write real commands with no comma ("Hey Kobe pause.", "Okay Kobe
-  status.").
+  After every greeting the name must stand apart: a comma, a stop, ? or ! after
+  it, or nothing. "Kobe" is a common word, so a greeting and the name start
+  ordinary sentences too ("A Kobe beef burger, please", "Okay, Kobe Bryant was
+  the best", "Hey, Kobi just deleted the branch"). Real commands written with no
+  comma ("Hey Kobe pause.") chime and wait for the command instead: 25 of 440
+  tune commands in clean and 20 in quiet.
 - Window only (bare): the name as the first word with no greeting, and a comma,
   a stop, ? or ! after it, or nothing after it ("Kobe, stop", "Kobe."), or a
-  weak greeting and the name run into the sentence. The wake chimes and opens
+  greeting and the name run into the sentence. The wake chimes and opens
   the command window, but nothing of the segment is sent: a noise gate that
   cuts the start of a mention leaves the same words ("can Kobi read my mail"
   heard as "Kobe, read my mail."), and "Kobe" is a common word.
@@ -261,22 +261,25 @@ and the whole-segment hearings "Hi Kobe, any updates?" and "Okay, Kobe, go
 ahead.". The head-only bench had counted both as windows. They are names a
 recognizer hears as "Kobe", so they are collisions now.
 
-The weak-greeting rule, measured on tune at -8.0 against the same rule with
+The stand-apart rule, measured on tune at -8.0 against the same rule with
 none (dispatches in the same breath of the 440 command clips, then chimes):
 
 | Rule | Clean | Quiet | Chimes | Near-miss and mention dispatch |
 |---|---|---|---|---|
 | no greeting must stand apart | 434 | 384 | 1460 | 0 |
-| all greetings, run-on is window only | 409 (-5.7 points) | 364 (-4.5) | 1460 | 0 |
+| all greetings, run-on is window only (chosen) | 409 (-5.7 points) | 364 (-4.5) | 1460 | 0 |
 | all greetings, run-on is dropped | 407 | 362 | 1426 | 0 |
-| weak greetings, run-on is window only (chosen) | 434 | 380 (-0.9) | 1460 | 0 |
-| weak greetings, run-on is dropped | 434 | 380 | 1454 | 0 |
+| weak greetings only, run-on is window only | 434 | 380 (-0.9) | 1460 | 0 |
+| weak greetings only, run-on is dropped | 434 | 380 | 1454 | 0 |
 
-Requiring it after hey, hi, ok and okay cost more than 5 points in clean, so it
-is kept to the weak greetings. Window only, not dropped: dropping lost chimes
-and saved no near-miss or mention window. None of these cases is on the bench
-as a negative: no phrase starts with a weak greeting and "Kobe", so what the
-rule saves ("A Kobe beef burger, please") is covered by the unit tests only.
+Requiring it after hey, hi, ok and okay too costs 5.7 points of same-breath
+commands in clean, which then chime and wait for the command. It is taken
+anyway: otherwise "Okay, Kobe Bryant was the best" and "Hey, Kobi just deleted
+the branch" send the rest of the sentence to a session. Window only, not
+dropped: dropping lost chimes and saved no near-miss or mention window. None of
+these cases is on the bench as a negative: no phrase starts with a greeting and
+"Kobe" in an ordinary sentence, so what the rule saves is covered by the unit
+tests only.
 
 Thresholds, tune, end to end:
 

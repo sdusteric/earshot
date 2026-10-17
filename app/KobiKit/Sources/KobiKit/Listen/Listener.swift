@@ -1088,13 +1088,6 @@ public actor Listener {
     /// Kobe to the vet" is a sentence.
     private static let greetings: Set<String> = ["hey", "hi", "high", "hay", "hate", "eight", "8", "a", "i", "k", "ok", "okay"]
 
-    /// Greetings that start ordinary sentences too ("a Kobe steak", "eight Kobe sliders"): after
-    /// them the name sends what follows only when it stands apart. After hey, hi, ok and okay it
-    /// sends it run into the sentence too: recognizers write real commands with no comma ("Hey
-    /// Kobe pause.", "Okay Kobe status."), and requiring one after those cost 25 of 440 tune
-    /// commands in clean and 20 in quiet on the wake bench, for no near-miss or mention dispatch.
-    static let weakGreetings: Set<String> = ["high", "hay", "hate", "eight", "8", "a", "i", "k"]
-
     /// How recognizers write "Kobi" when they get it right. Apple's recognizer writes "Kobe"
     /// for most of them, and almost never "Kobi"; "Koby" now and then. "Kobe" is said the
     /// same, so "Hey Kobe" wakes too. "Coby" is left out: on the wake bench's tune split it
@@ -1103,9 +1096,12 @@ public actor Listener {
     static let nameSpellings: Set<String> = ["kobi", "kobe", "koby"]
 
     /// Whether the text starts with the wake phrase, and in which tier. Two shapes pass:
-    /// - a greeting, then "Kobi" (nameSpellings) as the next word: literal. After a weak
-    ///   greeting (weakGreetings) only when the name stands apart, as below; run into the
-    ///   sentence ("A Kobe beef burger, please.") it is bare. Dropping it instead cost 6 tune
+    /// - a greeting, then "Kobi" (nameSpellings) as the next word, standing apart: a comma,
+    ///   a stop, ? or ! after it, or nothing after it: literal. Run into the sentence it is
+    ///   bare: "Kobe" is a common word ("A Kobe beef burger, please.", "Okay, Kobe Bryant was
+    ///   the best", "Hey, Kobi just deleted the branch"). Real commands written with no comma
+    ///   ("Hey Kobe pause.") then chime and wait for the command: on the wake bench that was
+    ///   25 of 440 tune commands in clean and 20 in quiet. Dropping it instead cost 6 tune
     ///   positives' chimes and saved no near-miss or mention window.
     /// - "Kobi" as the first word, with no greeting, standing apart: a comma or a stop right
     ///   after it, or nothing after it ("Kobi, stop", "Kobe."): bare. Run into a sentence it
@@ -1118,12 +1114,12 @@ public actor Listener {
         let (tokens, words) = wakeTokens(text)
         guard let first = words.first else { return nil }
         if greetings.contains(first), words.count > 1, nameSpellings.contains(words[1]) {
-            if !weakGreetings.contains(first) || words.count == 2 || ",.!?".contains(tokens[1].last!) {
+            if standsApart(text, after: tokens[1]) {
                 return .literal(remainder: remainder(text, after: tokens[1]))
             }
             return .bare
         }
-        if nameSpellings.contains(first), words.count == 1 || ",.!?".contains(tokens[0].last!) { return .bare }
+        if nameSpellings.contains(first), standsApart(text, after: tokens[0]) { return .bare }
         return nil
     }
 
@@ -1177,6 +1173,13 @@ public actor Listener {
     private static func wakeTokens(_ text: String) -> (tokens: [Substring], words: [String]) {
         let tokens = text.split(whereSeparator: \.isWhitespace).filter { !SoundsLike.letters(String($0)).isEmpty }
         return (tokens, tokens.map { SoundsLike.letters(String($0)) })
+    }
+
+    /// Nothing but spaces after `token` (one of its words), or a comma, a stop, ? or ! first:
+    /// "Kobi, stop", "Kobi , stop", "Kobi." and "Kobi" stand apart; "Kobi is listening" doesn't.
+    private static func standsApart(_ text: String, after token: Substring) -> Bool {
+        let next = text[token.index(before: token.endIndex)...].dropFirst().first { !$0.isWhitespace }
+        return ",.!?".contains(token.last!) || next == nil || ",.!?".contains(next!)
     }
 
     /// The text after `token` (one of its words), trimmed, with the punctuation right after it dropped,
