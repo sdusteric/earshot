@@ -103,10 +103,10 @@ struct OldHome {
         h.defaults.set("mine", forKey: "activityOpenExpanded")
         let report = h.migration(old: ["onboarded": true, "orbPosition": [10.0, 20.0], "activityOpenExpanded": "theirs"])
             .run(quitOld: { false })
-        #expect(h.defaults.bool(forKey: "onboarded"))
+        #expect(h.defaults.object(forKey: "onboarded") == nil)   // the welcome steps ask for the permissions again
         #expect(h.defaults.array(forKey: "orbPosition") as? [Double] == [10, 20])
         #expect(h.defaults.string(forKey: "activityOpenExpanded") == "mine")
-        #expect(report.settings == ["onboarded", "orbPosition"])
+        #expect(report.settings == ["orbPosition"])
     }
 
     /// What Earshot saves as it quits (the orb's place) is copied too.
@@ -114,9 +114,9 @@ struct OldHome {
         let h = OldHome(); defer { h.clean() }
         let quit = Mutex(false)
         let m = Migration(home: h.home, defaults: h.defaults,
-                          oldDefaults: { quit.withLock { $0 } ? ["onboarded": true, "orbPosition": [1.0, 2.0]] : ["onboarded": true] })
+                          oldDefaults: { quit.withLock { $0 } ? ["hotkeySeen": true, "orbPosition": [1.0, 2.0]] : ["hotkeySeen": true] })
         let report = m.run(quitOld: { quit.withLock { $0 = true }; return true })
-        #expect(report.settings == ["onboarded", "orbPosition"])
+        #expect(report.settings == ["hotkeySeen", "orbPosition"])
     }
 
     @Test func theOldAppIsAskedToQuitOnlyWhenThereIsSomethingToCopy() {

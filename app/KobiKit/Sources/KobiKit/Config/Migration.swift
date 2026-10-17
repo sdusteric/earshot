@@ -16,6 +16,10 @@ public struct Migration {
     /// Never copied: sockets and locks belong to the process that made them, and the
     /// Kokoro build folder is a cache of about a gigabyte that build-tts.sh makes again.
     static let skipped: Set<String> = ["earshot.sock", "kobi.sock", "app.lock", ".DS_Store", "kokoro-build", "kokoro-build.log"]
+    /// Settings never copied: the welcome steps run again, because they ask for the
+    /// permissions (microphone, Input Monitoring, notifications), and macOS grants those
+    /// to a bundle id, so Kobi has none of Earshot's.
+    static let skippedSettings: Set<String> = ["onboarded", "onboardingVersion"]
 
     /// What the migration did, for the log and the tests.
     public struct Report: Sendable, Equatable {
@@ -63,7 +67,7 @@ public struct Migration {
         defer { defaults.set(true, forKey: Self.doneKey) }
         let fm = FileManager.default
         let todo = folders.filter { isFolder($0.old) && !hasData($0.new) }
-        let missing = { (old: [String: Any]?) in (old ?? [:]).filter { self.defaults.object(forKey: $0.key) == nil } }
+        let missing = { (old: [String: Any]?) in (old ?? [:]).filter { !Self.skippedSettings.contains($0.key) && self.defaults.object(forKey: $0.key) == nil } }
         guard !todo.isEmpty || !missing(oldDefaults()).isEmpty else { return report }
 
         report.quitOld = quitOld()
