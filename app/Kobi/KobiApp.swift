@@ -4,7 +4,7 @@ import SwiftUI
 
 @main
 struct KobiApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
     @AppStorage("onboarded") private var onboarded = false
     @AppStorage("onboardingVersion") private var onboardingVersion = 0
     @State private var orb: OrbPanel?
@@ -16,6 +16,9 @@ struct KobiApp: App {
         signal(SIGPIPE, SIG_IGN)
         // Another Kobi already runs.
         if !SingleInstance.claim() { exit(0) }
+        // Once, after the rename: Earshot's config, history and settings, before anything reads them.
+        Migration().run()
+        _model = State(initialValue: AppModel())
     }
 
     var body: some Scene {

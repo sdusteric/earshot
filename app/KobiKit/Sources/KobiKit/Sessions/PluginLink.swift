@@ -12,6 +12,9 @@ public enum PluginStatus: Sendable, Equatable {
     case disabled
     /// Older than this app needs.
     case outdated(version: String)
+    /// The plugin under its old name, earshot@earshot, is still installed: its hooks
+    /// would fire next to the Kobi plugin's, so it is switched for the new one.
+    case renamed
     /// No `claude` command on this Mac.
     case noClaude
     /// Claude Code couldn't be asked about its plugins, or its answer couldn't be read.
@@ -29,6 +32,7 @@ public enum PluginStatus: Sendable, Equatable {
         case .notInstalled: "Spoken updates and voice approvals need the Kobi plugin in Claude Code."
         case .disabled: "The Kobi plugin is turned off in Claude Code."
         case .outdated(let v): "The Kobi plugin (\(v)) is older than this app needs."
+        case .renamed: "Claude Code has the Earshot plugin, this plugin's old name. Switch it for the Kobi plugin."
         case .noClaude: "Kobi couldn't find Claude Code on this Mac. Install Claude Code, then choose Check Again."
         case .checkFailed(let why), .failed(let why): why
         }
@@ -48,6 +52,7 @@ public enum PluginStatus: Sendable, Equatable {
         case .notInstalled: "Install"
         case .disabled: "Turn On"
         case .outdated: "Update"
+        case .renamed: "Switch"
         case .noClaude, .checkFailed: "Check Again"
         case .failed: "Try Again"
         default: nil
@@ -58,11 +63,16 @@ public enum PluginStatus: Sendable, Equatable {
 /// Checks and installs the plugin through Claude Code's own `claude plugin` commands.
 public actor PluginLink {
     /// The oldest plugin whose messages this app understands.
-    public static let minimumVersion = "0.11.0"
+    /// 0.12.0 is the first under the name Kobi.
+    public static let minimumVersion = "0.12.0"
     static let pluginID = "kobi@kobi"
     static let marketplace = "kobi"
-    /// Where the marketplace comes from when it isn't added yet.
+    /// Where the marketplace comes from when it isn't added yet. The GitHub repo keeps its
+    /// old name until it is renamed; this is the one place the app names it.
     static let marketplaceSource = "sdusteric/earshot"
+    /// The plugin and its marketplace under the app's old name, removed by the switch.
+    static let oldPluginID = "earshot@earshot"
+    static let oldMarketplace = "earshot"
 
     private var runner: (any ClaudeRunner)?
     private let find: (@Sendable () async -> (any ClaudeRunner)?)?
@@ -107,6 +117,10 @@ public actor PluginLink {
         case .outdated:
             _ = await step(runner, ["plugin", "marketplace", "update", Self.marketplace])
             guard await step(runner, ["plugin", "update", Self.pluginID]) else { return .failed("Couldn't update the plugin.") }
+        case .renamed:
+            guard await removeOldPlugin(runner) else { return .failed("Couldn't remove the Earshot plugin from Claude Code.") }
+            // With the new plugin already there, the old one going is the whole switch.
+            if case .notInstalled = await check() { return await connect() }
         case .notInstalled, .failed:   // check() never returns .failed
             if !(await hasMarketplace(runner)) {
                 guard await step(runner, ["plugin", "marketplace", "add", Self.marketplaceSource]) else {
@@ -120,14 +134,34 @@ public actor PluginLink {
         return await check()
     }
 
-    private func hasMarketplace(_ runner: any ClaudeRunner) async -> Bool {
-        let r = await runner.run(["plugin", "marketplace", "list", "--json"], cwd: nil, timeout: .seconds(20))
-        guard r.status == 0, let list = try? JSONSerialization.jsonObject(with: r.stdout) as? [[String: Any]] else { return false }
-        return list.contains { ($0["name"] as? String) == Self.marketplace }
+    /// Uninstalls earshot@earshot, from the scope it was installed in, then removes the
+    /// earshot marketplace when no other installed plugin comes from it.
+    private func removeOldPlugin(_ runner: any ClaudeRunner) async -> Bool {
+        let r = await runner.run(["plugin", "list", "--json"], cwd: nil, timeout: .seconds(20))
+        let list = (try? JSONSerialization.jsonObject(with: r.stdout) as? [[String: Any]]) ?? []
+        for entry in list where (entry["id"] as? String) == Self.oldPluginID {
+            let scope = entry["scope"] as? String ?? "user"
+            guard await step(runner, ["plugin", "uninstall", Self.oldPluginID, "--scope", scope],
+                             cwd: entry["projectPath"] as? String) else { return false }
+        }
+        let others = list.contains {
+            let id = $0["id"] as? String ?? ""
+            return id != Self.oldPluginID && id.hasSuffix("@" + Self.oldMarketplace)
+        }
+        if !others, await hasMarketplace(runner, named: Self.oldMarketplace) {
+            _ = await step(runner, ["plugin", "marketplace", "remove", Self.oldMarketplace])
+        }
+        return true
     }
 
-    private func step(_ runner: any ClaudeRunner, _ args: [String]) async -> Bool {
-        let r = await runner.run(args, cwd: nil, timeout: .seconds(180))
+    private func hasMarketplace(_ runner: any ClaudeRunner, named name: String = PluginLink.marketplace) async -> Bool {
+        let r = await runner.run(["plugin", "marketplace", "list", "--json"], cwd: nil, timeout: .seconds(20))
+        guard r.status == 0, let list = try? JSONSerialization.jsonObject(with: r.stdout) as? [[String: Any]] else { return false }
+        return list.contains { ($0["name"] as? String) == name }
+    }
+
+    private func step(_ runner: any ClaudeRunner, _ args: [String], cwd: String? = nil) async -> Bool {
+        let r = await runner.run(args, cwd: cwd, timeout: .seconds(180))
         if r.status != 0 || r.timedOut {
             log.error("claude \(args.prefix(3).joined(separator: " "), privacy: .public) failed: \(r.status)")
             return false
@@ -140,6 +174,8 @@ public actor PluginLink {
         guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return .checkFailed("Couldn't read Claude Code's plugin list.")
         }
+        // The old plugin's hooks would run next to the new one's: it goes first.
+        if list.contains(where: { ($0["id"] as? String) == oldPluginID }) { return .renamed }
         guard let entry = list.first(where: { ($0["id"] as? String) == pluginID }) else { return .notInstalled }
         let version = entry["version"] as? String ?? "?"
         if (entry["enabled"] as? Bool) == false { return .disabled }
