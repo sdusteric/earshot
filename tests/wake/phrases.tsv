@@ -1,137 +1,125 @@
 # class	text
-# Kobi wake: part 2 (the phrases are still for "Hey Earshot")
-# positives: shapes Listener.confirmsWake accepts (a bare "Earshot" first only opens the command window). nearmiss: shares sounds, must not wake. mention: the word, not as a wake at the start.
+# positive: shapes Listener.confirmsWake accepts ("Kobi" alone first only opens the command window). nearmiss: shares sounds, must not wake. mention: the name, not as a wake at the start. collision: a name said the same as "Kobi" ("Kobe", "Coby"); it wakes, and is counted apart.
 # New lines go at the end: make-wake-audio.sh numbers the phrases in order (p001..), so the files of the lines above keep their ids.
-positive	Hey Earshot
-positive	Hey Earshot.
-positive	Hey, Earshot
-positive	hey earshot
-positive	Hi Earshot
-positive	Hi, Earshot
-positive	Okay Earshot
-positive	OK Earshot
-positive	Okay Earshot, status
-positive	Earshot
-positive	Earshot, stop
-positive	Hey Earshot, what's everyone doing?
-positive	Hey Earshot, tell the blog to run the tests
-positive	Hey Earshot, stop
-positive	hey earshot how are you
-positive	Hey Earshot, what time is it?
-positive	Hey Earshot, read that again
-positive	Hey Earshot, summarize the last session
-positive	Hey Earshot, which sessions are waiting on me?
-positive	Hey Earshot, tell the website to deploy
-positive	Hey Earshot, yes
-positive	Hey Earshot, no, cancel that
-positive	Hi Earshot, any updates?
-positive	Hi Earshot, switch to the app session
-positive	Okay Earshot, what's the status of the build?
-positive	OK Earshot, be quiet
-positive	Hey Earshot, approve it
-positive	Hey Earshot, tell the api to fix the failing test
-positive	Hey Earshot, go ahead
-positive	Hey Earshot, how many sessions are running?
-positive	Hey Earshot, what did the blog say?
-positive	Hey Earshot, pause
-nearmiss	hey Earl
-nearmiss	hey Marshall
-nearmiss	hey Ershad
-nearmiss	here's a shot
-nearmiss	hey there, nice shot
-nearmiss	hey, are you there
-nearmiss	hey Siri
-nearmiss	a hairshot
-nearmiss	her shot
-nearmiss	hey, I heard that
-nearmiss	Hey, Archer
-nearmiss	hey Art
-nearmiss	hey Ashton
-nearmiss	airshow tickets
-nearmiss	hey Earnest
-nearmiss	hey Irshad
-nearmiss	hey Ear, shut up
-nearmiss	hey, ear shock
-nearmiss	hey Ursha
-nearmiss	here is a shot of the lake
-nearmiss	hey, hear that?
-nearmiss	hey Archie, stop
-nearmiss	hey Oscar
-nearmiss	hey Ursula
-nearmiss	hey Ershaw
-nearmiss	hey, I'm a shot
-nearmiss	hey Marsha
-nearmiss	hey Hershel
-nearmiss	hey, her shirt
-nearmiss	hey Aaron
-nearmiss	hey Alexa
-nearmiss	hey Google
-nearmiss	hey Sherlock
-nearmiss	hey, fair shot
-nearmiss	hey, Earl's hot
-nearmiss	okay Marshall, status
-nearmiss	hi Ershad, any updates?
-nearmiss	hey Art, what's everyone doing?
-nearmiss	hey Siri, what time is it
-nearmiss	okay Archer, stop
-nearmiss	hi Ashton, how are you
-nearmiss	here's a shot, tell the blog to run the tests
-nearmiss	nice shot, stop
-nearmiss	hey, are you there, how are you
-nearmiss	hey there, nice shot, go ahead
-nearmiss	hey Earl, read that again
-nearmiss	a hairshot, what's the status
-nearmiss	her shot, summarize the last session
-mention	within earshot of the door
-mention	keep it out of earshot
-mention	I asked earshot yesterday
-mention	tell me when earshot is ready
-mention	she was standing just within earshot
-mention	did you ask earshot to run the tests
-mention	the earshot app is on my menu bar
-mention	I told them in earshot of everyone
-mention	please don't say that in earshot of the kids
-mention	what does earshot say about the build
-mention	I think earshot heard you
-mention	we shouted but he was out of earshot
-mention	is earshot still running
-mention	yes, earshot is listening
-mention	nobody was within earshot at the time
-nearmiss	take a shot, run the test
-nearmiss	take a shot at the login bug
-nearmiss	take your shot
-nearmiss	get your shot today
-nearmiss	hey, you shot the deploy
-nearmiss	okay, you shot first
-nearmiss	hey, a shot of the bill
-nearmiss	nice shot, run it again
-nearmiss	good shot
-nearmiss	hey, your shot is next
-nearmiss	hey, what a shot
-nearmiss	okay, your turn to shoot
-nearmiss	hey, I shot it over
-nearmiss	hey, are you sure
-nearmiss	high shot
-nearmiss	hey, hot shot
-nearmiss	hey, ear shot
-nearmiss	hey, we shot the video
-nearmiss	eight shots
-nearmiss	hey, you're short on time
-nearmiss	pay your shot
-nearmiss	eat your shot
-nearmiss	my shot, tell the blog
-nearmiss	hey, big shot, run it
-nearmiss	okay, a shot of espresso
-nearmiss	hey, you shot it down
-nearmiss	take a shot at the tests
-nearmiss	hey, mug shot
-nearmiss	okay, long shot
-nearmiss	hey, I took a shot
-nearmiss	Okay, your shot. Approve it.
-nearmiss	Hey, we're shot
-nearmiss	Hey, our shots are ready.
-nearmiss	Okay, or shot
-nearmiss	Hey, wear shot
-nearmiss	Okay, you're shot, delete the branch
-nearmiss	okay, your shot, run the tests
-nearmiss	hey, your shot, approve it
+positive	Hey Kobi
+positive	Hey Kobi.
+positive	Hey, Kobi
+positive	hey kobi
+positive	Hi Kobi
+positive	Hi, Kobi
+positive	Okay Kobi
+positive	OK Kobi
+positive	Okay Kobi, status
+positive	Kobi
+positive	Kobi, stop
+positive	Hey Kobi, what's everyone doing?
+positive	Hey Kobi, tell the blog to run the tests
+positive	Hey Kobi, stop
+positive	hey kobi how are you
+positive	Hey Kobi, what time is it?
+positive	Hey Kobi, read that again
+positive	Hey Kobi, summarize the last session
+positive	Hey Kobi, which sessions are waiting on me?
+positive	Hey Kobi, tell the website to deploy
+positive	Hey Kobi, yes
+positive	Hey Kobi, no, cancel that
+positive	Hi Kobi, any updates?
+positive	Hi Kobi, switch to the app session
+positive	Okay Kobi, what's the status of the build?
+positive	OK Kobi, be quiet
+positive	Hey Kobi, approve it
+positive	Hey Kobi, tell the api to fix the failing test
+positive	Hey Kobi, go ahead
+positive	Hey Kobi, how many sessions are running?
+positive	Hey Kobi, what did the blog say?
+positive	Hey Kobi, pause
+nearmiss	hey Toby
+nearmiss	hey Cody
+collision	hey Coby
+nearmiss	hey Colby
+nearmiss	hey Kobo
+nearmiss	hey Gobi
+nearmiss	hey Bobby
+nearmiss	hey Robbie
+nearmiss	hey Koji
+nearmiss	hey coach
+nearmiss	hey cozy
+nearmiss	hey, go be quiet
+nearmiss	hey, nobody's here
+nearmiss	copy that
+nearmiss	cool beans
+nearmiss	a cube
+nearmiss	Cobb salad
+nearmiss	hey Toby, run the tests
+nearmiss	hey Cody, approve it
+nearmiss	okay Colby, stop
+nearmiss	hey Toby, what's everyone doing?
+nearmiss	hi Cody, any updates?
+nearmiss	okay Bobby, status
+nearmiss	hey Robbie, tell the blog to run the tests
+nearmiss	hey Koji, stop
+nearmiss	hey coach, what's up
+nearmiss	hey, go be nice
+nearmiss	hey, nobody's listening
+nearmiss	okay, go be quiet
+nearmiss	hey Toby, approve it
+nearmiss	hi Colby, how are you
+nearmiss	hey Gobi, read that again
+nearmiss	hey Kobo, what time is it
+nearmiss	hey, so be it
+nearmiss	hey, code it
+nearmiss	hey Moby
+nearmiss	hey Hobie
+nearmiss	hey Obi
+nearmiss	hey Kofi
+nearmiss	hey Corey
+nearmiss	hey Jodie
+nearmiss	hey Goldie
+nearmiss	okay Cody, go ahead
+nearmiss	hey Toby, yes
+nearmiss	hey Colby, approve it
+nearmiss	okay, copy that
+nearmiss	hey, cool beans
+nearmiss	hey, a cube of ice
+nearmiss	hey, Cuba is warm
+nearmiss	hey, go be careful
+nearmiss	hey, nobody knows
+nearmiss	hey, hold me
+nearmiss	hey Bobby, stop
+nearmiss	okay, cookie
+collision	hey Coby, stop
+nearmiss	Toby, stop
+nearmiss	Cody, approve it
+nearmiss	Colby.
+nearmiss	okay Toby, run the tests
+nearmiss	hey, go be gone
+nearmiss	hey, so be quiet
+nearmiss	hey Kobo, approve it
+nearmiss	okay Koji, status
+nearmiss	hey, nobody, stop
+mention	Kobe Bryant scored
+mention	Kobe beef is expensive
+mention	did you ask kobi to run the tests
+mention	Kobi is listening
+mention	is Kobi still running
+mention	I asked Kobi yesterday
+mention	tell me when Kobi is ready
+mention	the Kobi app is on my menu bar
+mention	what does Kobi say about the build
+mention	I think Kobi heard you
+mention	yes, Kobi is listening
+mention	we flew to Kobe last spring
+mention	my friend Kobi lives in Tel Aviv
+mention	Kobi said the tests passed
+mention	open Kobi settings
+mention	can Kobi read my mail
+mention	I named my dog Kobi
+mention	the Kobe earthquake was in 1995
+collision	hey Kobe
+collision	hey Kobe, run the tests
+collision	okay Kobe, approve it
+collision	hi Kobe
+collision	hey Kobe, stop
+collision	hey Kobe, what's everyone doing?
+collision	okay Kobe
+collision	Kobe, stop

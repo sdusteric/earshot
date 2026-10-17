@@ -7,6 +7,8 @@
 #   tests/wake/make-wake-audio.sh OUTDIR
 # Writes OUTDIR/raw/*.wav, OUTDIR/*.wav and OUTDIR/manifest.tsv:
 #   file, label (1 positive, else 0), class, voice, condition, split, text
+# The class is phrases.tsv's: positive, nearmiss, mention or collision (a name said
+# the same as "Kobi", such as "Kobe": label 0, and the bench counts it apart).
 # Split is by voice: every third voice in sorted order is "holdout", the rest "tune".
 # Resumable: files that exist are skipped. Env: JOBS (parallel jobs, default 10),
 # KOKORO, KOKORO_SOCKET.

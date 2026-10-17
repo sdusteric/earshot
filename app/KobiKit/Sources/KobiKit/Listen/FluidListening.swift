@@ -294,21 +294,27 @@ enum CtcGreedy {
     }
 }
 
-/// Stage 3: "Hey Earshot" in the first 1.5 s of a speech segment (the
+/// Stage 3: "Hey Kobi" in the first 1.5 s of a speech segment (the
 /// listener spots when the segment reaches 1.5 s, or when it ends sooner).
 public actor CtcWakeSpotter: WakeSpotter {
-    public static let phrase = "hey earshot"   // Kobi wake: part 2
-    /// The phrase without its greeting, scored on the same pass for the wake bench
-    /// (wakeScores): a noise gate that cuts the start of a segment can leave only "Earshot".
-    /// The listener does not use it (tests/app-e2e.md, the wake section, has the measurement).
-    public static let barePhrase = "earshot"   // Kobi wake: part 2
-    private let flight = SingleFlight<(spotter: CtcKeywordSpotter, vocab: CustomVocabularyContext, bare: CustomVocabularyContext)> {
+    public static let phrase = "hey kobi"
+    /// "Kobe" is said the same as "Kobi", and the model knows it better: the phrase is
+    /// scored both ways on the same pass, and the listener takes the higher (score).
+    public static let otherPhrase = "hey kobe"
+    /// The name without its greeting, scored on the same pass for the wake bench
+    /// (wakeScores): a noise gate that cuts the start of a segment can leave only "Kobi".
+    /// The listener does not use it.
+    public static let barePhrase = "kobi"
+    private let flight = SingleFlight<(spotter: CtcKeywordSpotter, vocab: CustomVocabularyContext,
+                                       other: CustomVocabularyContext, bare: CustomVocabularyContext)> {
         let models = try await CtcShared.shared.models(for: .spotter)
-        let tokens = try await CtcShared.shared.tokens(CtcWakeSpotter.phrase)
-        let bareTokens = try await CtcShared.shared.tokens(CtcWakeSpotter.barePhrase)
+        func context(_ text: String) async throws -> CustomVocabularyContext {
+            let tokens = try await CtcShared.shared.tokens(text)
+            return CustomVocabularyContext(terms: [CustomVocabularyTerm(text: text, ctcTokenIds: tokens)])
+        }
         return (CtcKeywordSpotter(models: models, blankId: models.vocabulary.count),
-                CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.phrase, ctcTokenIds: tokens)]),
-                CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.barePhrase, ctcTokenIds: bareTokens)]))
+                try await context(CtcWakeSpotter.phrase), try await context(CtcWakeSpotter.otherPhrase),
+                try await context(CtcWakeSpotter.barePhrase))
     }
     private var failures = FailureLog()
     private let log = Logger(subsystem: "com.kobi.app", category: "wake")
@@ -361,7 +367,7 @@ public actor CtcWakeSpotter: WakeSpotter {
     public static let unconfirmedThreshold: Float = -5.0
 
     /// FluidAudio lowers the score a phrase needs by 1 for each token past 3 ("hey
-    /// earshot" has 6), so the threshold is raised by as much to mean what it says.
+    /// kobi" has 5), so the threshold is raised by as much to mean what it says.
     /// This is what FluidAudio's own filter is given for a sensitivity: it keeps the
     /// detections whose score reaches `threshold(sensitivity)`.
     static func minScore(_ sensitivity: Int, tokens: Int) -> Float {
@@ -379,23 +385,38 @@ public actor CtcWakeSpotter: WakeSpotter {
     /// on the phrase's length. The model's output is kept in CtcShared for the head
     /// confirmer, which reads the same clip.
     public func wakeScore(_ samples: [Float]) async -> Float? {
-        await wakeScores(samples, bare: false)?.phrase
+        await wakeScores(samples, all: false).map(Self.score)
     }
 
-    /// wakeScore, and with `bare` also the score of barePhrase alone, read off the same
-    /// pass of the model (no second run). The bare score is -infinity when not asked for.
-    public func wakeScores(_ samples: [Float], bare: Bool = true) async -> (phrase: Float, bare: Float)? {
-        guard await flight.isLoaded, let (spotter, vocab, bareVocab) = try? await flight.get() else { return nil }
+    /// The score the listener wakes on: the higher of "hey kobi" and "hey kobe". On the wake
+    /// bench's tune split at -8.0 it woke 1433 of 3200 positives, against 1430 for "hey kobe"
+    /// alone and 1383 for "hey kobi" alone, with the same near-miss and mention false wakes.
+    public static func score(_ s: WakeScores) -> Float { max(s.phrase, s.other) }
+
+    /// The spotter's scores for one clip: `phrase` "hey kobi", `other` "hey kobe" and
+    /// `bare` "kobi" alone, all read off one pass of the model. -infinity for a score not
+    /// asked for, or for a clip with fewer frames than the phrase has tokens.
+    public struct WakeScores: Sendable, Equatable {
+        public let phrase: Float, other: Float, bare: Float
+        public init(phrase: Float, other: Float, bare: Float) { self.phrase = phrase; self.other = other; self.bare = bare }
+    }
+
+    /// wakeScore's scores apart, and with `all` also the bare score (for the wake bench).
+    /// No second run of the model: the other phrases are read off the first pass's output.
+    public func wakeScores(_ samples: [Float], all: Bool = true) async -> WakeScores? {
+        guard await flight.isLoaded, let (spotter, vocab, otherVocab, bareVocab) = try? await flight.get() else { return nil }
         do {
             let r = try await spotter.spotKeywordsWithLogProbs(audioSamples: CtcShared.fullLength(samples), customVocabulary: vocab,
                                                                minScore: Self.keepAll)
             await CtcShared.shared.remember(samples, logProbs: r.logProbs, frameDuration: r.frameDuration)
             // No detection at all means the clip had fewer frames than the phrase has tokens.
             let phrase = r.detections.map(\.score).max() ?? -.infinity
-            guard bare, !r.logProbs.isEmpty else { return (phrase, -.infinity) }
-            let b = spotter.spotKeywordsFromLogProbs(logProbs: r.logProbs, frameDuration: r.frameDuration,
-                                                     customVocabulary: bareVocab, minScore: Self.keepAll)
-            return (phrase, b.detections.map(\.score).max() ?? -.infinity)
+            guard !r.logProbs.isEmpty else { return WakeScores(phrase: phrase, other: -.infinity, bare: -.infinity) }
+            func best(_ v: CustomVocabularyContext) -> Float {
+                spotter.spotKeywordsFromLogProbs(logProbs: r.logProbs, frameDuration: r.frameDuration,
+                                                 customVocabulary: v, minScore: Self.keepAll).detections.map(\.score).max() ?? -.infinity
+            }
+            return WakeScores(phrase: phrase, other: best(otherVocab), bare: all ? best(bareVocab) : -.infinity)
         } catch {
             if failures.shouldLog() { log.error("the wake spotter failed: \(error.localizedDescription, privacy: .public)") }
             return nil
@@ -553,7 +574,7 @@ public actor ParakeetTranscriber: Transcriber {
     }
 
     /// The name boost may only swap a few misheard words for a name. Left
-    /// alone it rewrote "Hey, how are you doing?" as "Earshot doing?" and
+    /// alone it rewrote "Hey, how are you doing?" as a session's name and "doing?", and
     /// dropped words from plain sentences, so a boost that adds no name, adds
     /// other words, or drops more than two words per name word is ignored.
     static func keepsBoost(plain: String, boosted: String, vocabulary: [String]) -> Bool {

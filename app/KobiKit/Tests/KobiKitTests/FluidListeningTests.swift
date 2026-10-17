@@ -3,8 +3,6 @@ import Foundation
 import Testing
 @testable import KobiKit
 
-// Kobi wake: part 2 (the spoken wake phrase and the session named earshot)
-
 @Suite struct FluidListeningTests {
     @Test func sensitivityMapsAroundTheDefaultThreshold() {
         #expect(CtcWakeSpotter.threshold(5) == -8)
@@ -44,7 +42,7 @@ import Testing
 
     @Test(.enabled(if: modelsOn)) func transcribesACommand() async throws {
         let t = ParakeetTranscriber()
-        let text = try await t.transcribe(try spoken("Hey Earshot, what's everyone doing?"), vocabulary: [])
+        let text = try await t.transcribe(try spoken("Hey Kobi, what's everyone doing?"), vocabulary: [])
         #expect(text.lowercased().contains("everyone"))
     }
 
@@ -57,7 +55,7 @@ import Testing
     @Test(.enabled(if: modelsOn)) func spotsTheWakePhraseOnly() async throws {
         let s = CtcWakeSpotter()
         try await s.load()
-        #expect(await s.heardWake(try spoken("Hey Earshot, what's everyone doing?"), sensitivity: 5))
+        #expect(await s.heardWake(try spoken("Hey Kobi, what's everyone doing?"), sensitivity: 5))
         #expect(!(await s.heardWake(try spoken("Good morning everyone, the build passed."), sensitivity: 5)))
     }
 
@@ -66,7 +64,7 @@ import Testing
     @Test(.enabled(if: modelsOn)) func wakeScoresFollowTheAudio() async throws {
         let s = CtcWakeSpotter()
         try await s.load()
-        let wake = try #require(await s.wakeScore(try spoken("Hey Earshot, what's everyone doing?")))
+        let wake = try #require(await s.wakeScore(try spoken("Hey Kobi, what's everyone doing?")))
         let plain = [
             "Good morning everyone, the build passed.",
             "Please send the report to the whole team.",
@@ -93,7 +91,7 @@ import Testing
         let tokens = try await CtcShared.shared.tokens(CtcWakeSpotter.phrase)
         let vocab = CustomVocabularyContext(terms: [CustomVocabularyTerm(text: CtcWakeSpotter.phrase, ctcTokenIds: tokens)])
         let fluid = CtcKeywordSpotter(models: models, blankId: models.vocabulary.count)
-        for text in ["Hey Earshot, what's everyone doing?", "Hey there, nice shot.", "Run the tests."] {
+        for text in ["Hey Kobi, what's everyone doing?", "Hey there, nice shot.", "Run the tests."] {
             let audio = try spoken(text)
             let score = try #require(await s.wakeScore(audio))
             for sensitivity in [1, 5, 10] {
@@ -109,7 +107,7 @@ import Testing
     @Test(.enabled(if: modelsOn)) func theCtcHeadConfirmerReusesTheSpottersPass() async throws {
         let s = CtcWakeSpotter()
         try await s.load()
-        let audio = try spoken("Hey Earshot, what's everyone doing?")
+        let audio = try spoken("Hey Kobi, what's everyone doing?")
         _ = await s.wakeScore(audio)
         #expect(await CtcShared.shared.recalled(audio) != nil)
         let confirmer = CtcHeadConfirmer()
@@ -121,12 +119,12 @@ import Testing
     }
 
     @Test func greedyDecodingCollapsesRepeatsAndDropsBlanks() {
-        let vocab = [0: "\u{2581}hey", 1: "\u{2581}ear", 2: "shot"]
+        let vocab = [0: "\u{2581}hey", 1: "\u{2581}ko", 2: "bi"]
         let blank = 3
         func frame(_ id: Int) -> [Float] { (0...3).map { $0 == id ? 0 : -9 } }
         let frames = [0, 0, blank, 1, 1, blank, 2, 2, blank, 2].map(frame)
-        // A piece with no word mark joins the one before; the blank between the two "shot"s makes them two pieces.
-        #expect(CtcGreedy.text(logProbs: frames, vocabulary: vocab, blankId: blank) == "hey earshotshot")
+        // A piece with no word mark joins the one before; the blank between the two "bi"s makes them two pieces.
+        #expect(CtcGreedy.text(logProbs: frames, vocabulary: vocab, blankId: blank) == "hey kobibi")
         #expect(CtcGreedy.text(logProbs: [], vocabulary: vocab, blankId: blank) == "")
         #expect(CtcGreedy.text(logProbs: [frame(blank), frame(blank)], vocabulary: vocab, blankId: blank) == "")
     }
@@ -158,13 +156,13 @@ import Testing
         let seen = Collected<Int>()
         let t = ParakeetTranscriber(idle: .seconds(60), load: { AsrManager(config: .default) }, run: { _, s in
             await seen.add(s.count)
-            return ASRResult(text: "hey earshot what is up", confidence: 1, duration: 1, processingTime: 0.1)
+            return ASRResult(text: "hey kobi what is up", confidence: 1, duration: 1, processingTime: 0.1)
         })
         let confirmer = ParakeetHeadConfirmer(t)
         #expect(await confirmer.headText([0.1, 0.1]) == nil)   // not loaded: nil, and still not loaded
         #expect(await t.loads == 0)
         await t.prewarm()
-        #expect(await confirmer.headText([Float](repeating: 0.1, count: 32_000)) == "hey earshot what is up")
+        #expect(await confirmer.headText([Float](repeating: 0.1, count: 32_000)) == "hey kobi what is up")
         #expect(await seen.items == [40_000])
     }
 
@@ -290,11 +288,11 @@ import Testing
     @Test func anIdleUnloadDuringAConfirmIsDoneWhenItEnds() async throws {
         let t = ParakeetTranscriber(idle: .milliseconds(40), load: { AsrManager(config: .default) }, run: { _, _ in
             try await Task.sleep(for: .milliseconds(200))
-            return ASRResult(text: "hey earshot", confidence: 1, duration: 1, processingTime: 0.1)
+            return ASRResult(text: "hey kobi", confidence: 1, duration: 1, processingTime: 0.1)
         })
         await t.prewarm()   // starts the idle timer, which fires during the run below
         #expect(await t.isLoaded)
-        #expect(await t.transcribeIfLoaded([Float](repeating: 0.1, count: 32_000)) == "hey earshot")
+        #expect(await t.transcribeIfLoaded([Float](repeating: 0.1, count: 32_000)) == "hey kobi")
         #expect(!(await t.isLoaded))
     }
 
@@ -302,7 +300,7 @@ import Testing
     @Test func aPendingUnloadWaitsForTheLastRun() async throws {
         let t = ParakeetTranscriber(idle: .seconds(60), load: { AsrManager(config: .default) }, run: { _, s in
             try await Task.sleep(for: .milliseconds(s.count > 40_000 ? 300 : 100))
-            return ASRResult(text: "hey earshot", confidence: 1, duration: 1, processingTime: 0.1)
+            return ASRResult(text: "hey kobi", confidence: 1, duration: 1, processingTime: 0.1)
         })
         await t.prewarm()
         async let long = t.transcribeIfLoaded([Float](repeating: 0.1, count: 64_000))
@@ -362,10 +360,10 @@ actor LoadCounter {
 }
 
 @Suite struct NameBoostTests {
-    let names = ["earshot", "your home folder", "finebrief", "reflow", "release 1012"]
+    let names = ["kobi", "your home folder", "finebrief", "reflow", "release 1012"]
 
     @Test func aBoostThatSwallowsASentenceIsIgnored() {
-        #expect(!ParakeetTranscriber.keepsBoost(plain: "Hey, how are you doing?", boosted: "Earshot doing?", vocabulary: names))
+        #expect(!ParakeetTranscriber.keepsBoost(plain: "Hey, how are you doing?", boosted: "Kobi doing?", vocabulary: names))
     }
 
     @Test func aBoostThatOnlyDropsWordsIsIgnored() {
@@ -381,6 +379,6 @@ actor LoadCounter {
     }
 
     @Test func aBoostThatAddsOtherWordsIsIgnored() {
-        #expect(!ParakeetTranscriber.keepsBoost(plain: "stop it", boosted: "stop earshot now", vocabulary: names))
+        #expect(!ParakeetTranscriber.keepsBoost(plain: "stop it", boosted: "stop kobi now", vocabulary: names))
     }
 }

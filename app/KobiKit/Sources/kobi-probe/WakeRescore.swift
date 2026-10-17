@@ -1,21 +1,22 @@
 import KobiKit
-
-// Kobi wake: part 2 (the bench scores "hey earshot" and "earshot" alone)
 import Foundation
 
-/// wake-rescore TSV... [--threshold T] [--bare B]
+/// wake-rescore TSV... [--threshold T] [--bare B] [--spotter phrase|other|max]
 ///
 /// The per-segment output of wake-bench (--out) read again, with each look's pass worked out
 /// anew from the text it heard, so a confirm rule can be tried without running the audio.
 /// For the stripWake rule and the listener's rule (Listener.wakeWords, both tiers: dispatch and
 /// window), and for
 /// apple, parakeet and the two OR'd, it prints the wake table: positives woken by split and by
-/// condition, then near-miss and mention files that falsely wake by split, LibriSpeech spotter
+/// condition, then near-miss, mention and collision files that wake by split, LibriSpeech spotter
 /// fires and false wakes per hour. False wakes are counted in two kinds: "dispatch", a
 /// greeting and the phrase written as such with words after it, which would send them as a
 /// command (the dangerous kind), and "window", a chime that sends nothing of the segment and
-/// only opens the command window ("Earshot" alone first, a sound-alike, or the phrase alone). In the confirm-only tables the head's own words stand in for what the
-/// finish sends, and a look with no answer (passed on the strict score) counts as window.
+/// only opens the command window ("Kobi" alone first, a sound-alike, or the phrase alone).
+/// Collisions ("Hey Kobe", which sounds the same as "Hey Kobi") are counted the same way but
+/// are not false wakes: they are expected to wake. In the confirm-only tables the head's own
+/// words stand in for what the finish sends, and a look with no answer (passed on the strict
+/// score) counts as window.
 /// Then the same table end to end (endToEndOutcome): Apple's confirm, then the finish rule
 /// with Parakeet's head text as the unboosted transcript and Apple's as the second
 /// hearing, a stand-in for the finished command's transcripts.
@@ -26,12 +27,14 @@ import Foundation
 ///   --threshold T: only that row, then positives by split and condition at T, and the
 ///                  near-miss, mention and LibriSpeech segments that the listener's rule and
 ///                  the end to end rule wake at T, with their kind and what was heard.
-/// With a bare column (the score of "earshot" alone) it ends with the bare term's sweep
+///   --spotter S:   which score fires a segment: phrase ("hey kobi"), other ("hey kobe") or
+///                  max (the higher of the two). Default: the listener's (CtcWakeSpotter.score).
+/// With a bare column (the score of "kobi" alone) it ends with the bare term's sweep
 /// (WakeTables.bareSweep): the phrase at T (default -8.0) with Apple's confirm and the
-/// listener's rule, and "earshot" alone, window only, at each bare threshold.
+/// listener's rule, and "kobi" alone, window only, at each bare threshold.
 ///   --bare B:      then positives by split and condition at B, and every near-miss, mention
 ///                  and LibriSpeech segment woken at B.
-let wakeRescoreUsage = "usage: kobi-probe wake-rescore TSV... [--threshold T] [--bare B]"
+let wakeRescoreUsage = "usage: kobi-probe wake-rescore TSV... [--threshold T] [--bare B] [--spotter phrase|other|max]"
 
 /// LibriSpeech test-clean as the bench ran it (tests/wake/librispeech.sh): the TSV has no lengths.
 let libriHours = 5.40
@@ -40,6 +43,7 @@ func wakeRescore(_ args: [String]) throws {
     var paths: [String] = []
     var only: Float?
     var bareAt: Float?
+    var spotterMode: String?
     var bad = false
     var i = 0
     while i < args.count {
@@ -47,6 +51,9 @@ func wakeRescore(_ args: [String]) throws {
         case "--threshold" where i + 1 < args.count:
             only = Float(args[i + 1])
             bad = bad || only == nil
+            i += 1
+        case "--spotter" where i + 1 < args.count && ["phrase", "other", "max"].contains(args[i + 1]):
+            spotterMode = args[i + 1]
             i += 1
         case "--bare" where i + 1 < args.count:
             bareAt = Float(args[i + 1])
@@ -79,8 +86,18 @@ func wakeRescore(_ args: [String]) throws {
                 if let m = col("\(l)_ms").flatMap(Double.init) { ms[l] = m }
             }
             func score(_ s: String?) -> Float? { s == nil || s == "nil" ? nil : s == "-inf" ? -.infinity : Float(s!) }
+            // The score that fires: the phrase's, the other phrase's, or as the listener takes them.
+            var fired = score(col("score"))
+            if let p = fired, let o = score(col("other")) {
+                switch spotterMode {
+                case "phrase"?: fired = p
+                case "other"?: fired = o
+                case "max"?: fired = max(p, o)
+                default: fired = CtcWakeSpotter.score(.init(phrase: p, other: o, bare: -.infinity))
+                }
+            }
             rows.append(RescoreRow(file: file, cls: cls, condition: col("condition") ?? "", split: col("split") ?? "",
-                                   score: score(col("score")), bare: score(col("bare")), texts: texts, ms: ms))
+                                   score: fired, bare: score(col("bare")), texts: texts, ms: ms))
         }
     }
     var byFile: [String: [RescoreRow]] = [:]
@@ -91,7 +108,7 @@ func wakeRescore(_ args: [String]) throws {
     }
     let tables = WakeTables(files: order.map { byFile[$0]! }, libriHours: libriHours)
     let thresholds: [Float] = only.map { [$0] } ?? [-5, -6, -7, -7.5, -8, -8.5, -9, -9.25]
-    print("\(tables.files.count) files, \(rows.count) segments from \(paths.count) TSV(s), LibriSpeech taken as \(String(format: "%.2f", libriHours)) h")
+    print("\(tables.files.count) files, \(rows.count) segments from \(paths.count) TSV(s), LibriSpeech taken as \(String(format: "%.2f", libriHours)) h, spotter score: \(spotterMode ?? "the listener's")")
 
     let rules: [(name: String, rule: (String) -> WakeOutcome?)] = [
         ("stripWake", stripWakeRule),

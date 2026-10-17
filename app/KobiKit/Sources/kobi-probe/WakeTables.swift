@@ -1,6 +1,4 @@
 import KobiKit
-
-// Kobi wake: part 2 (the bench scores "hey earshot" and "earshot" alone)
 import Foundation
 
 /// What a fire that passes does, counted apart on the negatives, since only one kind is dangerous.
@@ -10,7 +8,7 @@ enum WakeOutcome {
     /// kind: "Approve it." would approve a pending permission prompt.
     case dispatch
     /// The chime, and nothing of this segment is sent: it opens the command window, as "Hey
-    /// Earshot" alone does (or, for a wake passed on the strict score alone whose transcript
+    /// Kobi" alone does (or, for a wake passed on the strict score alone whose transcript
     /// lacks the phrase, closes at once).
     case window
 }
@@ -46,7 +44,7 @@ func lookOutcome(_ heard: Heard, score: Float?, rule: (String) -> WakeOutcome?) 
 
 /// The listener's confirm rule (Listener.wakeWords), with the head's own remainder as the
 /// guess at what would be sent: a greeting and the phrase with words after it dispatches;
-/// the phrase alone, "Earshot" alone first (bare) or a sound-alike opens the window.
+/// the phrase alone, "Kobi" alone first (bare) or a sound-alike opens the window.
 func tierRule(_ words: String) -> WakeOutcome? {
     switch Listener.wakeWords(words) {
     case .literal(let rest)?: return rest.isEmpty ? .window : .dispatch
@@ -86,7 +84,7 @@ func endToEndOutcome(apple: Heard, parakeet: Heard, score: Float?) -> WakeOutcom
 struct RescoreRow {
     let file: String, cls: String, condition: String, split: String
     let score: Float?
-    /// The score of "earshot" alone (CtcWakeSpotter.barePhrase), nil in a TSV without the column.
+    /// The score of "kobi" alone (CtcWakeSpotter.barePhrase), nil in a TSV without the column.
     var bare: Float? = nil
     /// What each look heard, by look name ("apple", "parakeet"), as wake-bench writes it.
     let texts: [String: String]
@@ -134,14 +132,15 @@ struct WakeTables {
     }
 
     /// One table: per threshold, positives woken by split and condition, then per class and split
-    /// the negatives' false wakes of each kind (dispatch, window), LibriSpeech fires and false
+    /// the negatives' false wakes of each kind (dispatch, window), the collisions' wakes of each
+    /// kind (expected: "Hey Kobe" sounds the same as "Hey Kobi"), LibriSpeech fires and false
     /// wakes of each kind an hour, and the confirm's p50 and p95 over the fires (`msLooks` run
     /// side by side, so the slower). `knowsDispatch` false (the spotter alone): every fire is
     /// counted under window, and dispatch is "-".
     func table(_ title: String, thresholds: [Float], knowsDispatch: Bool = true, msLooks: [String],
                _ outcome: (RescoreRow) -> WakeOutcome?) {
         print("\n== \(title) ==")
-        let negatives = ["nearmiss", "mention"]
+        let negatives = ["nearmiss", "mention", "collision"].filter { c in rows.contains { $0.cls == c } }
         var header = ["threshold"] + splits.map { "pos \($0)" } + conditions.map { "pos \($0)" }
         for c in negatives { for s in splits { header += ["\(c) \(s) dispatch", "\(c) \(s) window"] } }
         header += ["libri spotter fires/h", "libri dispatch/h", "libri window/h", "confirm p50 ms", "confirm p95 ms"]
@@ -183,20 +182,21 @@ struct WakeTables {
         }
     }
 
-    /// Every near-miss, mention and LibriSpeech segment that wakes at `t`, its kind, and what each look heard.
+    /// Every near-miss, mention, collision and LibriSpeech segment that wakes at `t`, its kind, and
+    /// what each look heard (a collision is listed as "wake", since it is expected to wake).
     func listFalse(at t: Float, looks: [String], _ outcome: (RescoreRow) -> WakeOutcome?) {
-        for r in rows where ["nearmiss", "mention", "librispeech"].contains(r.cls) {
+        for r in rows where ["nearmiss", "mention", "collision", "librispeech"].contains(r.cls) {
             guard let o = at(r, t, outcome) else { continue }
             let heard = looks.map { "\($0): \(r.texts[$0] ?? "-")" }.joined(separator: " | ")
             let bare = r.bare.map { "\tbare \(scoreText($0))" } ?? ""
-            print("false wake\t\(o == .dispatch ? "dispatch" : "window")\t\(r.cls)\t\(r.split)\t\(r.file)\t\(scoreText(r.score))\(bare)\t\(heard)")
+            print("\(r.cls == "collision" ? "wake" : "false wake")\t\(o == .dispatch ? "dispatch" : "window")\t\(r.cls)\t\(r.split)\t\(r.file)\t\(scoreText(r.score))\(bare)\t\(heard)")
         }
     }
 }
 
 // MARK: - The bare term (an experiment)
 
-/// A second spotter term, "earshot" alone (CtcWakeSpotter.barePhrase), for a wake whose
+/// A second spotter term, "kobi" alone (CtcWakeSpotter.barePhrase), for a wake whose
 /// "Hey" a noise gate cut. A segment fires when the phrase scores at least `phraseAt` (the
 /// shipped wake, `main`) or, failing that, the bare term scores at least the swept threshold.
 /// A bare fire passes only when `look`'s words pass the confirm (Listener.confirmsWake, any

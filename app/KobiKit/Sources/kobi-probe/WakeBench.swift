@@ -1,6 +1,4 @@
 import KobiKit
-
-// Kobi wake: part 2 (the bench scores "hey earshot" and "earshot" alone)
 @preconcurrency import FluidAudio
 import Foundation
 
@@ -10,20 +8,21 @@ import Foundation
 /// confirmers) beside the spotter so a threshold and a confirmer can be chosen from data.
 ///   MANIFEST: one or more, tab separated, # lines and a header line skipped; each file path is
 ///             relative to the folder of the manifest it is in:
-///             file, label (1 wake, 0 not), class (positive, nearmiss, mention, librispeech),
+///             file, label (1 wake, 0 not), class (positive, nearmiss, mention, collision, librispeech),
 ///             voice, condition, split (tune, holdout, neg), text
 ///   --out OUT.tsv: one row per speech segment: file, label, class, voice, condition, split, seg,
-///             score, bare (the score of CtcWakeSpotter.barePhrase, "earshot" alone, on the same
-///             pass), then for each confirmer its text ("(nil)" when it could not tell,
-///             "(timeout)" past the listener's confirm limit, "(skipped)" when both scores are below
-///             their sweep floors so no threshold fires on it), whether the wake passes it (yes/no,
-///             as the listener passes it: the text by Listener.confirmsWake, and nil or a timeout
-///             only when the score reaches CtcWakeSpotter.unconfirmedThreshold) and its ms.
+///             score (CtcWakeSpotter.phrase, "hey kobi"), other (CtcWakeSpotter.otherPhrase, "hey
+///             kobe"), bare (CtcWakeSpotter.barePhrase, "kobi" alone), all on the same pass, then for
+///             each confirmer its text ("(nil)" when it could not tell, "(timeout)" past the
+///             listener's confirm limit, "(skipped)" when all scores are below their sweep floors so
+///             no threshold fires on it), whether the wake passes it (yes/no, as the listener passes
+///             it: the text by Listener.confirmsWake, and nil or a timeout only when the listener's
+///             score, CtcWakeSpotter.score, reaches CtcWakeSpotter.unconfirmedThreshold) and its ms.
 ///             A file with no speech segment has one row with seg -1 and no score.
 ///             A name ending in manifest.tsv is refused, so a manifest is never overwritten.
 ///   --confirmers: which second looks to run (default all three); each runs on every segment's
-///             window that scores at least the sweep floor, or whose bare score reaches its own
-///             floor, so the sweep can cut at any threshold.
+///             window whose phrase or other score reaches the sweep floor, or whose bare score
+///             reaches its own floor, so the sweep can cut at any threshold with any of them.
 ///             Each look is held to Listener.Timing().confirmLimit, as the listener holds it.
 ///             Parakeet is kept loaded the whole run: its column is the best case, since live it
 ///             is loaded only after a command, and when it is not a confirm has no answer and the
@@ -45,7 +44,7 @@ let wakeBenchUsage = "usage: kobi-probe wake-bench MANIFEST... [--out OUT.tsv] [
 /// not run through the confirmers: nothing would fire on it.
 let sweepFloor: Float = -9.5
 
-/// The same for the bare score ("earshot" alone): a segment under both floors is not looked at.
+/// The same for the bare score ("kobi" alone): a segment under all floors is not looked at.
 let bareSweepFloor: Float = -9.5
 
 func wakeBench(_ args: [String]) async throws {
@@ -114,7 +113,7 @@ func wakeBench(_ args: [String]) async throws {
     var rows: [[BenchRow]] = []     // per file
     var seconds: [String: Double] = [:]   // per class, audio length
     var skipped = 0
-    var out = "file\tlabel\tclass\tvoice\tcondition\tsplit\tseg\tscore\tbare"
+    var out = "file\tlabel\tclass\tvoice\tcondition\tsplit\tseg\tscore\tother\tbare"
     for c in confirmers { out += "\t\(c.name)_text\t\(c.name)_pass\t\(c.name)_ms" }
     out += "\n"
     for (n, f) in files.enumerated() {
@@ -132,11 +131,13 @@ func wakeBench(_ args: [String]) async throws {
         let windows = await segmentWindows(audio, gate: gate, timing: timing)
         for (seg, window) in windows.enumerated() {
             let scores = await spotter.wakeScores(window)
-            let score = scores?.phrase, bare = scores?.bare
             var looks: [Look] = []
             for c in confirmers {
-                // Under both floors no threshold fires: not a fire, so not looked at.
-                guard let score, let bare, score >= sweepFloor || bare >= bareSweepFloor else { looks.append(.notRun); continue }
+                // Under all floors no threshold fires: not a fire, so not looked at.
+                guard let scores, max(scores.phrase, scores.other) >= sweepFloor || scores.bare >= bareSweepFloor else {
+                    looks.append(.notRun); continue
+                }
+                let score = CtcWakeSpotter.score(scores)
                 let t0 = ContinuousClock.now
                 let answer = await benchBounded(timing.confirmLimit, String??.none) { .some(await c.confirmer.headText(window)) }
                 let d = ContinuousClock.now - t0
@@ -147,11 +148,11 @@ func wakeBench(_ args: [String]) async throws {
                 guard let answer else { looks.append(Look(text: nil, passes: strict, ms: elapsed, ran: true, timedOut: true)); continue }
                 looks.append(Look(text: answer, passes: answer.map(Listener.confirmsWake) ?? strict, ms: elapsed, ran: true, timedOut: false))
             }
-            fileRows.append(BenchRow(seg: seg, score: score, bare: bare, looks: looks))
+            fileRows.append(BenchRow(seg: seg, scores: scores, looks: looks))
         }
         rows.append(fileRows)
-        for r in fileRows { out += f.tsv(seg: r.seg, score: r.score, bare: r.bare, looks: r.looks) }
-        if fileRows.isEmpty { out += f.tsv(seg: -1, score: nil, bare: nil, looks: confirmers.map { _ in Look.notRun }) }
+        for r in fileRows { out += f.tsv(seg: r.seg, scores: r.scores, looks: r.looks) }
+        if fileRows.isEmpty { out += f.tsv(seg: -1, scores: nil, looks: confirmers.map { _ in Look.notRun }) }
         if (n + 1) % 100 == 0 { print("  \(n + 1)/\(files.count)") }
     }
     if let outPath {
@@ -181,8 +182,9 @@ struct BenchFile {
         return out
     }
 
-    func tsv(seg: Int, score: Float?, bare: Float?, looks: [Look]) -> String {
-        var s = "\(file)\t\(label)\t\(cls)\t\(voice)\t\(condition)\t\(split)\t\(seg)\t\(scoreText(score))\t\(scoreText(bare))"
+    func tsv(seg: Int, scores: CtcWakeSpotter.WakeScores?, looks: [Look]) -> String {
+        var s = "\(file)\t\(label)\t\(cls)\t\(voice)\t\(condition)\t\(split)\t\(seg)\t"
+            + "\(scoreText(scores?.phrase))\t\(scoreText(scores?.other))\t\(scoreText(scores?.bare))"
         for l in looks { s += "\t\(l.cell)\t\(l.passes ? "yes" : "no")\t\(String(format: "%.1f", l.ms))" }
         return s + "\n"
     }
@@ -236,9 +238,8 @@ func benchBounded<T: Sendable>(_ limit: Duration, _ fallback: T,
 
 struct BenchRow {
     let seg: Int
-    let score: Float?
-    /// The score of "earshot" alone (CtcWakeSpotter.barePhrase) on the same window.
-    let bare: Float?
+    /// The spotter's scores on the window: "hey kobi", "hey kobe" and "kobi" alone.
+    let scores: CtcWakeSpotter.WakeScores?
     let looks: [Look]
 }
 
@@ -289,12 +290,13 @@ func report(_ files: [BenchFile], _ rows: [[BenchRow]], _ confirmers: [String], 
     let libriHours = (seconds["librispeech"] ?? 0) / 3600
     // The same rows wake-rescore reads from the TSV, so both print the same tables.
     let grouped: [[RescoreRow]] = zip(files, rows).map { f, fileRows in
-        func row(_ score: Float?, _ bare: Float?, _ texts: [String: String], _ ms: [String: Double]) -> RescoreRow {
-            RescoreRow(file: f.file, cls: f.cls, condition: f.condition, split: f.split, score: score, bare: bare, texts: texts, ms: ms)
+        func row(_ s: CtcWakeSpotter.WakeScores?, _ texts: [String: String], _ ms: [String: Double]) -> RescoreRow {
+            RescoreRow(file: f.file, cls: f.cls, condition: f.condition, split: f.split, score: s.map(CtcWakeSpotter.score),
+                       bare: s?.bare, texts: texts, ms: ms)
         }
-        guard !fileRows.isEmpty else { return [row(nil, nil, [:], [:])] }
+        guard !fileRows.isEmpty else { return [row(nil, [:], [:])] }
         return fileRows.map { r in
-            row(r.score, r.bare, Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.cell))),
+            row(r.scores, Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.cell))),
                 Dictionary(uniqueKeysWithValues: zip(confirmers, r.looks.map(\.ms))))
         }
     }
