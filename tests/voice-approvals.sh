@@ -1,18 +1,18 @@
 #!/bin/bash
-# Checks voice approvals: speak.sh decide with a fake Earshot for Mac.
+# Checks voice approvals: speak.sh decide with a fake Kobi for Mac.
 # The test plays the app: it reads the approval message the fake app logged
-# and writes the answer file named there. Nothing is spoken (EARSHOT_DRYRUN).
+# and writes the answer file named there. Nothing is spoken (KOBI_DRYRUN).
 # Needs /voice on, because speak.sh exits early without it.
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; S=$ROOT/plugin/scripts/speak.sh
-OUT=$(mktemp); export EARSHOT_DRYRUN=$OUT EARSHOT_STATE_DIR=$(mktemp -d) EARSHOT_CONF=$(mktemp)
-printf 'EARSHOT_ENGINE=say\n' > "$EARSHOT_CONF"
-MICST=$(mktemp); echo 1 > "$MICST"; export EARSHOT_MIC=$(mktemp)
-printf '#!/bin/bash\nexit $(cat "%s")\n' "$MICST" > "$EARSHOT_MIC"; chmod +x "$EARSHOT_MIC"
-export EARSHOT_MUTE=$EARSHOT_STATE_DIR/mute   # never the real mute file
+OUT=$(mktemp); export KOBI_DRYRUN=$OUT KOBI_STATE_DIR=$(mktemp -d) KOBI_CONF=$(mktemp)
+printf 'KOBI_ENGINE=say\n' > "$KOBI_CONF"
+MICST=$(mktemp); echo 1 > "$MICST"; export KOBI_MIC=$(mktemp)
+printf '#!/bin/bash\nexit $(cat "%s")\n' "$MICST" > "$KOBI_MIC"; chmod +x "$KOBI_MIC"
+export KOBI_MUTE=$KOBI_STATE_DIR/mute   # never the real mute file
 # Reminders 2 "minutes" after a prompt, one second each, so a test can wait for one.
-export EARSHOT_REMIND_MINS=2 EARSHOT_REMIND_UNIT=1
+export KOBI_REMIND_MINS=2 KOBI_REMIND_UNIT=1
 # Approval detection looks for the command among this shell's children.
-export EARSHOT_CLAUDE_PID=$$
+export KOBI_CLAUDE_PID=$$
 D=$(mktemp -d /tmp/va.XXXX); SOCK=$D/app.sock; APPLOG=$D/app.log; : > "$APPLOG"
 P=$(mktemp -d)/billing-service; mkdir -p "$P"; git -C "$P" init -q
 pass=0; fail=0
@@ -45,7 +45,7 @@ decision() { jq -r '.hookSpecificOutput.decision.behavior // empty' "$D/out-$1" 
 alive() { [ ! -f "$D/rc-$1" ]; }   # this prompt's decide still runs
 fakerun() { bash -c "true; eval \"$1\"" >/dev/null 2>&1 & fakecmd=$!; disown "$fakecmd"; sleep 0.3; }
 
-export EARSHOT_APP_SOCK=$SOCK
+export KOBI_APP_SOCK=$SOCK
 
 echo "Without the app"
 rm -f "$SOCK"; t0=$(perl -MTime::HiRes=time -e 'print time')
@@ -66,27 +66,27 @@ expect "the approval says what it asks" "$(jq -r .what <<<"$m")" "to run the mig
 [ -n "$(jq -r '.id // empty' <<<"$m")" ] && ok "the approval has an id" || bad "the approval has an id"
 [ "$(jq -r '.secret // "" | length' <<<"$m")" -ge 16 ] && ok "the approval has a secret" || bad "the approval has a secret"
 expect "the approval has decide's pid" "$(jq -r '.pid' <<<"$m")" "$(pgrep -f "$S decide" | head -1)"
-case "$(jq -r .answer <<<"$m")" in "$EARSHOT_STATE_DIR"/answer-v1-*) ok "the answer file is in Earshot's state folder" ;; *) bad "the answer file is in Earshot's state folder" ;; esac
+case "$(jq -r .answer <<<"$m")" in "$KOBI_STATE_DIR"/answer-v1-*) ok "the answer file is in Kobi's state folder" ;; *) bad "the answer file is in Kobi's state folder" ;; esac
 alive v1 && ok "decide waits while nobody answered" || bad "decide waits while nobody answered"
 answer v1 allow; done_within v1 2 && ok "allow ends decide" || bad "allow ends decide"
 expect "allow prints the allow decision" "$(decision v1)" allow
 expect "the output is one JSON object" "$(jq -s length "$D/out-v1" 2>/dev/null)" 1
 sleep 0.3
 expect "the app hears the approval closed by voice" "$(took '"session":"v1".*"state":"closed".*"by":"voice"')" 1
-expect "the wait file is gone" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^wait-v1$')" 0
-expect "the answer file is gone" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^answer-v1')" 0
+expect "the wait file is gone" "$(ls "$KOBI_STATE_DIR" | grep -c '^wait-v1$')" 0
+expect "the answer file is gone" "$(ls "$KOBI_STATE_DIR" | grep -c '^answer-v1')" 0
 
 : > "$APPLOG"; prompt v2; answer v2 deny; done_within v2 2
 expect "deny prints the deny decision" "$(decision v2)" deny
 expect "deny tells Claude why" "$(jq -r '.hookSpecificOutput.decision.message' "$D/out-v2")" "The user said no by voice."
-expect "after a voice answer the status is working" "$(head -1 "$EARSHOT_STATE_DIR/status-v2")" working
+expect "after a voice answer the status is working" "$(head -1 "$KOBI_STATE_DIR/status-v2")" working
 sleep 2.5
 expect "a voice no stops the reminders" "$(took 'still waiting on you')" 0
 
 : > "$APPLOG"; prompt v3
 answer v3 maybe; sleep 1
 alive v3 && ok "other words are ignored" || bad "other words are ignored"
-expect "and the odd answer file is removed" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^answer-v3')" 0
+expect "and the odd answer file is removed" "$(ls "$KOBI_STATE_DIR" | grep -c '^answer-v3')" 0
 f=$(grep '"session":"v3"' "$APPLOG" | grep '"answer"' | tail -1 | jq -r .answer)
 [ -n "$f" ] && ok "the answer path is known" || bad "the answer path is known"
 printf 'allow\n' > "$f"; sleep 1
@@ -98,13 +98,13 @@ alive v3 && ok "an answer for another prompt id is ignored" || bad "an answer fo
 rm -f "${f%-*}-999-1-1"
 printf 'allow\n' > "$D/elsewhere"; ln -s "$D/elsewhere" "$f"; sleep 1
 alive v3 && ok "an answer file that is a link is ignored" || bad "an answer file that is a link is ignored"
-expect "and removed" "$(ls "$EARSHOT_STATE_DIR" | grep -c '^answer-v3')" 0
+expect "and removed" "$(ls "$KOBI_STATE_DIR" | grep -c '^answer-v3')" 0
 rm -f "$f"; printf 'allow\n' > "$f.tmp"; chmod 666 "$f.tmp"; mv "$f.tmp" "$f"; sleep 1
 alive v3 && ok "an answer file others can write is ignored" || bad "an answer file others can write is ignored"
 answer v3 allow; done_within v3 2; expect "a later allow still works" "$(decision v3)" allow
 
 : > "$APPLOG"
-printf 'old-token\npermission\nbilling service\nto run something else\n\n' > "$EARSHOT_STATE_DIR/wait-st1"
+printf 'old-token\npermission\nbilling service\nto run something else\n\n' > "$KOBI_STATE_DIR/wait-st1"
 prompt st1; sleep 0.5
 alive st1 && ok "a wait file left by an earlier Esc: decide still waits" || bad "a wait file left by an earlier Esc: decide still waits"
 answer st1 allow; done_within st1 2; expect "and takes the answer" "$(decision st1)" allow
@@ -143,7 +143,7 @@ pkill -TERM -f "$S decide"; done_within s6 2
 sleep 0.3; expect "Claude Code stops the hook (Esc): the app hears it closed" "$(took '"session":"s6".*"state":"closed".*"by":"screen"')" 1
 expect "and it prints nothing" "$(wc -c < "$D/out-s6" | tr -d ' ')" 0
 
-: > "$APPLOG"; EARSHOT_DECIDE_SECS=1 prompt s5
+: > "$APPLOG"; KOBI_DECIDE_SECS=1 prompt s5
 done_within s5 3 && ok "the deadline ends decide" || bad "the deadline ends decide"
 expect "and prints nothing" "$(wc -c < "$D/out-s5" | tr -d ' ')" 0
 sleep 0.3; expect "the app hears it timed out" "$(took '"session":"s5".*"state":"closed".*"by":"timeout"')" 1
@@ -158,5 +158,5 @@ expect "the needs your OK line is still said once" "$(took 'billing service need
 answer l1 allow; done_within l1 2
 
 pkill -f "$S decide"; pkill -f "fake-app.pl $SOCK"
-rm -rf "$D" "$EARSHOT_STATE_DIR"; rm -f "$OUT" "$EARSHOT_CONF" "$MICST" "$EARSHOT_MIC"
+rm -rf "$D" "$KOBI_STATE_DIR"; rm -f "$OUT" "$KOBI_CONF" "$MICST" "$KOBI_MIC"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

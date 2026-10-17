@@ -1,23 +1,23 @@
 #!/bin/bash
-# Earshot: spoken updates for Claude Code, with Kokoro on this Mac, ElevenLabs
+# Kobi: spoken updates for Claude Code, with Kokoro on this Mac, ElevenLabs
 # or the Mac's own voice.
 # Modes: begin | start | tool | toolfail | ask | question | notify | idle | stop | fail | end |
 # elicit | answered | inputnotify | pretool (hooks),
 # remind (internal timer), play (internal, one line at a time), engine (prints the engine),
 # say "<text>" (manual test)
-umask 077   # every file Earshot writes is readable only by you
+umask 077   # every file Kobi writes is readable only by you
 # Shortcuts and other launchers run scripts with a short PATH: add Homebrew
 # (jq) and the system folders that hold md5 and lockf.
 PATH=$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/sbin
-CONF=${EARSHOT_CONF:-$HOME/.config/earshot/config}   # tests point this elsewhere
+CONF=${KOBI_CONF:-$HOME/.config/kobi/config}   # tests point this elsewhere
 [ -f "$CONF" ] && . "$CONF"
 # The saved config wins, so a generic ELEVENLABS_API_KEY set for other tools
-# does not replace the key you chose for Earshot.
-KEY=${EARSHOT_KEY:-$ELEVENLABS_API_KEY}
-VOICE=${EARSHOT_VOICE:-$ELEVENLABS_VOICE_ID}
+# does not replace the key you chose for Kobi.
+KEY=${KOBI_KEY:-$ELEVENLABS_API_KEY}
+VOICE=${KOBI_VOICE:-$ELEVENLABS_VOICE_ID}
 # kokoro (on this Mac), elevenlabs or say. Configs from before 0.9.0 have no
 # engine line: a saved key means they use ElevenLabs.
-if [ -n "$EARSHOT_ENGINE" ]; then ENGINE=$EARSHOT_ENGINE
+if [ -n "$KOBI_ENGINE" ]; then ENGINE=$KOBI_ENGINE
 elif [ -n "$KEY" ]; then ENGINE=elevenlabs
 else ENGINE=kokoro
 fi
@@ -32,42 +32,42 @@ MUTED=
 if [ "$1" != rollcall ] && ! { [ "$1" = play ] && [ "$4" = roll ]; }; then
   [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] || exit 0
   # Muted: an empty file mutes until it is removed; a time (epoch seconds)
-  # mutes until then. Earshot for Mac writes the time for "Mute for 1 hour".
+  # mutes until then. Kobi for Mac writes the time for "Mute for 1 hour".
   # What muted stops is decided once the app's socket is known (see below).
-  MUTE=${EARSHOT_MUTE:-$HOME/.config/earshot/mute}
+  MUTE=${KOBI_MUTE:-$HOME/.config/kobi/mute}
   if [ -e "$MUTE" ]; then
     until=$(head -c 20 "$MUTE" 2>/dev/null | tr -cd 0-9)
     { [ -z "$until" ] || [ "$until" -gt "$(date +%s)" ]; } && MUTED=1
   fi
 fi
 
-MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
-KOKORO_VOICE=${EARSHOT_KOKORO_VOICE:-af_heart}
-SAY_VOICE=${EARSHOT_SAY_VOICE:-}          # empty: the system voice
-BEAT_SECS=${EARSHOT_BEAT_SECS:-180}       # how often to say "still working"
-LONG_MAX=${EARSHOT_LONG_MAX_SECS:-7200}   # updates during one command stop after 2 hours
-DECIDE_SECS=${EARSHOT_DECIDE_SECS:-3500}  # how long a prompt can be answered by voice (hook timeout 3600)
-LOOP_REPEATS=${EARSHOT_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
-LEVEL=${EARSHOT_LEVEL:-normal}            # quiet | normal | all (see tell)
-STYLE=${EARSHOT_STYLE:-plain}             # plain | upbeat | cheeky: tone of the finished line
+MODEL=${KOBI_MODEL:-eleven_v4_turbo}
+KOKORO_VOICE=${KOBI_KOKORO_VOICE:-af_heart}
+SAY_VOICE=${KOBI_SAY_VOICE:-}          # empty: the system voice
+BEAT_SECS=${KOBI_BEAT_SECS:-180}       # how often to say "still working"
+LONG_MAX=${KOBI_LONG_MAX_SECS:-7200}   # updates during one command stop after 2 hours
+DECIDE_SECS=${KOBI_DECIDE_SECS:-3500}  # how long a prompt can be answered by voice (hook timeout 3600)
+LOOP_REPEATS=${KOBI_LOOP_REPEATS:-3}   # repeats that count as stuck (see Stuck detection)
+LEVEL=${KOBI_LEVEL:-normal}            # quiet | normal | all (see tell)
+STYLE=${KOBI_STYLE:-plain}             # plain | upbeat | cheeky: tone of the finished line
 # Per-user folders (mode 700) instead of /tmp, so other accounts on this Mac
 # cannot read the lines or plant files and links there.
-STATE=${EARSHOT_STATE_DIR:-$(getconf DARWIN_USER_TEMP_DIR)earshot}
-CACHE=${EARSHOT_CACHE_DIR:-$(getconf DARWIN_USER_CACHE_DIR)earshot}
+STATE=${KOBI_STATE_DIR:-$(getconf DARWIN_USER_TEMP_DIR)kobi}
+CACHE=${KOBI_CACHE_DIR:-$(getconf DARWIN_USER_CACHE_DIR)kobi}
 mkdir -p "$STATE" "$CACHE" 2>/dev/null
 [ -O "$STATE" ] && [ -O "$CACHE" ] || exit 0
-LOG=$STATE/earshot.log
-MIC=${EARSHOT_MIC:-$HOME/.config/earshot/mic-in-use}   # tests point this at a stub
-HOLD=${EARSHOT_HOLD_ON_MIC:-on}   # on: hold lines while an app uses the mic
+LOG=$STATE/kobi.log
+MIC=${KOBI_MIC:-$HOME/.config/kobi/mic-in-use}   # tests point this at a stub
+HOLD=${KOBI_HOLD_ON_MIC:-on}   # on: hold lines while an app uses the mic
 # Tests point these at fakes.
-TTS=${EARSHOT_TTS:-$HOME/.config/earshot/kokoro/earshot-tts}
-SAYCMD=${EARSHOT_SAY:-/usr/bin/say}   # the program: a bare "say" is the function below
-PLAYER=${EARSHOT_PLAYER:-afplay}
+TTS=${KOBI_TTS:-$HOME/.config/kobi/kokoro/kobi-tts}
+SAYCMD=${KOBI_SAY:-/usr/bin/say}   # the program: a bare "say" is the function below
+PLAYER=${KOBI_PLAYER:-afplay}
 SOCK=$STATE/kokoro.sock   # the Kokoro server, while it runs
-# Earshot for Mac: when it runs, it plays every line. Tests that collect lines
-# (EARSHOT_DRYRUN) reach an app only when they name its socket.
-APP_SOCK=${EARSHOT_APP_SOCK-$HOME/Library/Application Support/Earshot/earshot.sock}
-[ -n "$EARSHOT_DRYRUN" ] && [ -z "${EARSHOT_APP_SOCK+x}" ] && APP_SOCK=
+# Kobi for Mac: when it runs, it plays every line. Tests that collect lines
+# (KOBI_DRYRUN) reach an app only when they name its socket.
+APP_SOCK=${KOBI_APP_SOCK-$HOME/Library/Application Support/Kobi/kobi.sock}
+[ -n "$KOBI_DRYRUN" ] && [ -z "${KOBI_APP_SOCK+x}" ] && APP_SOCK=
 APP_SEND=$(dirname "$0")/app-send.zsh
 
 # app_up: the app's socket is there.
@@ -77,7 +77,7 @@ app_up() { [ -n "$APP_SOCK" ] && [ -S "$APP_SOCK" ]; }
 app_send() { app_up && /bin/zsh -f "$APP_SEND" "$APP_SOCK" "$1"; }
 # Voice answers need the app: without it, a permission prompt costs no more.
 [ "$1" = decide ] && ! app_up && exit 0
-# Muted, nothing is said. Without the app, nothing runs. With Earshot for Mac,
+# Muted, nothing is said. Without the app, nothing runs. With Kobi for Mac,
 # the hooks still run and hand their lines to the app marked muted, so its
 # session list stays current and it can show a banner for a session that needs
 # you. Voice answers, playback and the catch-up still stop here.
@@ -100,7 +100,7 @@ mic_busy() { mic_state; [ $? != 1 ]; }
 lower_first() { printf '%s%s' "$(tr '[:upper:]' '[:lower:]' <<<"${1:0:1}")" "${1:1}"; }
 upper_first() { printf '%s%s' "$(tr '[:lower:]' '[:upper:]' <<<"${1:0:1}")" "${1:1}"; }
 
-# tell <kind> "<line>": speak only if EARSHOT_LEVEL includes the kind.
+# tell <kind> "<line>": speak only if KOBI_LEVEL includes the kind.
 #   need   waiting on you: a permission prompt, a question, reminders   every level
 #   reply  the last reply asked you something and you did not answer   every level
 #   alert  might be stuck, something broke                              every level
@@ -114,9 +114,9 @@ tell() {
 }
 
 # say "<line>" [kind] [session]: speaks in the background, so hooks return at
-# once. Tests set EARSHOT_DRYRUN, which makes it wait.
+# once. Tests set KOBI_DRYRUN, which makes it wait.
 say() {
-  if [ -n "$EARSHOT_DRYRUN" ]; then speak "$1" "${2:-alert}" "$3"
+  if [ -n "$KOBI_DRYRUN" ]; then speak "$1" "${2:-alert}" "$3"
   else speak "$1" "${2:-alert}" "$3" </dev/null >/dev/null 2>&1 &
   fi
 }
@@ -131,7 +131,7 @@ hold() {
     | lockf -k "$HELD.lock" sh -c 'cat >> "$1"' _ "$HELD"
   echo "$(date '+%F %T') held ($1): $2" >> "$LOG"
   # One watcher at a time. Waiting 5 s covers a watcher that is just exiting.
-  [ -n "$EARSHOT_DRYRUN" ] || ( lockf -t 5 -k "$STATE/release.lock" bash "$0" release ) </dev/null >/dev/null 2>&1 &
+  [ -n "$KOBI_DRYRUN" ] || ( lockf -t 5 -k "$STATE/release.lock" bash "$0" release ) </dev/null >/dev/null 2>&1 &
 }
 
 # cache_file <engine> "<line>": where that engine's audio for the line is kept.
@@ -180,7 +180,7 @@ synth() {
 }
 
 # speak "<line>" <kind> <session>: holds the line while an app uses the mic,
-# or plays it. It returns when the line has played. When Earshot for Mac takes
+# or plays it. It returns when the line has played. When Kobi for Mac takes
 # the line, the app holds, queues and plays it instead.
 speak() {
   local asked out dl tmp fb
@@ -195,8 +195,8 @@ speak() {
   # Muted: a line the app did not take is dropped, not said here.
   [ -n "$MUTED" ] && return
   if [ "$2" != roll ] && [ "$HOLD" = on ] && mic_state; then hold "$2" "$1" "$3"; return; fi
-  # Tests set EARSHOT_DRYRUN to a file: lines go there instead of the speaker.
-  [ -n "$EARSHOT_DRYRUN" ] && { echo "$1" >> "$EARSHOT_DRYRUN"; return; }
+  # Tests set KOBI_DRYRUN to a file: lines go there instead of the speaker.
+  [ -n "$KOBI_DRYRUN" ] && { echo "$1" >> "$KOBI_DRYRUN"; return; }
   asked=$(date +%s)
   out=$(cache_file "$ENGINE" "$1")
   if [ ! -s "$out" ]; then
@@ -223,7 +223,7 @@ speak() {
   # -k keeps the lock file, so a new line cannot lock a fresh copy of it.
   # The line goes in the environment, which other accounts cannot see, not the
   # command line, which they can.
-  EARSHOT_LINE=$1 lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked" "$2" "$3"
+  KOBI_LINE=$1 lockf -s -k -t 60 "$STATE/speaker.lock" bash "$0" play "$out" "$asked" "$2" "$3"
   rm -f "$tmp" "$fb" "${fb:+$fb.aiff}"
 }
 
@@ -245,11 +245,11 @@ play() {
 }
 
 [ "$1" = say ] && { say "$2"; exit 0; }
-[ "$1" = play ] && { play "$2" "$3" "$4" "$EARSHOT_LINE" "$5"; exit 0; }
+[ "$1" = play ] && { play "$2" "$3" "$4" "$KOBI_LINE" "$5"; exit 0; }
 
 # --- After the call: the catch-up -------------------------------------------------
-POLL=${EARSHOT_POLL_SECS:-2}            # seconds between mic checks
-HOLD_MAX=${EARSHOT_HOLD_MAX_SECS:-14400}   # held lines older than 4 hours are dropped
+POLL=${KOBI_POLL_SECS:-2}            # seconds between mic checks
+HOLD_MAX=${KOBI_HOLD_MAX_SECS:-14400}   # held lines older than 4 hours are dropped
 
 wait_file() { echo "$STATE/wait-$1"; }
 
@@ -322,8 +322,8 @@ fi
 # A wait file per session holds: token, kind (permission|question), project,
 # what is being asked, and the transcript path. Any later hook activity deletes
 # it, which cancels reminders.
-REMIND_MINS=${EARSHOT_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
-UNIT=${EARSHOT_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
+REMIND_MINS=${KOBI_REMIND_MINS:-2 5 10}   # minutes after a prompt to remind you
+UNIT=${KOBI_REMIND_UNIT:-60}               # seconds per "minute"; tests set it lower
 
 # claude_kids <pid>: Claude Code's child processes: pid, ppid, command. One ps
 # over all processes, because pgrep skips its own ancestors.
@@ -388,8 +388,8 @@ fi
 # The folder name tells sessions in different projects apart. When another open
 # session shares the folder, a short label from the session's title is added.
 # The title is the name in /resume and in the Mac app's session list.
-LIVE=${EARSHOT_LIVE_DIR:-$STATE/live}   # one file per open session: project, title, [app label]
-SESSION_NAME=${EARSHOT_SESSION_NAME:-auto}   # auto | always | never
+LIVE=${KOBI_LIVE_DIR:-$STATE/live}   # one file per open session: project, title, [app label]
+SESSION_NAME=${KOBI_SESSION_NAME:-auto}   # auto | always | never
 
 # label(title): 1 to 3 words for a session title, to say it often. A title of
 # 3 words or fewer is used as it is. A longer one drops a leading verb and "a",
@@ -441,11 +441,11 @@ session_names() {
     }' "$LIVE"/* 2>/dev/null
 }
 
-[ "$1" = label ] && { short_label "$EARSHOT_LABEL_TEST"; exit 0; }
+[ "$1" = label ] && { short_label "$KOBI_LABEL_TEST"; exit 0; }
 
 # --- Roll call --------------------------------------------------------------------
 # rollcall [--print]: says what every open session is doing, the ones that need
-# you first. From a hotkey or /earshot:rollcall; --print also prints the line.
+# you first. From a hotkey or /kobi:rollcall; --print also prints the line.
 count_words=(No One Two Three Four Five Six Seven Eight Nine)
 if [ "$1" = rollcall ]; then
   find "$LIVE" -type f -mmin +360 -delete 2>/dev/null
@@ -490,7 +490,7 @@ if [ "$1" = rollcall ]; then
     [ "$total" -gt 6 ] && line="$line And $((total - 6)) more."
   fi
   [ "$2" = --print ] && { echo "$line"; say "$line" roll ""; exit 0; }
-  if [ -n "$EARSHOT_DRYRUN" ]; then speak "$line" roll ""; else speak "$line" roll "" </dev/null >/dev/null 2>&1; fi
+  if [ -n "$KOBI_DRYRUN" ]; then speak "$line" roll ""; else speak "$line" roll "" </dev/null >/dev/null 2>&1; fi
   exit 0
 fi
 
@@ -561,7 +561,7 @@ asks_for() {
 # leaves the old helper, so MIC.stale marks it and lines are not held, and
 # touches it, so the next hook does not try again. Setup clears the marker.
 SRC=${0%/*}/mic-in-use.swift
-if [ -z "$EARSHOT_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
+if [ -z "$KOBI_MIC" ] && [ -x "$MIC" ] && [ "$SRC" -nt "$MIC" ]; then
   ( lockf -t 0 "$STATE/build.lock" sh -c 'if swiftc -O "$1" -o "$2.new" && mv "$2.new" "$2"; then rm -f "$2.stale"; else touch "$2" "$2.stale"; fi' _ "$SRC" "$MIC" ) \
     </dev/null >/dev/null 2>&1 &
 fi
@@ -574,13 +574,13 @@ fi
 # and --status shows it.
 TTS_SRC=${0%/*}/../tts
 if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
-  && { [ "$TTS_SRC/Sources/earshot-tts/main.swift" -nt "$TTS" ] || [ "$TTS_SRC/Package.swift" -nt "$TTS" ]; }; then
-  if [ "$(cat "$TTS_SRC/Package.swift" "$TTS_SRC/Package.resolved" "$TTS_SRC/Sources/earshot-tts/main.swift" 2>/dev/null | md5 -q)" \
+  && { [ "$TTS_SRC/Sources/kobi-tts/main.swift" -nt "$TTS" ] || [ "$TTS_SRC/Package.swift" -nt "$TTS" ]; }; then
+  if [ "$(cat "$TTS_SRC/Package.swift" "$TTS_SRC/Package.resolved" "$TTS_SRC/Sources/kobi-tts/main.swift" 2>/dev/null | md5 -q)" \
     = "$(cat "${TTS%/*}/source.md5" 2>/dev/null)" ]; then
     touch "$TTS"   # same sources: skip the comparison next time
   else
     ( lockf -k -t 0 "$STATE/tts-build.lock" sh -c 'if bash "$1"; then "$2" prepare --voice "$3"; else touch "$2.stale"; fi' \
-      _ "${EARSHOT_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" "$KOKORO_VOICE" ) \
+      _ "${KOBI_BUILD_TTS:-${0%/*}/build-tts.sh}" "$TTS" "$KOKORO_VOICE" ) \
       </dev/null >/dev/null 2>&1 &
   fi
 fi
@@ -710,7 +710,7 @@ stop_watch() {
 # in: a binary named claude, or node running the npm package.
 claude_pid() {
   local p=$PPID c
-  [ -n "$EARSHOT_CLAUDE_PID" ] && { echo "$EARSHOT_CLAUDE_PID"; return; }
+  [ -n "$KOBI_CLAUDE_PID" ] && { echo "$KOBI_CLAUDE_PID"; return; }
   while [ "${p:-1}" -gt 1 ]; do
     c=$(ps -o comm= -p "$p" 2>/dev/null)
     case "${c##*/}" in
@@ -801,7 +801,7 @@ begin)
   # compact or resume, so a status that is already there stays.
   [ -f "$status" ] || set_status open
   # Load Kokoro now, so the session's first line does not wait for it. A
-  # server that is already running makes the new one exit at once. Earshot
+  # server that is already running makes the new one exit at once. Kobi
   # for Mac keeps its own Kokoro loaded, so not while it runs.
   if [ "$ENGINE" = kokoro ] && [ -x "$TTS" ] && ! app_up; then
     ( "$TTS" serve --socket "$SOCK" ) </dev/null >/dev/null 2>>"$SOCK.log" &
@@ -816,8 +816,8 @@ end)
   ;;
 start)
   stop_watch
-  # /earshot:rollcall speaks for itself, so this turn gets no 🗣 line.
-  case "$(jq -r '.prompt // empty' <<<"$input")" in /earshot:rollcall*|/rollcall*) exit 0 ;; esac
+  # /kobi:rollcall speaks for itself, so this turn gets no 🗣 line.
+  case "$(jq -r '.prompt // empty' <<<"$input")" in /kobi:rollcall*|/rollcall*) exit 0 ;; esac
   clear_wait
   set_status working
   # Few fixed phrases, so all of them come from the cache after the first use.
@@ -825,7 +825,7 @@ start)
   tell ack "${acks[RANDOM % 3]}"
   echo "$now $now" > "$state"
   rm -f "$hist" "$errs" "$warned"
-  # EARSHOT_STYLE only changes the finished line, which Claude writes fresh each
+  # KOBI_STYLE only changes the finished line, which Claude writes fresh each
   # time. Alerts stay plain, and so does a turn that ends badly.
   serious="If the task failed, or the user needs to answer something or fix a blocker, drop the style and say it plainly."
   case "$STYLE" in
@@ -835,7 +835,7 @@ start)
   esac
   # Plain stdout from UserPromptSubmit is added to Claude's context.
   cat <<EOF
-Earshot voice is on. End your final reply with one line that starts with "🗣 " (the speaking-head emoji and a space). A hook reads that line aloud when you finish.
+Kobi voice is on. End your final reply with one line that starts with "🗣 " (the speaking-head emoji and a space). A hook reads that line aloud when you finish.
 $tone If there is a question or blocker for the user, say it first; if there is a real risk, say it last. When there is none, leave it out: never say that there is no blocker or no risk. One or two short sentences, 25 words at most; for a small task a few words are enough. No code, file paths, markdown, emotion tags or stage directions.
 The prompt was probably dictated: read misheard code terms as the closest name in this repo, and ask if unsure.
 EOF
@@ -890,7 +890,7 @@ ask)
   fi
   ;;
 decide)
-  # PermissionRequest, next to ask: Earshot for Mac can answer the prompt by
+  # PermissionRequest, next to ask: Kobi for Mac can answer the prompt by
   # voice. The dialog stays on screen meanwhile; the first answer wins. Without
   # the app, or when it can't listen now, this ends at once.
   [ "$tool" = AskUserQuestion ] && exit 0

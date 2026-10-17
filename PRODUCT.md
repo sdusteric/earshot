@@ -6,7 +6,7 @@
 
 ios
 
-(Earshot for Mac is a native macOS app, SwiftUI on macOS 26. The schema has no macOS value; `ios` stands for "Apple native, follow the HIG". It is not an iPhone app.)
+(Kobi for Mac is a native macOS app, SwiftUI on macOS 26. The schema has no macOS value; `ios` stands for "Apple native, follow the HIG". It is not an iPhone app.)
 
 ## Users
 
@@ -14,7 +14,7 @@ Developers who run several Claude Code sessions at once and step away from the s
 
 ## Product Purpose
 
-Earshot speaks up when a Claude Code session needs you, might be stuck, or finishes, and says what it got done. It takes voice commands back: send a session a prompt, ask what everyone is doing, stop a session, start one, and answer a permission prompt with yes or no. Success is never missing a session that waits on you, and never having to look to know where things stand.
+Kobi speaks up when a Claude Code session needs you, might be stuck, or finishes, and says what it got done. It takes voice commands back: send a session a prompt, ask what everyone is doing, stop a session, start one, and answer a permission prompt with yes or no. Success is never missing a session that waits on you, and never having to look to know where things stand.
 
 ## Positioning
 
@@ -22,11 +22,11 @@ A voice companion that lives beside Claude Code on the Mac: it hears the session
 
 ## Operating Context
 
-- Two parts in one repo: the Claude Code plugin (hooks, the decision logic for what to say, roll call and setup skills, a fallback voice) and Earshot for Mac (menu bar app: playback, listening, commands, approvals, the orb, the panel, Activity, Settings). The app is the product; the plugin's playback is frozen.
+- Two parts in one repo: the Claude Code plugin (hooks, the decision logic for what to say, roll call and setup skills, a fallback voice) and Kobi for Mac (menu bar app: playback, listening, commands, approvals, the orb, the panel, Activity, Settings). The app is the product; the plugin's playback is frozen.
 - The app installs, turns on, and updates the plugin through `claude plugin` commands.
-- Listening: hold-to-talk hotkey (Right Option by default), an opt-in "Hey Earshot" wake word, clicking the orb in Activity. Follow-up windows for "which one?" and permission prompts.
-- Full screen apps keep Earshot silent by default; calls hold its lines until they end.
-- History: what Earshot said and what you said, as text, kept 24 hours on the Mac by default (0600 file), or until quit, or off. Audio is never saved.
+- Listening: hold-to-talk hotkey (Right Option by default), an opt-in "Hey Kobi" wake word, clicking the orb in Activity. Follow-up windows for "which one?" and permission prompts.
+- Full screen apps keep Kobi silent by default; calls hold its lines until they end.
+- History: what Kobi said and what you said, as text, kept 24 hours on the Mac by default (0600 file), or until quit, or off. Audio is never saved.
 
 ## Capabilities and Constraints
 
@@ -37,8 +37,8 @@ A voice companion that lives beside Claude Code on the Mac: it hears the session
 
 ## Brand Commitments
 
-- Name: Earshot. Spoken lines and UI copy are plain and short, no em dashes, no hype.
-- The particle orb is the product's face: a turning sphere of points on dark glass that pulses with the mic while listening and with Earshot's voice while speaking. Blue while listening, violet while working, amber while speaking, unless the user picks one color. The orb is the hero wherever it appears.
+- Name: Kobi. Spoken lines and UI copy are plain and short, no em dashes, no hype.
+- The particle orb is the product's face: a turning sphere of points on dark glass that pulses with the mic while listening and with Kobi's voice while speaking. Blue while listening, violet while working, amber while speaking, unless the user picks one color. The orb is the hero wherever it appears.
 - The menu bar icon is a small dotted sphere drawn like the orb.
 
 ## Evidence on Hand
@@ -50,7 +50,7 @@ A voice companion that lives beside Claude Code on the Mac: it hears the session
 
 1. Never make the user look: what matters must be hearable, and what is shown must be readable at a glance.
 2. Act, don't just report: every surface leads to doing something (replay, answer, send, talk).
-3. Quiet by default: Earshot interrupts only for what needs the user, and steps back during calls and full screen.
+3. Quiet by default: Kobi interrupts only for what needs the user, and steps back during calls and full screen.
 4. Local and private first: the user's voice and words stay on the Mac unless they choose otherwise.
 
 ## Accessibility & Inclusion

@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-# fake-app.pl <socket> <log> <mode>: a stand-in for Earshot for Mac.
+# fake-app.pl <socket> <log> <mode>: a stand-in for Kobi for Mac.
 # Logs each message line; mode ok answers {"ok":true}, reject answers
 # {"ok":false}, silent never answers, late answers ok after 0.5 s.
 # Listens with a backlog of 32 like the real app, and handles each

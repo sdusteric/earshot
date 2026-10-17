@@ -1,9 +1,9 @@
 // Opens the default input with AVAudioEngine for N seconds, then exits.
-// Used by the seesAnotherAppOpenTheMic test as EARSHOT_TEST_MIC_HOG.
+// Used by the seesAnotherAppOpenTheMic test as KOBI_TEST_MIC_HOG.
 //
 // Compile once (a script run with `swift` starts too slowly for the test's wait):
 //   swiftc -O tests/mic-hog.swift -o /tmp/mic-hog
-//   EARSHOT_TEST_MIC_HOG=/tmp/mic-hog swift test --package-path app/EarshotKit --filter seesAnotherAppOpenTheMic
+//   KOBI_TEST_MIC_HOG=/tmp/mic-hog swift test --package-path app/KobiKit --filter seesAnotherAppOpenTheMic
 import AVFoundation
 import Foundation
 

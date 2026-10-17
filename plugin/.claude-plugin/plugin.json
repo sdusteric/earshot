@@ -1,6 +1,6 @@
 {
-  "name": "earshot",
-  "version": "0.11.0",
+  "name": "kobi",
+  "version": "0.12.0",
   "description": "Voice notifications for Claude Code: hear when it needs your OK, gets stuck, or finishes, and what it got done. Kokoro text-to-speech on your Mac, or ElevenLabs. macOS.",
   "author": {
     "name": "Eric Lee"

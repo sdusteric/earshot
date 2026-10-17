@@ -1,4 +1,4 @@
-// Is an app capturing from the microphone? Earshot holds its lines while one
+// Is an app capturing from the microphone? Kobi holds its lines while one
 // is, for example during a call or while you dictate with /voice.
 // Exit 0: an app is capturing. Exit 1: none is.
 // Exit 2: the input device is running, but this Mac (before macOS 14.2)

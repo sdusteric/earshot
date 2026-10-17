@@ -1,11 +1,11 @@
 ---
 name: rollcall
-description: Say what every open Claude Code session is doing, the sessions that need you first. Runs when the user types /earshot:rollcall.
+description: Say what every open Claude Code session is doing, the sessions that need you first. Runs when the user types /kobi:rollcall.
 disable-model-invocation: true
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh rollcall --print)
 ---
 
-Earshot is reading this roll call aloud:
+Kobi is reading this roll call aloud:
 
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/speak.sh rollcall --print`
 

@@ -1,13 +1,13 @@
 ---
 version: 1
-slug: "app-earshot-activityview-swift"
-primary_target: "app/Earshot/ActivityView.swift"
-related_targets: ["app/Earshot/BriefView.swift","app/Earshot/SessionView.swift","app/Earshot/DayTimeline.swift"]
+slug: "app-kobi-activityview-swift"
+primary_target: "app/Kobi/ActivityView.swift"
+related_targets: ["app/Kobi/BriefView.swift","app/Kobi/SessionView.swift","app/Kobi/DayTimeline.swift"]
 ---
 
 # Activity window
 
-Scope: the Activity window of Earshot for Mac (app/Earshot/ActivityView.swift and the views it uses: the brief, the session view, the day timeline). Visitor mode: Operate.
+Scope: the Activity window of Kobi for Mac (app/Kobi/ActivityView.swift and the views it uses: the brief, the session view, the day timeline). Visitor mode: Operate.
 
 Audience and job: a developer coming back to the Mac, or checking in mid-task. First: what needs me and how do I answer it, without opening a terminal. Then: what each session did, and a way into any one of them (read its last turns, answer, reply, or jump to its terminal).
 
@@ -19,7 +19,7 @@ Chosen direction: a fusion of "Since you left" (the roll's lead) and "Sessions i
 
 THESIS: Activity is an inbox for your sessions whose first page is a brief written for the moment you come back. It refuses both the old hero dial and the category default of a flat log with filters.
 
-OWN-WORLD: The orb's dark glass: ground #0b0d12 with raised #11141b and track #1c202b steps, system type with one semibold step, state colours that keep one meaning (orange needs you, blue working, green done, red failed, amber Earshot's voice, light blue your words). Native sidebar, buttons, text field.
+OWN-WORLD: The orb's dark glass: ground #0b0d12 with raised #11141b and track #1c202b steps, system type with one semibold step, state colours that keep one meaning (orange needs you, blue working, green done, red failed, amber Kobi's voice, light blue your words). Native sidebar, buttons, text field.
 
 STORY: The visitor sees who is waiting on them and answers right there (Allow, Deny, a reply), reads one plain line per session about what changed while away, and opens any session to read its last turns from its own transcript, reply, or bring its terminal forward.
 

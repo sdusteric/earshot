@@ -1,5 +1,5 @@
 #!/bin/bash
-# Earshot setup: chooses the engine and voice, builds the helpers, and plays a
+# Kobi setup: chooses the engine and voice, builds the helpers, and plays a
 # test line. Safe to run again, e.g. to change the voice.
 #
 #   setup.sh                        set up the saved engine, or Kokoro the first time
@@ -9,14 +9,14 @@
 #   setup.sh --key-file PATH        ElevenLabs: read the key from a file
 #   setup.sh --list-voices          print the voices for the engine, then stop
 #   setup.sh --status               print what is set up, then stop
-#   setup.sh --auto-update          let Claude Code update Earshot by itself
+#   setup.sh --auto-update          let Claude Code update Kobi by itself
 #   setup.sh --no-auto-update       turn that off again
-#   setup.sh --level LEVEL          how much Earshot says: quiet, normal or all
+#   setup.sh --level LEVEL          how much Kobi says: quiet, normal or all
 #   setup.sh --style STYLE          tone of the finished line: plain, upbeat or cheeky
 set -euo pipefail
 
-DIR=~/.config/earshot
-CONF=${EARSHOT_CONF:-$DIR/config}   # tests point this elsewhere
+DIR=~/.config/kobi
+CONF=${KOBI_CONF:-$DIR/config}   # tests point this elsewhere
 SCRIPTS=$(cd "$(dirname "$0")" && pwd)
 DEFAULT_VOICE=CwhRBWXzGAHq8TQ4Fs17   # Roger, a premade voice that works on every plan
 TMP=$(mktemp -d)
@@ -29,11 +29,11 @@ for t in jq curl afplay; do
   command -v $t >/dev/null || die "Missing $t. Install it (jq: brew install jq) and run setup again."
 done
 
-EARSHOT_KEY= EARSHOT_VOICE= EARSHOT_MODEL= EARSHOT_ENGINE= EARSHOT_KOKORO_VOICE= EARSHOT_SAY_VOICE=
+KOBI_KEY= KOBI_VOICE= KOBI_MODEL= KOBI_ENGINE= KOBI_KOKORO_VOICE= KOBI_SAY_VOICE=
 [ -f "$CONF" ] && . "$CONF"
-KEY=$EARSHOT_KEY VOICE=$EARSHOT_VOICE MODEL=${EARSHOT_MODEL:-eleven_v4_turbo}
-STATE_DIR=${EARSHOT_STATE_DIR:-$(getconf DARWIN_USER_TEMP_DIR)earshot}   # same folder as speak.sh
-TTS=${EARSHOT_KOKORO_DIR:-$DIR/kokoro}/earshot-tts   # build-tts.sh installs it there
+KEY=$KOBI_KEY VOICE=$KOBI_VOICE MODEL=${KOBI_MODEL:-eleven_v4_turbo}
+STATE_DIR=${KOBI_STATE_DIR:-$(getconf DARWIN_USER_TEMP_DIR)kobi}   # same folder as speak.sh
+TTS=${KOBI_KOKORO_DIR:-$DIR/kokoro}/kobi-tts   # build-tts.sh installs it there
 KOKORO_DEFAULT=af_heart
 
 key_src= voice_arg= engine_arg= mode=setup
@@ -59,7 +59,7 @@ done
 # key from before 0.9.0, else Kokoro. Giving a key means ElevenLabs.
 if [ -n "$engine_arg" ]; then ENGINE=$engine_arg
 elif [ -n "$key_src" ]; then ENGINE=elevenlabs
-elif [ -n "$EARSHOT_ENGINE" ]; then ENGINE=$EARSHOT_ENGINE
+elif [ -n "$KOBI_ENGINE" ]; then ENGINE=$KOBI_ENGINE
 elif [ -n "$KEY" ]; then ENGINE=elevenlabs
 else ENGINE=kokoro
 fi
@@ -138,24 +138,24 @@ explain() {
 
 SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 
-# Auto-update is a per-user setting: the autoUpdate flag on Earshot's entry in
+# Auto-update is a per-user setting: the autoUpdate flag on Kobi's entry in
 # extraKnownMarketplaces, the same flag the /plugin Marketplaces toggle writes.
 if [ "$mode" = autoupdate ]; then
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   jq empty "$SETTINGS" 2>/dev/null || die "$SETTINGS is not valid JSON. Fix it, then run this again."
   jq --argjson on "$au" '
-    .extraKnownMarketplaces.earshot.source //= {source: "github", repo: "sdusteric/earshot"}
-    | .extraKnownMarketplaces.earshot.autoUpdate = $on' "$SETTINGS" > "$SETTINGS.earshot-tmp" \
-    && cat "$SETTINGS.earshot-tmp" > "$SETTINGS" && rm -f "$SETTINGS.earshot-tmp"
+    .extraKnownMarketplaces.kobi.source //= {source: "github", repo: "sdusteric/earshot"}
+    | .extraKnownMarketplaces.kobi.autoUpdate = $on' "$SETTINGS" > "$SETTINGS.kobi-tmp" \
+    && cat "$SETTINGS.kobi-tmp" > "$SETTINGS" && rm -f "$SETTINGS.kobi-tmp"
   # Claude Code's own record, which the /plugin toggle also writes.
   KNOWN="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins}/known_marketplaces.json"
-  if jq -e '.earshot' "$KNOWN" >/dev/null 2>&1; then
-    jq --argjson on "$au" '.earshot.autoUpdate = $on' "$KNOWN" > "$KNOWN.earshot-tmp" && cat "$KNOWN.earshot-tmp" > "$KNOWN" && rm -f "$KNOWN.earshot-tmp"
+  if jq -e '.kobi' "$KNOWN" >/dev/null 2>&1; then
+    jq --argjson on "$au" '.kobi.autoUpdate = $on' "$KNOWN" > "$KNOWN.kobi-tmp" && cat "$KNOWN.kobi-tmp" > "$KNOWN" && rm -f "$KNOWN.kobi-tmp"
   fi
   if [ "$au" = true ]; then
-    echo "Auto-update is on. Claude Code now installs new Earshot versions by itself, a few minutes after a session starts."
+    echo "Auto-update is on. Claude Code now installs new Kobi versions by itself, a few minutes after a session starts."
   else
-    echo "Auto-update is off. To update, run: claude plugin update earshot@earshot"
+    echo "Auto-update is off. To update, run: claude plugin update kobi@kobi"
   fi
   exit 0
 fi
@@ -168,16 +168,16 @@ save_conf() {
   for ((i = 0; i < ${#a[@]}; i += 2)); do names+="${a[i]}|"; done
   ( umask 077
     { for ((i = 0; i < ${#a[@]}; i += 2)); do printf '%s=%q\n' "${a[i]}" "${a[i+1]}"; done
-      grep -E '^EARSHOT_' "$CONF" 2>/dev/null | grep -vE "^(${names%|})=" || true
+      grep -E '^KOBI_' "$CONF" 2>/dev/null | grep -vE "^(${names%|})=" || true
     } > "$CONF.tmp"
     mv "$CONF.tmp" "$CONF" )
 }
 
 if [ "$mode" = level ]; then
   case "$level" in quiet|normal|all) ;; *) die "Level must be quiet, normal or all." ;; esac
-  save_conf EARSHOT_LEVEL "$level"
+  save_conf KOBI_LEVEL "$level"
   case "$level" in
-    quiet) echo "Level: quiet. Earshot speaks only when it needs you, when it might be stuck, when something fails, and when Claude finishes." ;;
+    quiet) echo "Level: quiet. Kobi speaks only when it needs you, when it might be stuck, when something fails, and when Claude finishes." ;;
     normal) echo "Level: normal. Quiet, plus a short progress update every few minutes." ;;
     all) echo "Level: all. Normal, plus \"On it\" when your prompt arrives." ;;
   esac
@@ -186,7 +186,7 @@ fi
 
 if [ "$mode" = style ]; then
   case "$style" in plain|upbeat|cheeky) ;; *) die "Style must be plain, upbeat or cheeky." ;; esac
-  save_conf EARSHOT_STYLE "$style"
+  save_conf KOBI_STYLE "$style"
   case "$style" in
     plain) echo "Style: plain. The finished line says what Claude did, nothing extra." ;;
     upbeat) echo "Style: upbeat. The finished line adds a little encouragement. Alerts stay plain." ;;
@@ -203,35 +203,35 @@ fi
 if [ "$mode" = status ]; then
   echo "Config: $CONF"
   # No engine line and no key: the default, nothing chosen yet.
-  say_ok "Engine: $ENGINE$([ -z "$EARSHOT_ENGINE" ] && [ -z "$KEY" ] && echo " (not set up yet)")"
+  say_ok "Engine: $ENGINE$([ -z "$KOBI_ENGINE" ] && [ -z "$KEY" ] && echo " (not set up yet)")"
   why=$(kokoro_support)
   case "$ENGINE" in
     kokoro)
-      say_ok "Voice: ${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}"
-      if [ "${why%%,*}" = no ]; then say_ok "Kokoro helper: not available on this Mac. Earshot uses the Mac's own voice."
+      say_ok "Voice: ${KOBI_KOKORO_VOICE:-$KOKORO_DEFAULT}"
+      if [ "${why%%,*}" = no ]; then say_ok "Kokoro helper: not available on this Mac. Kobi uses the Mac's own voice."
       elif [ -e "$TTS.stale" ]; then say_ok "Kokoro helper: out of date, its rebuild after an update failed (run setup.sh --engine kokoro)"
       elif [ -x "$TTS" ]; then say_ok "Kokoro helper: built"
-      else say_ok "Kokoro helper: not built (run setup.sh --engine kokoro). Until then Earshot uses the Mac's own voice."; fi
+      else say_ok "Kokoro helper: not built (run setup.sh --engine kokoro). Until then Kobi uses the Mac's own voice."; fi
       pgrep -f "$TTS serve" >/dev/null && say_ok "Kokoro: loaded" || say_ok "Kokoro: not loaded (it loads with the next session or line)"
       [ -n "$KEY" ] && say_ok "ElevenLabs key: saved (setup.sh --engine elevenlabs switches back)" ;;
     elevenlabs)
       [ -n "$KEY" ] && say_ok "Key: saved" || say_ok "Key: missing"
       [ -n "$VOICE" ] && say_ok "Voice: $(voice_name "$VOICE") ($VOICE)" || say_ok "Voice: not chosen" ;;
-    say) say_ok "Voice: ${EARSHOT_SAY_VOICE:-the system voice}" ;;
+    say) say_ok "Voice: ${KOBI_SAY_VOICE:-the system voice}" ;;
   esac
   say_ok "Kokoro on this Mac: ${why:-yes}"
-  if [ -e "$DIR/mic-in-use.stale" ]; then say_ok "Microphone check: out of date, so Earshot doesn't wait during calls (run setup again to rebuild it)"
+  if [ -e "$DIR/mic-in-use.stale" ]; then say_ok "Microphone check: out of date, so Kobi doesn't wait during calls (run setup again to rebuild it)"
   elif [ -x "$DIR/mic-in-use" ]; then say_ok "Microphone check: built"
-  else say_ok "Microphone check: not built (Earshot won't stop when you talk or wait while you're on a call)"; fi
+  else say_ok "Microphone check: not built (Kobi won't stop when you talk or wait while you're on a call)"; fi
   [ "$(jq -r '.voice.enabled // .voiceEnabled // false' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)" = true ] \
-    && say_ok "/voice: on" || say_ok "/voice: off (Earshot stays quiet until you turn it on)"
-  case "$(jq -r '.extraKnownMarketplaces.earshot | if . == null then "none" elif .source.source == "directory" then "local" else (.autoUpdate // false | tostring) end' "$SETTINGS" 2>/dev/null)" in
+    && say_ok "/voice: on" || say_ok "/voice: off (Kobi stays quiet until you turn it on)"
+  case "$(jq -r '.extraKnownMarketplaces.kobi | if . == null then "none" elif .source.source == "directory" then "local" else (.autoUpdate // false | tostring) end' "$SETTINGS" 2>/dev/null)" in
     true) say_ok "Auto-update: on" ;;
-    local) say_ok "Auto-update: local folder. Claude Code runs a copy, so after a change run: claude plugin marketplace update earshot && claude plugin update earshot@earshot" ;;
+    local) say_ok "Auto-update: local folder. Claude Code runs a copy, so after a change run: claude plugin marketplace update kobi && claude plugin update kobi@kobi" ;;
     *) say_ok "Auto-update: off (turn it on: setup.sh --auto-update)" ;;
   esac
-  say_ok "Level: $(sed -n 's/^EARSHOT_LEVEL=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo normal)"
-  say_ok "Style: $(sed -n 's/^EARSHOT_STYLE=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo plain)"
+  say_ok "Level: $(sed -n 's/^KOBI_LEVEL=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo normal)"
+  say_ok "Style: $(sed -n 's/^KOBI_STYLE=//p' "$CONF" 2>/dev/null | tail -1 | grep . || echo plain)"
   [ -e "$DIR/mute" ] && say_ok "Muted: yes (rm $DIR/mute to unmute)"
   exit 0
 fi
@@ -280,7 +280,7 @@ Or run this script in Terminal so it can ask for the key."
 
   # Test the key and voice.
   local test_line tries=0 code
-  test_line='{"text":"Earshot is set up. Talk to you soon.","model_id":"'"$MODEL"'"}'
+  test_line='{"text":"Kobi is set up. Talk to you soon.","model_id":"'"$MODEL"'"}'
   while :; do
     code=$(api POST "/v1/text-to-speech/$VOICE" "$test_line")
     [ "$code" = 200 ] && break
@@ -294,8 +294,8 @@ Or run this script in Terminal so it can ask for the key."
   done
   mv "$TMP/body" "$TMP/test.mp3"
 
-  save_conf EARSHOT_ENGINE elevenlabs EARSHOT_KEY "$KEY" EARSHOT_VOICE "$VOICE" \
-    ${EARSHOT_MODEL:+EARSHOT_MODEL "$EARSHOT_MODEL"}
+  save_conf KOBI_ENGINE elevenlabs KOBI_KEY "$KEY" KOBI_VOICE "$VOICE" \
+    ${KOBI_MODEL:+KOBI_MODEL "$KOBI_MODEL"}
   echo "Saved your key and voice to $CONF (only you can read it)."
   TEST=$TMP/test.mp3
   DONE_MSG="Done. Voice: $(voice_name "$VOICE") (ElevenLabs)."
@@ -311,7 +311,7 @@ kokoro_label() {
 }
 
 pick_kokoro_voice() {
-  local list i=0 v choice def=${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}
+  local list i=0 v choice def=${KOBI_KOKORO_VOICE:-$KOKORO_DEFAULT}
   list=$(printf '%s\n' af_heart af_bella am_michael bm_george)
   echo; echo "Kokoro voices (setup.sh --engine kokoro --list-voices shows all):"
   while read -r v; do
@@ -330,12 +330,12 @@ pick_kokoro_voice() {
 kokoro_current() {
   local src=$SCRIPTS/../tts
   [ -x "$TTS" ] && [ ! -e "$TTS.stale" ] \
-    && [ "$(cat "$src/Package.swift" "$src/Package.resolved" "$src/Sources/earshot-tts/main.swift" | md5 -q)" \
+    && [ "$(cat "$src/Package.swift" "$src/Package.resolved" "$src/Sources/kobi-tts/main.swift" | md5 -q)" \
       = "$(cat "${TTS%/*}/source.md5" 2>/dev/null)" ]
 }
 
 setup_kokoro() {
-  KVOICE=${voice_arg:-${EARSHOT_KOKORO_VOICE:-$KOKORO_DEFAULT}}
+  KVOICE=${voice_arg:-${KOBI_KOKORO_VOICE:-$KOKORO_DEFAULT}}
   if [ -z "$voice_arg" ] && [ -t 0 ]; then pick_kokoro_voice; fi
   ( umask 077; mkdir -p "$STATE_DIR" )
   if ! kokoro_current; then
@@ -345,7 +345,7 @@ setup_kokoro() {
     # The same lock as the rebuild that hooks start after an update, so the
     # two never write the helper at once. This waits for that one to finish.
     local rc=0
-    lockf -k -t 900 "$STATE_DIR/tts-build.lock" bash "${EARSHOT_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 || rc=$?
+    lockf -k -t 900 "$STATE_DIR/tts-build.lock" bash "${KOBI_BUILD_TTS:-$SCRIPTS/build-tts.sh}" >&2 || rc=$?
     [ "$rc" = 75 ] && die "Another build of the Kokoro helper is still running. Try setup again in a few minutes."
     [ "$rc" = 0 ] || die "Setup stopped. Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
   fi
@@ -362,20 +362,20 @@ setup_kokoro() {
     3) echo "Note: the backup voice model didn't download ($(tail -1 "$TMP/err")). Kokoro works. A line it can't say uses the Mac's own voice until you run setup again." ;;
     *) die "Kokoro couldn't load: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs" ;;
   esac
-  printf 'Earshot is set up. Talk to you soon.' \
+  printf 'Kobi is set up. Talk to you soon.' \
     | "$TTS" speak --socket "$STATE_DIR/kokoro.sock" --voice "$KVOICE" --out "$TMP/test.wav" --timeout 600 2>"$TMP/err" \
     || die "Kokoro couldn't make the test line: $(tail -1 "$TMP/err"). Nothing was saved. To use ElevenLabs instead, run: setup.sh --engine elevenlabs"
-  save_conf EARSHOT_ENGINE kokoro EARSHOT_KOKORO_VOICE "$KVOICE"
+  save_conf KOBI_ENGINE kokoro KOBI_KOKORO_VOICE "$KVOICE"
   TEST=$TMP/test.wav
   DONE_MSG="Done. Voice: $KVOICE (Kokoro, on this Mac: free, and your lines stay on it)."
 }
 
 # --- The Mac's own voice -----------------------------------------------------
 setup_say() {
-  local v=${voice_arg:-$EARSHOT_SAY_VOICE}
-  printf 'Earshot is set up. Talk to you soon.' > "$TMP/line"
+  local v=${voice_arg:-$KOBI_SAY_VOICE}
+  printf 'Kobi is set up. Talk to you soon.' > "$TMP/line"
   say ${v:+-v "$v"} -f "$TMP/line" -o "$TMP/test.aiff" || die "say couldn't make the test line. Nothing was saved."
-  save_conf EARSHOT_ENGINE say EARSHOT_SAY_VOICE "$v"
+  save_conf KOBI_ENGINE say KOBI_SAY_VOICE "$v"
   TEST=$TMP/test.aiff
   DONE_MSG="Done. Voice: ${v:-the system voice} (the Mac's own voice)."
 }
@@ -386,14 +386,14 @@ pick_engine() {
   why=$(kokoro_support)
   if [ "${why%%,*}" = no ]; then
     echo "Kokoro can't run on this Mac: ${why#*, }."
-    echo "Which voice should Earshot use?"
+    echo "Which voice should Kobi use?"
     echo "  1) ElevenLabs: natural voices, needs an API key, about \$8 a month$([ "$ENGINE" = elevenlabs ] && echo "  (current)")"
     echo "  2) The Mac's own voice: free and built in, but sounds robotic$([ "$ENGINE" = say ] && echo "  (current)")"
     read -rp "1 or 2: " choice
     case "$choice" in 2) ENGINE=say ;; *) ENGINE=elevenlabs ;; esac
     return
   fi
-  echo "Which voice should Earshot use?"
+  echo "Which voice should Kobi use?"
   echo "  1) Kokoro: free, runs on this Mac, and your lines never leave it$([ "$ENGINE" = kokoro ] && echo "  (current)")"
   echo "  2) ElevenLabs: more expressive, needs an API key, about \$8 a month$([ "$ENGINE" = elevenlabs ] && echo "  (current)")"
   read -rp "1 or 2, or Enter for $ENGINE: " choice
@@ -410,10 +410,10 @@ esac
 if command -v swiftc >/dev/null; then
   swiftc -O "$SCRIPTS/mic-in-use.swift" -o "$DIR/mic-in-use" 2>/dev/null \
     && rm -f "$DIR/mic-in-use.stale" \
-    && echo "Built the microphone check, so Earshot stops talking when you start and waits while you're on a call." \
-    || echo "Couldn't build the microphone check. Earshot still works but won't stop when you talk."
+    && echo "Built the microphone check, so Kobi stops talking when you start and waits while you're on a call." \
+    || echo "Couldn't build the microphone check. Kobi still works but won't stop when you talk."
 else
-  echo "swiftc not found (xcode-select --install), so Earshot won't stop when you talk. Everything else works."
+  echo "swiftc not found (xcode-select --install), so Kobi won't stop when you talk. Everything else works."
 fi
 
 # Everything is saved by now, so a Mac that can't play sound is not a failed setup.

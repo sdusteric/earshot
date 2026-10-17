@@ -1,6 +1,6 @@
-# Releasing Earshot for Mac
+# Releasing Kobi for Mac
 
-This is the checklist for a signed, notarized release of Earshot for Mac that updates
+This is the checklist for a signed, notarized release of Kobi for Mac that updates
 itself with Sparkle. Steps 1 to 3 happen once per Mac. Steps 4 to 8 happen for every release.
 
 `scripts/release-app.sh` does the build work. It checks every prerequisite first and
@@ -37,16 +37,16 @@ Keychain Access as a .p12 file and import it there.
 
 1. Create an app-specific password at account.apple.com > Sign-In and Security >
    App-Specific Passwords.
-2. Store it in the keychain under the profile name `earshot`:
+2. Store it in the keychain under the profile name `kobi`:
 
    ```
-   xcrun notarytool store-credentials earshot --apple-id <your Apple ID> --team-id 8N9KUZLT8N
+   xcrun notarytool store-credentials kobi --apple-id <your Apple ID> --team-id 8N9KUZLT8N
    ```
 
    It asks for the app-specific password.
 
 An App Store Connect API key works too:
-`xcrun notarytool store-credentials earshot --key AuthKey_XXXX.p8 --key-id <id> --issuer <issuer id>`.
+`xcrun notarytool store-credentials kobi --key AuthKey_XXXX.p8 --key-id <id> --issuer <issuer id>`.
 
 To use another profile name, set `NOTARY_PROFILE=<name>` when you run the script.
 
@@ -59,14 +59,14 @@ the app. Make the keys once and keep the private key safe.
 
    ```
    cd app && xcodegen generate && xcodebuild -resolvePackageDependencies \
-     -project Earshot.xcodeproj -scheme Earshot -clonedSourcePackagesDirPath build/SourcePackages
+     -project Kobi.xcodeproj -scheme Kobi -clonedSourcePackagesDirPath build/SourcePackages
    ```
 
 2. Run `app/build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys`.
    It saves the private key in the login keychain and prints the public key.
 3. In `app/project.yml`, replace `SPARKLE_PUBLIC_KEY_NOT_SET` with the public key
    (44 characters of base64). Commit the change. The public key is safe to publish.
-4. Back up the private key: `generate_keys -x ~/Desktop/earshot-sparkle-key`, move
+4. Back up the private key: `generate_keys -x ~/Desktop/kobi-sparkle-key`, move
    the file into a password manager, and delete it. Never commit it.
    To use the key on another Mac, run `generate_keys -f <file>` there.
 
@@ -124,13 +124,13 @@ The script then:
    signature (`codesign --verify --deep --strict`), Developer ID, hardened runtime,
    secure timestamp, the microphone entitlement, no `get-task-allow`, and that the
    version, build, feed URL and public key in Info.plist match `project.yml`.
-3. Notarizes the app with `xcrun notarytool submit --keychain-profile earshot --wait`,
+3. Notarizes the app with `xcrun notarytool submit --keychain-profile kobi --wait`,
    staples the ticket, and checks it with `spctl`.
-4. Makes `Earshot-<version>.zip` for Sparkle and `Earshot-<version>.dmg` for people
+4. Makes `Kobi-<version>.zip` for Sparkle and `Kobi-<version>.dmg` for people
    and Homebrew. It signs, notarizes and staples the DMG too.
 5. Signs the zip with Sparkle's `sign_update` and verifies the signature.
 6. Adds an item for this release to `packaging/appcast.xml` and writes the DMG's
-   version and checksum into `packaging/earshot.rb`.
+   version and checksum into `packaging/kobi.rb`.
 
 Everything lands in `app/build/release`. If notarization fails, Apple's log is saved
 next to it as `notary-app-log.json` or `notary-dmg-log.json`.
@@ -142,11 +142,11 @@ so the feed only goes live once the files it points to exist:
 
 ```
 git push origin main
-gh release create app-v<version> app/build/release/Earshot-<version>.dmg \
-  app/build/release/Earshot-<version>.zip --repo sdusteric/earshot --target <commit> \
-  --title "Earshot for Mac <version>" --latest=false --notes-file app/build/release/release-notes.md
-git add packaging/appcast.xml packaging/earshot.rb
-git commit -m "Earshot for Mac <version>: appcast and cask"
+gh release create app-v<version> app/build/release/Kobi-<version>.dmg \
+  app/build/release/Kobi-<version>.zip --repo sdusteric/earshot --target <commit> \
+  --title "Kobi for Mac <version>" --latest=false --notes-file app/build/release/release-notes.md
+git add packaging/appcast.xml packaging/kobi.rb
+git commit -m "Kobi for Mac <version>: appcast and cask"
 git push origin main
 ```
 
@@ -168,21 +168,21 @@ file updated until most people have that release.
 
 ### 8. Update the Homebrew cask
 
-The tap is a separate repo, `sdusteric/homebrew-earshot`, with the cask at
-`Casks/earshot.rb`. Create it once with `gh repo create sdusteric/homebrew-earshot --public`.
+The tap is a separate repo, `sdusteric/homebrew-kobi`, with the cask at
+`Casks/kobi.rb`. Create it once with `gh repo create sdusteric/homebrew-kobi --public`.
 
-1. Copy `packaging/earshot.rb` (now with the new version and sha256) to
-   `Casks/earshot.rb` in the tap, commit, and push.
-2. Check it: `brew tap sdusteric/earshot`, then
-   `brew audit --cask --new --online sdusteric/earshot/earshot` for the first version
-   (`--online` alone for later ones), then `brew install --cask sdusteric/earshot/earshot`.
+1. Copy `packaging/kobi.rb` (now with the new version and sha256) to
+   `Casks/kobi.rb` in the tap, commit, and push.
+2. Check it: `brew tap sdusteric/kobi`, then
+   `brew audit --cask --new --online sdusteric/kobi/kobi` for the first version
+   (`--online` alone for later ones), then `brew install --cask sdusteric/kobi/kobi`.
 
 The cask quits the app on uninstall (`uninstall quit`). `brew uninstall --zap` also removes the
 app's own files and the listening models in `~/Library/Application Support/FluidAudio`. It
-leaves `~/.cache/fluidaudio` (the Kokoro voice) and `~/.config/earshot` (settings and the
+leaves `~/.cache/fluidaudio` (the Kokoro voice) and `~/.config/kobi` (settings and the
 ElevenLabs key) because the plugin uses them too.
 
-People install it with `brew install --cask sdusteric/earshot/earshot`. The cask
+People install it with `brew install --cask sdusteric/kobi/kobi`. The cask
 says `auto_updates true`, so Sparkle updates it and `brew upgrade` leaves it alone.
 
 To fill in a cask by hand: `bash scripts/release-app.sh --update-cask <dmg> <version>`.
@@ -192,12 +192,12 @@ To fill in a cask by hand: `bash scripts/release-app.sh --update-cask <dmg> <ver
 - `THIRD_PARTY_NOTICES.md` at the repo root is copied into the app's Resources by
   `app/project.yml`. When you change the Sparkle or FluidAudio version, or the models the
   app downloads, update that file and check each license again.
-- `app/project.yml` holds the usage strings macOS shows when Earshot first opens a project
+- `app/project.yml` holds the usage strings macOS shows when Kobi first opens a project
   in Documents, Desktop, Downloads, or on an external or network volume.
-- `app/EarshotKit/Package.resolved` lists Sparkle as well as FluidAudio. Xcode writes the
+- `app/KobiKit/Package.resolved` lists Sparkle as well as FluidAudio. Xcode writes the
   app's Sparkle pin into this file, so `Package.swift` declares the same Sparkle version to
   make `swift package resolve` write the same result. When you change the Sparkle version in
-  `app/project.yml`, change it in `app/EarshotKit/Package.swift` too and commit the updated
+  `app/project.yml`, change it in `app/KobiKit/Package.swift` too and commit the updated
   `Package.resolved`. If the file shows as modified before a release, a version differs.
 - The app is Apple Silicon only (decided 2026-10-13): `project.yml` sets `ARCHS: arm64` and the
   cask says `depends_on arch: :arm64`. The plugin's Kokoro build refuses Intel, and nobody has
@@ -205,9 +205,9 @@ To fill in a cask by hand: `bash scripts/release-app.sh --update-cask <dmg> <ver
 
 ## The plugin and the app
 
-The app talks to the Claude Code plugin and needs plugin `0.11.0` or newer. The
+The app talks to the Claude Code plugin and needs plugin `0.12.0` or newer (the first named kobi). The
 minimum is `PluginLink.minimumVersion` in
-`app/EarshotKit/Sources/EarshotKit/Sessions/PluginLink.swift`. People get the plugin
+`app/KobiKit/Sources/KobiKit/Sessions/PluginLink.swift`. People get the plugin
 from this repo's marketplace (`sdusteric/earshot`), and the app offers an update when
 theirs is older.
 
@@ -224,5 +224,5 @@ theirs is older.
   open it, and drag the app to Applications. It should open without a Gatekeeper warning.
 - With the previous version installed, choose Check for Updates in the menu. It should
   offer the new version and install it.
-- `spctl --assess --type execute -vv /Applications/Earshot.app` should print
+- `spctl --assess --type execute -vv /Applications/Kobi.app` should print
   `source=Notarized Developer ID`.

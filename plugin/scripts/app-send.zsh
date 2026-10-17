@@ -1,5 +1,5 @@
 #!/bin/zsh -f
-# app-send.zsh <socket> '<json>': hands one message to Earshot for Mac and
+# app-send.zsh <socket> '<json>': hands one message to Kobi for Mac and
 # waits at most 0.2 s for its answer. Exit 0 only when the app answered ok.
 # zsh, because its socket module and fractional read timeout come with macOS.
 # The message gets "sent" (epoch ms), so an app that reads it after this gave

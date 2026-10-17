@@ -1,16 +1,16 @@
 // swift-tools-version: 6.0
-// earshot-tts: Kokoro speech for Earshot. scripts/build-tts.sh builds it.
+// kobi-tts: Kokoro speech for Kobi. scripts/build-tts.sh builds it.
 import PackageDescription
 
 let package = Package(
-    name: "earshot-tts",
+    name: "kobi-tts",
     platforms: [.macOS(.v15)],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7"),
     ],
     targets: [
         .executableTarget(
-            name: "earshot-tts",
+            name: "kobi-tts",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]
         ),
     ],

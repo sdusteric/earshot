@@ -1,7 +1,7 @@
 # Third-party notices
 
-Earshot for Mac uses the software and models below. Each keeps its own license. This file
-gives the credit and license text those licenses ask for. Earshot's own license is in
+Kobi for Mac uses the software and models below. Each keeps its own license. This file
+gives the credit and license text those licenses ask for. Kobi's own license is in
 [LICENSE](LICENSE).
 
 ## Software built into the app
@@ -19,7 +19,7 @@ https://github.com/FluidInference/FluidAudio/tree/main/ThirdPartyLicenses.
 
 ## Models downloaded on first run
 
-Earshot does not ship these models. It downloads them from Hugging Face the first time you use
+Kobi does not ship these models. It downloads them from Hugging Face the first time you use
 listening or the Kokoro voice (see [PRIVACY.md](PRIVACY.md)). They are Core ML conversions made by
 FluidInference, which means they are changed copies of the original models.
 
@@ -33,7 +33,7 @@ FluidInference, which means they are changed copies of the original models.
 Notes on the licenses, as listed on each model card when this file was written:
 
 - The two Parakeet models are licensed under Creative Commons Attribution 4.0 (CC BY 4.0).
-  NVIDIA is the original author. FluidInference converted them to Core ML. Earshot uses the
+  NVIDIA is the original author. FluidInference converted them to Core ML. Kobi uses the
   converted files as they are.
 - The Kokoro voices (for example `af_heart`) are part of the Kokoro-82M release under the
   Apache License 2.0. The Core ML conversion also draws on mattmireles/kokoro-coreml
@@ -43,7 +43,7 @@ Notes on the licenses, as listed on each model card when this file was written:
 ## Optional services
 
 ElevenLabs is a separate service you can choose as the voice. Its terms are between you and
-ElevenLabs. Earshot includes none of its software or voices.
+ElevenLabs. Kobi includes none of its software or voices.
 
 ---
 

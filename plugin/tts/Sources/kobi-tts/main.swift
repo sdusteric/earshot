@@ -1,19 +1,19 @@
-// earshot-tts: Kokoro speech for Earshot, on this Mac.
+// kobi-tts: Kokoro speech for Kobi, on this Mac.
 //
-//   earshot-tts speak --socket PATH --out FILE [--voice NAME] [--timeout SECS]
+//   kobi-tts speak --socket PATH --out FILE [--voice NAME] [--timeout SECS]
 //       Reads one line from stdin and writes it to FILE as a WAV. Asks the
 //       server on PATH. When none answers, it starts one and asks again, and
 //       when that fails too, it makes the line itself. Exit 0: FILE is ready.
-//   earshot-tts serve --socket PATH
+//   kobi-tts serve --socket PATH
 //       Keeps Kokoro loaded and answers on PATH, one request at a time. Exits
-//       after EARSHOT_KOKORO_IDLE_SECS (default 600) without a request, and
-//       when one request takes over EARSHOT_KOKORO_REQUEST_SECS (default 15),
+//       after KOBI_KOKORO_IDLE_SECS (default 600) without a request, and
+//       when one request takes over KOBI_KOKORO_REQUEST_SECS (default 15),
 //       so a hung Core ML call does not block every later line.
-//   earshot-tts prepare [--voice NAME]
+//   kobi-tts prepare [--voice NAME]
 //       Loads both runtimes and the voice once, downloading what is missing.
 //       Setup and the rebuild after an update run it, so the legacy retry
 //       never downloads while you work. Exit 3: only the legacy runtime failed.
-//   earshot-tts voices
+//   kobi-tts voices
 //       The English voices, one per line.
 //
 // A request is one line of JSON each way:
@@ -163,8 +163,8 @@ func serve(_ path: String) async -> Never {
         fail("Kokoro didn't load: \(error)")
     }
     await speaker.warmUp()
-    let idleMs = Int32(min(Int(env["EARSHOT_KOKORO_IDLE_SECS"] ?? "") ?? 600, 86_400) * 1000)
-    let requestLimit = Double(env["EARSHOT_KOKORO_REQUEST_SECS"] ?? "") ?? 15
+    let idleMs = Int32(min(Int(env["KOBI_KOKORO_IDLE_SECS"] ?? "") ?? 600, 86_400) * 1000)
+    let requestLimit = Double(env["KOBI_KOKORO_REQUEST_SECS"] ?? "") ?? 15
     while true {
         var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let ready = poll(&pfd, 1, idleMs)
@@ -243,7 +243,7 @@ func startServer(_ socketPath: String) {
 
 func speakCommand() async -> Never {
     guard let socketPath = option("--socket"), let out = option("--out") else {
-        fail("Usage: earshot-tts speak --socket PATH --out FILE [--voice NAME] [--timeout SECS]")
+        fail("Usage: kobi-tts speak --socket PATH --out FILE [--voice NAME] [--timeout SECS]")
     }
     // The server runs in another folder, so a relative path means ours.
     let outPath = URL(fileURLWithPath: out).standardizedFileURL.path
@@ -297,7 +297,7 @@ signal(SIGPIPE, SIG_IGN)
 switch CommandLine.arguments.dropFirst().first {
 case "speak": await speakCommand()
 case "serve":
-    guard let socketPath = option("--socket") else { fail("Usage: earshot-tts serve --socket PATH") }
+    guard let socketPath = option("--socket") else { fail("Usage: kobi-tts serve --socket PATH") }
     await serve(socketPath)
 case "prepare":
     let voice = option("--voice") ?? defaultVoice
@@ -309,5 +309,5 @@ case "prepare":
     }
     print("ready")
 case "voices": KokoroAneConstants.englishVoices.forEach { print($0) }
-default: fail("Usage: earshot-tts speak|serve|voices (see the comment at the top of main.swift)")
+default: fail("Usage: kobi-tts speak|serve|voices (see the comment at the top of main.swift)")
 }

@@ -1,5 +1,5 @@
 ---
-name: Earshot
+name: Kobi
 description: A voice that tells you which Claude Code session needs you, with an Activity window that works as an inbox of sessions on the orb's cool near-black glass and shows the day as a slim timeline strip.
 colors:
   ground: "#0b0d12"
@@ -106,13 +106,13 @@ components:
     size: "96px"
 ---
 
-# Design System: Earshot
+# Design System: Kobi
 
 ## Overview
 
 **Creative North Star: "The Orb's Glass"**
 
-Earshot is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (light blue for your words, violet for working, amber for Earshot's voice, orange for what needs you). The Activity window always renders dark, whatever the system appearance, because the light points need a dark backing.
+Kobi is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (light blue for your words, violet for working, amber for Kobi's voice, orange for what needs you). The Activity window always renders dark, whatever the system appearance, because the light points need a dark backing.
 
 The Activity window is an inbox for your sessions. A native sidebar lists the brief ("Since You Left"), today's history, and every session grouped by what it needs from you. The first page is the brief, written for the moment you come back: who is waiting on you, with the question and the answer controls right there, one line per session about what changed, and what you asked. Selecting a session swaps the detail for that session's own view: its last turns from its transcript, what it waits on you for, and a reply field. The day runs along the bottom of the brief as a slim timeline strip, the one custom drawn object besides the orb.
 
@@ -131,7 +131,7 @@ A dark, cool ground with one bright blue, one amber, and the macOS system status
 
 ### Primary
 - **You Blue** (#63c4ff): what you said. The "You" label on your turns in a session, timeline dots for lines you spoke, and the orb while listening. Source: `ActivityPalette.you`, `OrbMode.listening`.
-- **Voice Amber** (#ffbd6b): Earshot's own voice. The orb while speaking, the "now" label at the right end of the timeline, the shaded stretch since you last looked, and dots and session-view lines for Earshot's ordinary spoken lines. Source: `ActivityPalette.voice`, `OrbMode.speaking`.
+- **Voice Amber** (#ffbd6b): Kobi's own voice. The orb while speaking, the "now" label at the right end of the timeline, the shaded stretch since you last looked, and dots and session-view lines for Kobi's ordinary spoken lines. Source: `ActivityPalette.voice`, `OrbMode.speaking`.
 
 ### Secondary
 - **Working Violet** (#ab8fff): the orb while it transcribes or works on a command. Source: `OrbMode.working`.
@@ -155,9 +155,9 @@ Text uses the system label colors: primary for content, secondary for everything
 The orb's color can be set by the user (blue, purple, orange, green, pink, white) or left to follow state. The state mapping above is the default.
 
 ### Named Rules
-**The One Meaning Rule.** A hue has one job. Light blue is you, amber is Earshot, violet is working, and orange, red, green, system blue are session states. Do not use them as accents.
+**The One Meaning Rule.** A hue has one job. Light blue is you, amber is Kobi, violet is working, and orange, red, green, system blue are session states. Do not use them as accents.
 
-**The Amber Is Earshot Rule.** Amber marks Earshot's own voice and the stretch since you last looked. It does not mark warnings; orange does.
+**The Amber Is Kobi Rule.** Amber marks Kobi's own voice and the stretch since you last looked. It does not mark warnings; orange does.
 
 **The Secondary Floor Rule.** Text that carries information on Ground uses the secondary label color or brighter. Tertiary text measures about 2.2:1 on #0b0d12 and is too faint to read.
 
@@ -174,7 +174,7 @@ The orb's color can be set by the user (blue, purple, orange, green, pink, white
 - **Title** (system `title2` semibold for the session header name, `title3` semibold for names on waiting cards).
 - **Headline** (system `headline`, semibold): section heads in the brief ("Waiting on You", "While You Were Away", "What You Asked"), "Progress Notes" in a session, and headings inside Claude's messages.
 - **Body** (system `body`, line spacing 2): Claude's and your turns, questions on waiting cards. Session names use medium in the sidebar and semibold in away rows.
-- **Callout** (system `callout`): sidebar second lines, away-row times, job notes, Earshot's lines in a session, table cells, the subline under the recap.
+- **Callout** (system `callout`): sidebar second lines, away-row times, job notes, Kobi's lines in a session, table cells, the subline under the recap.
 - **Label** (system `caption` and `caption2`): "You" and "Claude" in caption semibold, turn times and sidebar ages in caption with monospaced digits, the composer hint, the timeline's hour labels (caption2, monospaced digits) and "now" (caption2 semibold).
 - **Code** (system monospaced at callout size): fenced code in Claude's messages, in secondary color.
 
@@ -217,15 +217,15 @@ The menu bar icon is a small dotted sphere, the orb's shape, in black template p
 ## Components
 
 ### Day Timeline (signature)
-The last 24 hours as a slim strip along the bottom of the brief: the old dial unrolled, with now at the right end. A 16pt Track pill holds a dot per line at its time, in the line's color (light blue for what you said, orange for lines that ask you, red for alerts, green for done, amber for the rest of Earshot's voice). Lines within 14pt of each other draw as one dot, the newest standing for the rest. The stretch since you last looked (when longer than a minute) is shaded Voice Amber at 13%, starting at a 1.5pt amber line at 70%. Clock labels sit every 6 hours below the track in Hour Label, dropped within 3 hours of now, and "now" sits at the right end in amber.
+The last 24 hours as a slim strip along the bottom of the brief: the old dial unrolled, with now at the right end. A 16pt Track pill holds a dot per line at its time, in the line's color (light blue for what you said, orange for lines that ask you, red for alerts, green for done, amber for the rest of Kobi's voice). Lines within 14pt of each other draw as one dot, the newest standing for the rest. The stretch since you last looked (when longer than a minute) is shaded Voice Amber at 13%, starting at a 1.5pt amber line at 70%. Clock labels sit every 6 hours below the track in Hour Label, dropped within 3 hours of now, and "now" sits at the right end in amber.
 
 Interactions:
 - Hover within 10pt of a dot to read its line in the callout: 260pt wide, up to 3 lines of callout text, then session, time and "+N more" in caption secondary.
 - Click a dot to open its session, or Today's History for a line with no session.
-- VoiceOver reads one summary of the day (how often Earshot spoke and you asked), since the strip draws in a canvas.
+- VoiceOver reads one summary of the day (how often Kobi spoke and you asked), since the strip draws in a canvas.
 
 ### Orb
-A particle sphere that changes color over 0.25 seconds between states (blue listening, violet working, amber speaking), with a soft radial glow and breathing. Floating panel: 112pt on dark glass, with a caption 6pt under it (above it when the orb sits low): its own dark glass with a black 35% wash, 14pt by 8pt padding, a radius of half its height up to 16pt, at most 340pt wide and two lines of callout. A 6pt dot in You Blue or Voice Amber, then "Listening" in secondary, your words in quotes, or Earshot's line, in primary. Once Earshot finishes, the orb turns slowly to rest and stays 3.5 seconds with its caption, then both fade out together (OrbPanel.linger). With nothing heard, both go at once. Brief masthead: 96pt on a black disc, resting white, turning slowly while idle. Clicking it listens for one command (VoiceOver: a button named "Talk" with the hint "Listens for one command").
+A particle sphere that changes color over 0.25 seconds between states (blue listening, violet working, amber speaking), with a soft radial glow and breathing. Floating panel: 112pt on dark glass, with a caption 6pt under it (above it when the orb sits low): its own dark glass with a black 35% wash, 14pt by 8pt padding, a radius of half its height up to 16pt, at most 340pt wide and two lines of callout. A 6pt dot in You Blue or Voice Amber, then "Listening" in secondary, your words in quotes, or Kobi's line, in primary. Once Kobi finishes, the orb turns slowly to rest and stays 3.5 seconds with its caption, then both fade out together (OrbPanel.linger). With nothing heard, both go at once. Brief masthead: 96pt on a black disc, resting white, turning slowly while idle. Clicking it listens for one command (VoiceOver: a button named "Talk" with the hint "Listens for one command").
 
 ### Brief masthead
 The orb, 22pt of space, then the recap (24pt semibold), a callout secondary subline ("You were away 8 hours. 2 sessions are still working."), and the system buttons "Talk" and "Say the Recap". When Talk cannot be heard, the reason sits beside the buttons in callout secondary.
@@ -240,24 +240,24 @@ One card per thing waiting on you, under the "Waiting on You" headline. Raised f
 One row per session that changed since you looked, under "While You Were Away" ("Right Now" when you have only just left). An 8pt state dot, the name in semibold in a 150pt column, a lead in primary ("Finished.", "Working, 12 minutes in.", "Might be stuck.", "Hit an error.") followed by the newest line or transcript turn in secondary (2 lines max), and the time in callout secondary with monospaced digits. 10pt vertical and 8pt horizontal padding, Track dividers between rows, hover fill of primary at 5% in a 6pt rounded rectangle. Clicking opens the session.
 
 ### What You Asked
-The last three things you said since you left, as history rows: a symbol, your words in quotes, Earshot's reply in callout secondary, session and time, and a replay button.
+The last three things you said since you left, as history rows: a symbol, your words in quotes, Kobi's reply in callout secondary, session and time, and a replay button.
 
 ### Session view
 - **Header:** a 9pt state dot, the name in title2 semibold, the state word (orange when it needs you, secondary otherwise), the folder in callout secondary truncated at the head, and at the right a system button with the window symbol: "Show in <app>" for a session in a terminal window, "Open in Terminal" for a background session.
 - **Turns:** read from the session's own transcript and refreshed every few seconds. Each turn has "You" (caption semibold, You Blue) or "Claude" (caption semibold, secondary) with its time, then the message. Claude's markdown is rendered: `#` lines as headlines, inline bold, code and links styled, fenced code in a Raised block (monospaced callout, secondary, 8pt radius), and tables as a grid (header row semibold primary, cells secondary, a Track divider under the header, Raised fill, 8pt radius, 12pt padding). Text is selectable.
 - **Job notes:** a background job's notes read as one log under a single "Progress Notes" headline: a 72pt time column in monospaced callout secondary, then the note in callout secondary. No speaker label.
 - **Work lines:** a hammer symbol and the summary in callout secondary.
-- **Earshot's lines:** in time order among the turns, with a waveform symbol and the text in the line's color, plus a replay button.
+- **Kobi's lines:** in time order among the turns, with a waveform symbol and the text in the line's color, plus a replay button.
 - **Pending box:** what the session waits on you for, at the end of the conversation. Raised, 12pt radius, 14pt padding, full width, 1pt orange border at 35%. A permission prompt shows its sentence in medium with Deny and Allow; a question shows it in medium with "Type your answer below" or its choices and "Pick an Answer in <app>".
 - **Reply field:** a plain, growing text field (1 to 6 lines) on Raised with a 9pt radius and 1pt Track border that turns to the accent color at 60% while focused, then "Send" (Command-Return). Under it, a caption secondary hint or the result of the last send.
 
 ### Sidebar session row
-An 8pt state dot, the name in medium, the age at the right in caption monospaced secondary ("now", "4m", "2h"), and one line under it in callout secondary: the last thing Earshot said about it, or Claude Code's title for it. Two sessions with the same name add "Started <time>" to tell them apart.
+An 8pt state dot, the name in medium, the age at the right in caption monospaced secondary ("now", "4m", "2h"), and one line under it in callout secondary: the last thing Kobi said about it, or Claude Code's title for it. Two sessions with the same name add "Started <time>" to tell them apart.
 
 ### Menu bar panel
 A compact panel that always renders dark on Ground, whatever the system appearance, so its waiting cards and state colors read exactly as they do in Activity, and opening Activity from it never changes the ground.
 
-- **Header:** the menu icon tinted by the orb's state color (blue listening, violet working, amber speaking or holding lines, secondary when muted), "Earshot" in headline, the status line in callout secondary, then a Talk button (mic symbol) and the mute menu.
+- **Header:** the menu icon tinted by the orb's state color (blue listening, violet working, amber speaking or holding lines, secondary when muted), "Kobi" in headline, the status line in callout secondary, then a Talk button (mic symbol) and the mute menu.
 - **Waiting on You** comes first whenever anything waits, with its count in orange. Up to three compact waiting cards (Raised, 12pt radius, 12pt padding, 1pt orange border at 35%), then "N more waiting in Activity". Each card's top line is an 8pt orange dot, the name in body semibold, and the wait in callout secondary ("4m"). A permission prompt says what it wants in callout ("Wants to run the migration") above "Open Session", Deny and Allow; Return allows only when that prompt is the only thing waiting. A question shows itself in callout and a one-line rounded-border field ("Answer <session>") with Send; a question with fixed choices lists them in callout secondary and offers "Pick an Answer in <app>" instead.
 - **Sessions:** ranked (needs you, then stuck or failed, then working, then the rest), leaving out the ones in waiting cards; only the first five show, followed by an "N more in Activity" link. Each row: an 8pt state dot, name in body medium, state in callout (orange when it needs you), last line in callout secondary (2 lines max), and a hover fill of primary at 5% in a 6pt rounded rectangle. Clicking a row opens that session in Activity.
 - Section titles are subheadline semibold secondary; counts beside them are secondary, or orange for what waits on you.

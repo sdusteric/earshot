@@ -1,12 +1,12 @@
 {
-  "name": "earshot",
-  "description": "Earshot: voice notifications for Claude Code.",
+  "name": "kobi",
+  "description": "Kobi: voice notifications for Claude Code.",
   "owner": {
     "name": "Eric Lee"
   },
   "plugins": [
     {
-      "name": "earshot",
+      "name": "kobi",
       "source": "./plugin",
       "description": "Voice notifications for Claude Code: hear when it needs your OK, gets stuck, or finishes, and what it got done. Kokoro text-to-speech on your Mac, or ElevenLabs. macOS."
     }

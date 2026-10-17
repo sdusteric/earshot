@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-10-14T00:00:00Z",
-  "title": "Design System: Earshot",
+  "title": "Design System: Kobi",
   "extensions": {
     "colorMeta": {
       "ground": {
@@ -219,7 +219,7 @@
       },
       "callout": {
         "displayName": "Callout",
-        "purpose": "Second lines, times, job notes, Earshot's lines, table cells."
+        "purpose": "Second lines, times, job notes, Kobi's lines, table cells."
       },
       "label": {
         "displayName": "Label",
@@ -281,7 +281,7 @@
       "kind": "nav",
       "refersTo": "",
       "description": "A session in the inbox sidebar: state dot, name in medium, age, last line in secondary.",
-      "html": "<div class=\"ds-side\"><span class=\"ds-side-dot\"></span><div class=\"ds-side-main\"><div class=\"ds-side-top\"><span class=\"ds-side-name\">Earshot</span><span class=\"ds-side-age\">8h</span></div><div class=\"ds-side-line\">From earshot: Give it a mumble...</div></div></div>",
+      "html": "<div class=\"ds-side\"><span class=\"ds-side-dot\"></span><div class=\"ds-side-main\"><div class=\"ds-side-top\"><span class=\"ds-side-name\">Kobi</span><span class=\"ds-side-age\">8h</span></div><div class=\"ds-side-line\">From kobi: Give it a mumble...</div></div></div>",
       "css": ".ds-side{display:flex;gap:8px;align-items:baseline;width:250px;padding:6px 8px;border-radius:6px;font-family:-apple-system,system-ui,sans-serif;color:#f2f5ff;background:#1e2028}.ds-side:hover{background:#262833}.ds-side:focus-visible{outline:2px solid rgba(10,132,255,.6)}.ds-side-dot{width:8px;height:8px;border-radius:50%;background:#0a84ff;flex:none}.ds-side-main{flex:1;min-width:0}.ds-side-top{display:flex;justify-content:space-between}.ds-side-name{font-size:13px;font-weight:500}.ds-side-age{font-size:10px;font-variant-numeric:tabular-nums;color:rgba(235,235,245,.6)}.ds-side-line{font-size:12px;color:rgba(235,235,245,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
     },
     {
@@ -335,7 +335,7 @@
   ],
   "narrative": {
     "northStar": "The Orb's Glass",
-    "overview": "Earshot is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (light blue for your words, violet for working, amber for Earshot's voice, orange for what needs you). The Activity window always renders dark, whatever the system appearance, because the light points need a dark backing.\n\nThe Activity window is an inbox for your sessions. A native sidebar lists the brief (\"Since You Left\"), today's history, and every session grouped by what it needs from you. The first page is the brief, written for the moment you come back: who is waiting on you, with the question and the answer controls right there, one line per session about what changed, and what you asked. Selecting a session swaps the detail for that session's own view: its last turns from its transcript, what it waits on you for, and a reply field. The day runs along the bottom of the brief as a slim timeline strip, the one custom drawn object besides the orb.\n\nEverything else uses system type and system controls (the sidebar, buttons, text fields, grouped forms in Settings, `ContentUnavailableView` for empty states), so the app reads as a Mac app with two custom objects: the orb and the strip.",
+    "overview": "Kobi is a menu bar app whose face is a particle orb on dark glass. The rest of the interface takes its ground and its colors from the orb: a cool near-black, and a small set of state hues that mean the same thing everywhere (light blue for your words, violet for working, amber for Kobi's voice, orange for what needs you). The Activity window always renders dark, whatever the system appearance, because the light points need a dark backing.\n\nThe Activity window is an inbox for your sessions. A native sidebar lists the brief (\"Since You Left\"), today's history, and every session grouped by what it needs from you. The first page is the brief, written for the moment you come back: who is waiting on you, with the question and the answer controls right there, one line per session about what changed, and what you asked. Selecting a session swaps the detail for that session's own view: its last turns from its transcript, what it waits on you for, and a reply field. The day runs along the bottom of the brief as a slim timeline strip, the one custom drawn object besides the orb.\n\nEverything else uses system type and system controls (the sidebar, buttons, text fields, grouped forms in Settings, `ContentUnavailableView` for empty states), so the app reads as a Mac app with two custom objects: the orb and the strip.",
     "keyCharacteristics": [
       "Cool near-black ground with a faint blue tint, never pure black except behind the orb disc.",
       "Color marks state only. Each hue has one meaning and appears only where that state is shown.",
@@ -346,12 +346,12 @@
     "rules": [
       {
         "name": "The One Meaning Rule",
-        "body": "A hue has one job. Light blue is you, amber is Earshot, violet is working, and orange, red, green, system blue are session states. Do not use them as accents.",
+        "body": "A hue has one job. Light blue is you, amber is Kobi, violet is working, and orange, red, green, system blue are session states. Do not use them as accents.",
         "section": "colors"
       },
       {
-        "name": "The Amber Is Earshot Rule",
-        "body": "Amber marks Earshot's own voice and the stretch since you last looked. It does not mark warnings; orange does.",
+        "name": "The Amber Is Kobi Rule",
+        "body": "Amber marks Kobi's own voice and the stretch since you last looked. It does not mark warnings; orange does.",
         "section": "colors"
       },
       {
