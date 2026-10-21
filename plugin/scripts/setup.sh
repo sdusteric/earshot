@@ -144,7 +144,7 @@ if [ "$mode" = autoupdate ]; then
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   jq empty "$SETTINGS" 2>/dev/null || die "$SETTINGS is not valid JSON. Fix it, then run this again."
   jq --argjson on "$au" '
-    .extraKnownMarketplaces.kobi.source //= {source: "github", repo: "sdusteric/earshot"}
+    .extraKnownMarketplaces.kobi.source //= {source: "github", repo: "sdusteric/kobi"}
     | .extraKnownMarketplaces.kobi.autoUpdate = $on' "$SETTINGS" > "$SETTINGS.kobi-tmp" \
     && cat "$SETTINGS.kobi-tmp" > "$SETTINGS" && rm -f "$SETTINGS.kobi-tmp"
   # Claude Code's own record, which the /plugin toggle also writes.

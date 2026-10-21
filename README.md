@@ -160,7 +160,7 @@ To build it from this repo, run `bash scripts/release-app.sh --local`, then open
 1. In Claude Code, run these two commands:
 
    ```
-   /plugin marketplace add sdusteric/earshot
+   /plugin marketplace add sdusteric/kobi
    /plugin install kobi@kobi
    ```
 

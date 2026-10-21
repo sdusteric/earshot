@@ -14,7 +14,7 @@ finished release.
   Build releases only with a released Xcode: run `xcode-select -p` and check that it points
   at a normal `Xcode.app`. The script refuses a path that says beta or release candidate. To
   switch: `sudo xcode-select -s /Applications/Xcode.app`.
-- The GitHub CLI, signed in to an account that can push to `sdusteric/earshot` (`gh auth status`).
+- The GitHub CLI, signed in to an account that can push to `sdusteric/kobi` (`gh auth status`).
 
 ## Once per Mac
 
@@ -143,7 +143,7 @@ so the feed only goes live once the files it points to exist:
 ```
 git push origin main
 gh release create app-v<version> app/build/release/Kobi-<version>.dmg \
-  app/build/release/Kobi-<version>.zip --repo sdusteric/earshot --target <commit> \
+  app/build/release/Kobi-<version>.zip --repo sdusteric/kobi --target <commit> \
   --title "Kobi for Mac <version>" --latest=false --notes-file app/build/release/release-notes.md
 git add packaging/appcast.xml packaging/kobi.rb
 git commit -m "Kobi for Mac <version>: appcast and cask"
@@ -155,7 +155,7 @@ App releases use tags `app-v<version>`. Plugin releases use `v<version>`.
 #### Where the feed lives
 
 The app reads its updates from
-`https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml`
+`https://raw.githubusercontent.com/sdusteric/kobi/main/packaging/appcast.xml`
 (`SUFeedURL` in `app/project.yml`). The feed is a file on `main` and not a release
 asset: the plugin's releases are marked Latest on GitHub, so a
 `releases/latest/download/appcast.xml` URL would point at a plugin release that has
@@ -208,7 +208,7 @@ To fill in a cask by hand: `bash scripts/release-app.sh --update-cask <dmg> <ver
 The app talks to the Claude Code plugin and needs plugin `0.12.0` or newer (the first named kobi). The
 minimum is `PluginLink.minimumVersion` in
 `app/KobiKit/Sources/KobiKit/Sessions/PluginLink.swift`. People get the plugin
-from this repo's marketplace (`sdusteric/earshot`), and the app offers an update when
+from this repo's marketplace (`sdusteric/kobi`), and the app offers an update when
 theirs is older.
 
 - Release the plugin first (bump `plugin/.claude-plugin/plugin.json`, tag `v<version>`),

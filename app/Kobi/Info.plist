@@ -41,7 +41,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Kobi hears your voice commands a second way with Apple's on-device speech recognition. Nothing leaves your Mac.</string>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/sdusteric/kobi/main/packaging/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SPARKLE_PUBLIC_KEY)</string>
 </dict>

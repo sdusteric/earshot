@@ -34,7 +34,7 @@ key (readable only by your account). The app and the plugin both read the key fr
   line Kobi speaks, such as "Fixed the rounding bug." It does not receive your
   microphone audio or your history.
 - **Update checks.** The app uses Sparkle to fetch a small update feed from GitHub
-  (`https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml`).
+  (`https://raw.githubusercontent.com/sdusteric/kobi/main/packaging/appcast.xml`).
   GitHub sees your IP address and the app version Sparkle reports. Once checks are
   allowed, Sparkle checks about once a day. Downloads of a new version also come from
   GitHub, and from Homebrew if you installed with the cask. The plugin updates through Claude Code.

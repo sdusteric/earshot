@@ -41,8 +41,7 @@ targets:
         NSNetworkVolumesUsageDescription: "Kobi talks to Claude Code sessions in your project folders. It needs access when a project is on a network drive."
         NSMicrophoneUsageDescription: "Kobi listens for \"Hey Kobi\" and for commands while you hold the hotkey. Audio stays on this Mac and is never saved."
         # The feed is packaging/appcast.xml on main. release-app.sh adds each release to it.
-        # The GitHub repo keeps its old name, earshot, until it is renamed.
-        SUFeedURL: "https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml"
+        SUFeedURL: "https://raw.githubusercontent.com/sdusteric/kobi/main/packaging/appcast.xml"
         SUPublicEDKey: "$(SPARKLE_PUBLIC_KEY)"
     entitlements:
       path: Kobi/Kobi.entitlements

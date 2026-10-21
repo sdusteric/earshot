@@ -6,13 +6,13 @@ cask "kobi" do
   version "0.1.0"
   sha256 "REPLACE_WITH_DMG_SHA256_FROM_RELEASE_APP_SH"
 
-  url "https://github.com/sdusteric/earshot/releases/download/app-v#{version}/Kobi-#{version}.dmg"
+  url "https://github.com/sdusteric/kobi/releases/download/app-v#{version}/Kobi-#{version}.dmg"
   name "Kobi"
   desc "Voice companion for Claude Code sessions"
-  homepage "https://github.com/sdusteric/earshot"
+  homepage "https://github.com/sdusteric/kobi"
 
   livecheck do
-    url "https://raw.githubusercontent.com/sdusteric/earshot/main/packaging/appcast.xml"
+    url "https://raw.githubusercontent.com/sdusteric/kobi/main/packaging/appcast.xml"
     strategy :sparkle, &:short_version
   end
 

@@ -76,9 +76,9 @@ public actor PluginLink {
     static let pluginName = "kobi"
     static let pluginID = "kobi@kobi"
     static let marketplace = "kobi"
-    /// Where the marketplace comes from when Claude Code has none to take it from. The GitHub repo
-    /// keeps its old name until it is renamed; this is the one place the app names it.
-    static let marketplaceSource = "sdusteric/earshot"
+    /// Where the marketplace comes from when Claude Code has none to take it from: the one place
+    /// the app names the GitHub repo.
+    static let marketplaceSource = "sdusteric/kobi"
     /// The plugin and its marketplace under the app's old name, removed by the switch.
     static let oldPluginID = "earshot@earshot"
     static let oldMarketplace = "earshot"

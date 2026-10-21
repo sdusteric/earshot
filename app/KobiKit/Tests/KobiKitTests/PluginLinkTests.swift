@@ -50,9 +50,9 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
 
     /// Before the push (or, for the repo folder, before the merge) the old marketplace's source
     /// offers only earshot: the switch touches nothing, so the old plugin keeps working.
-    @Test(arguments: [repo, "sdusteric/earshot"])
+    @Test(arguments: [repo, "sdusteric/kobi"])
     func theSwitchBeforeTheSourceOffersKobiChangesNothing(_ source: String) async {
-        let c = FakeClaude(plugins: [Self.old], added: [("earshot", source)], sources: Dictionary([(source, .earshot), ("sdusteric/earshot", .earshot)]) { a, _ in a })
+        let c = FakeClaude(plugins: [Self.old], added: [("earshot", source)], sources: Dictionary([(source, .earshot), ("sdusteric/kobi", .earshot)]) { a, _ in a })
         #expect(await PluginLink(c).connect() == Self.notPublished)
         #expect(await c.installed == ["earshot@earshot"])
         #expect(await c.marketplaces == ["earshot"])
@@ -65,20 +65,20 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
     /// plugin keeps being read from the folder (not a GitHub clone).
     @Test func theSwitchReAddsTheOldMarketplacesOwnSource() async {
         let c = FakeClaude(plugins: [Self.old], added: [("earshot", Self.repo)],
-                           sources: [Self.repo: .kobi, "sdusteric/earshot": .kobi])
+                           sources: [Self.repo: .kobi, "sdusteric/kobi": .kobi])
         #expect(await PluginLink(c).connect() == .connected(version: "0.12.0"))
         #expect(await c.installed == ["kobi@kobi"])
         #expect(await c.added.map(\.source) == [Self.repo])
         #expect(await c.marketplaces == ["kobi"])
-        #expect(await !c.calls.contains("plugin marketplace add sdusteric/earshot"))
+        #expect(await !c.calls.contains("plugin marketplace add sdusteric/kobi"))
     }
 
     /// A GitHub source after the push: the same, from the repo.
     @Test func theSwitchFromGitHubAfterThePush() async {
-        let c = FakeClaude(plugins: [Self.old], added: [("earshot", "sdusteric/earshot")], sources: ["sdusteric/earshot": .kobi])
+        let c = FakeClaude(plugins: [Self.old], added: [("earshot", "sdusteric/kobi")], sources: ["sdusteric/kobi": .kobi])
         #expect(await PluginLink(c).connect() == .connected(version: "0.12.0"))
         #expect(await c.installed == ["kobi@kobi"])
-        #expect(await c.added.map(\.source) == ["sdusteric/earshot"])
+        #expect(await c.added.map(\.source) == ["sdusteric/kobi"])
         // The clone is brought up to date before its manifest is read.
         let calls = await c.calls
         #expect(calls.firstIndex(of: "plugin marketplace update earshot")! < calls.firstIndex(of: "plugin marketplace remove earshot")!)
@@ -88,7 +88,7 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
     /// (the status is now not installed, since the removal took the old plugin with it) adds the
     /// same source, not the GitHub one.
     @Test func aFailedAddIsUndoneAndTryAgainUsesTheSameSource() async {
-        let c = FakeClaude(plugins: [Self.old], added: [("earshot", Self.repo)], sources: [Self.repo: .kobi, "sdusteric/earshot": .earshot],
+        let c = FakeClaude(plugins: [Self.old], added: [("earshot", Self.repo)], sources: [Self.repo: .kobi, "sdusteric/kobi": .earshot],
                            failing: ["plugin marketplace add \(Self.repo)"])
         let link = PluginLink(c)
         #expect(await link.connect() == .failed("Couldn't add the Kobi plugin source."))
@@ -102,8 +102,8 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
 
     /// Kobi installed and the old plugin not removed yet (a switch cut short): only the old one goes.
     @Test func theSwitchNextToTheNewPluginOnlyRemovesTheOld() async {
-        let c = FakeClaude(plugins: [Self.old, Self.new], added: [("earshot", "sdusteric/earshot"), ("kobi", Self.repo)],
-                           sources: [Self.repo: .kobi, "sdusteric/earshot": .earshot])
+        let c = FakeClaude(plugins: [Self.old, Self.new], added: [("earshot", "sdusteric/kobi"), ("kobi", Self.repo)],
+                           sources: [Self.repo: .kobi, "sdusteric/kobi": .earshot])
         #expect(await PluginLink(c).connect() == .connected(version: "0.12.0"))
         #expect(await c.installed == ["kobi@kobi"])
         #expect(await c.marketplaces == ["kobi"])
@@ -133,8 +133,8 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
 
     /// A failed uninstall of the old plugin leaves kobi installed: Try Again only removes the old one.
     @Test func aFailedUninstallKeepsKobiAndTryAgainFinishes() async {
-        let c = FakeClaude(plugins: [Self.old, Self.new], added: [("earshot", "sdusteric/earshot"), ("kobi", Self.repo)],
-                           sources: [Self.repo: .kobi, "sdusteric/earshot": .earshot],
+        let c = FakeClaude(plugins: [Self.old, Self.new], added: [("earshot", "sdusteric/kobi"), ("kobi", Self.repo)],
+                           sources: [Self.repo: .kobi, "sdusteric/kobi": .earshot],
                            failing: ["plugin uninstall earshot@earshot --scope user"])
         let link = PluginLink(c)
         #expect(await link.connect() == .failed("Couldn't remove the Earshot plugin from Claude Code."))
@@ -146,17 +146,17 @@ func listJSON(_ entries: [[String: Any]]) -> RunResult {
     /// Nothing installed and no marketplace: GitHub before the push adds a marketplace named
     /// earshot, which is taken out again, and the status says so.
     @Test func installBeforeThePushLeavesNothingBehind() async {
-        let c = FakeClaude(plugins: [], added: [], sources: ["sdusteric/earshot": .earshot])
+        let c = FakeClaude(plugins: [], added: [], sources: ["sdusteric/kobi": .earshot])
         #expect(await PluginLink(c).connect() == Self.notPublished)
         #expect(await c.marketplaces == [])
         #expect(await c.installed == [])
     }
 
     @Test func installAddsTheMarketplaceFirstWhenItIsMissing() async {
-        let c = FakeClaude(plugins: [], added: [], sources: ["sdusteric/earshot": .kobi])
+        let c = FakeClaude(plugins: [], added: [], sources: ["sdusteric/kobi": .kobi])
         #expect(await PluginLink(c).connect() == .connected(version: "0.12.0"))
         let calls = await c.calls
-        let add = calls.firstIndex(of: "plugin marketplace add sdusteric/earshot")!
+        let add = calls.firstIndex(of: "plugin marketplace add sdusteric/kobi")!
         let install = calls.firstIndex(of: "plugin install kobi@kobi --scope user")!
         #expect(add < install)
     }
